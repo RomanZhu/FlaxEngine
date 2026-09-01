@@ -188,10 +188,10 @@ namespace
                 for (const JsonAssetPreparedPartition& partition : payload->ScenePartitions)
                 {
                     const rapidjson::SizeType previousCount = objects.Size();
-                    JsonDocument chunk;
-                    chunk.Parse(partition.SourceJson.Get(), partition.SourceJson.Length());
+                    JsonDocument fragment;
+                    fragment.Parse(partition.SourceJson.Get(), partition.SourceJson.Length());
                     String error;
-                    if (chunk.HasParseError() || ScenePartitionDocument::AppendRuntimeObjects(chunk, partition.RootFileId,
+                    if (fragment.HasParseError() || ScenePartitionDocument::AppendRuntimeObjects(fragment, partition.RootFileId,
                         objects, runtime.GetAllocator(), error))
                         return true;
                     for (rapidjson::SizeType i = previousCount; i < objects.Size(); i++)
@@ -330,7 +330,7 @@ bool JsonAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pr
                 int64 fragmentRoot;
                 const JsonValue* fragmentObjects;
                 String fragmentDocumentError;
-                if (fragment.HasParseError() || ScenePartitionDocument::ReadChunk(fragment, fragmentRoot, fragmentObjects, fragmentDocumentError) ||
+                if (fragment.HasParseError() || ScenePartitionDocument::ReadFragment(fragment, fragmentRoot, fragmentObjects, fragmentDocumentError) ||
                     fragmentRoot != indexEntry.RootActorLocalId)
                 {
                     return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,

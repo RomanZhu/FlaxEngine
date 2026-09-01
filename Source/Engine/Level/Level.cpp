@@ -8,7 +8,6 @@
 #include "FlaxEngine.Gen.h"
 #include "Scene/Scene.h"
 #include "ScenePrefabDocument.h"
-#include "ScenePartitionDocument.h"
 #include "SceneFragments/SceneFragmentStore.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Deprecated.h"
@@ -462,8 +461,6 @@ namespace
         rapidjson_flax::Document source;
         source.SetObject();
         auto& allocator = source.GetAllocator();
-        source.AddMember("sceneChunkVersion", 1, allocator);
-        source.AddMember("rootFileId", actor->GetLocalFileId(), allocator);
         rapidjson_flax::Value objects;
         String conversionError;
         if (runtime.HasParseError() || data == runtime.MemberEnd() ||

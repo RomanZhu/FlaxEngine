@@ -8,7 +8,6 @@
 #include "AuthoredAssetProcessor.h"
 #include "ImportedSourceProcessor.h"
 #include "JsonAssetProcessor.h"
-#include "SceneChunkProcessor.h"
 #include "SettingsProcessor.h"
 #include "Engine/Content/Artifacts/ArtifactPublisher.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
@@ -165,7 +164,6 @@ bool GraphPipelineService::OwnsProcessor(const StringView& processorID)
     return processorID == GraphDocumentProcessor::ProcessorID() ||
         processorID == SettingsProcessor::ProcessorID() ||
         processorID == JsonAssetProcessor::ProcessorID() ||
-        processorID == SceneChunkProcessor::ProcessorID() ||
         AuthoredAssetProcessor::Owns(processorID) ||
         ImportedSourceProcessor::Owns(processorID);
 }
@@ -213,7 +211,6 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     extraIds.Add(AuthoredAssetProcessor::CollisionDataID());
     extraIds.Add(SettingsProcessor::ProcessorID());
     extraIds.Add(JsonAssetProcessor::ProcessorID());
-    extraIds.Add(SceneChunkProcessor::ProcessorID());
     extraIds.Add(ImportedSourceProcessor::FontID());
     extraIds.Add(ImportedSourceProcessor::ShaderID());
     extraIds.Add(ImportedSourceProcessor::VideoID());
@@ -234,8 +231,6 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
             descriptor = SettingsProcessor::CreateDescriptor();
         else if (id == JsonAssetProcessor::ProcessorID())
             descriptor = JsonAssetProcessor::CreateDescriptor();
-        else if (id == SceneChunkProcessor::ProcessorID())
-            descriptor = SceneChunkProcessor::CreateDescriptor();
         else if (AuthoredAssetProcessor::Owns(id))
             descriptor = AuthoredAssetProcessor::CreateDescriptor(id);
         else
@@ -382,11 +377,6 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         else if (record.ProcessorID == JsonAssetProcessor::ProcessorID())
         {
             if (JsonAssetProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
-                return true;
-        }
-        else if (record.ProcessorID == SceneChunkProcessor::ProcessorID())
-        {
-            if (SceneChunkProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))
                 return true;
         }
         else if (ImportedSourceProcessor::BuildOutputKey(prepared, request.Target, output.Kind, outputPlan.Key, outputComponents, diagnostic))

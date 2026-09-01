@@ -558,7 +558,7 @@ namespace
         {
             const String path = expanded[i];
             const String extension = FileSystem::GetExtension(path).ToLower();
-            if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("scenechunk") && extension != TEXT("json") && extension != TEXT("settings"))
+            if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json") && extension != TEXT("settings"))
                 continue;
             const String metaPath = path + TEXT(".meta");
             if (!FileSystem::FileExists(path) || FileSystem::FileExists(metaPath))
@@ -818,14 +818,14 @@ namespace
 
     bool IsAuthoredJsonExtension(const StringView& extension)
     {
-        return JsonStorageProxy::IsValidExtension(extension) || extension == TEXT("scenechunk");
+        return JsonStorageProxy::IsValidExtension(extension);
     }
 
-    void ConfigureJsonDocumentMetadata(AssetMeta& metadata, const StringView& extension, const StringView& typeName)
+    void ConfigureJsonDocumentMetadata(AssetMeta& metadata, const StringView& typeName)
     {
         metadata.AssetType = typeName;
         metadata.SourceKind = AssetSourceKind::TextDocument;
-        metadata.Processor.ID = extension == TEXT("scenechunk") ? TEXT("Flax.SceneChunk") : TEXT("Flax.JsonDocument");
+        metadata.Processor.ID = TEXT("Flax.JsonDocument");
         metadata.Processor.SettingsVersion = 1;
         metadata.Processor.SettingsJson = "{}\n";
     }
@@ -867,12 +867,6 @@ namespace
             versionName = "prefabVersion";
             payloadName = "objects";
         }
-        else if (extension == TEXT("scenechunk"))
-        {
-            dataType = JsonAsset::TypeName;
-            versionName = "sceneChunkVersion";
-            payloadName = "objects";
-        }
         else
         {
             const auto typeMember = json.FindMember("type");
@@ -883,7 +877,7 @@ namespace
         }
         const auto versionMember = json.FindMember(versionName);
         const auto payloadMember = json.FindMember(payloadName);
-        const bool isSceneOrPrefab = extension == TEXT("scene") || extension == TEXT("prefab") || extension == TEXT("scenechunk");
+        const bool isSceneOrPrefab = extension == TEXT("scene") || extension == TEXT("prefab");
         if (dataType.IsEmpty() || versionMember == json.MemberEnd() || !versionMember->value.IsUint() || versionMember->value.GetUint() < 1 ||
             payloadMember == json.MemberEnd() || (isSceneOrPrefab ? !payloadMember->value.IsArray() :
                 (!payloadMember->value.IsObject() && !payloadMember->value.IsArray())))
@@ -938,9 +932,8 @@ namespace
                 (metadata.AssetType != JsonAsset::TypeName || metadata.SourceKind != AssetSourceKind::TextDocument ||
                  metadata.Processor.ID != TEXT("Flax.Settings") || metadata.Processor.SettingsVersion != 1 ||
                  metadata.Processor.SettingsJson != StringAnsiView("{}\n"));
-            const String expectedJsonProcessor = extension == TEXT("scenechunk") ? TEXT("Flax.SceneChunk") : TEXT("Flax.JsonDocument");
             const bool jsonDocumentUpgrade = isJsonDocument &&
-                (metadata.SourceKind != AssetSourceKind::TextDocument || metadata.Processor.ID != expectedJsonProcessor ||
+                (metadata.SourceKind != AssetSourceKind::TextDocument || metadata.Processor.ID != TEXT("Flax.JsonDocument") ||
                  metadata.Processor.SettingsVersion != 1 || metadata.Processor.SettingsJson != StringAnsiView("{}\n"));
             if (!metadata.MetaUpgradeRequired && !settingsUpgrade && !jsonDocumentUpgrade)
                 return false;
@@ -950,7 +943,7 @@ namespace
                 ConfigureSettingsMetadata(metadata);
             else if (isJsonDocument)
             {
-                ConfigureJsonDocumentMetadata(metadata, extension, metadata.AssetType);
+                ConfigureJsonDocumentMetadata(metadata, metadata.AssetType);
             }
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
@@ -979,7 +972,7 @@ namespace
                 ConfigureSettingsMetadata(metadata);
             else
             {
-                ConfigureJsonDocumentMetadata(metadata, extension, metadata.AssetType);
+                ConfigureJsonDocumentMetadata(metadata, metadata.AssetType);
             }
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
         }
@@ -3440,7 +3433,7 @@ Guid AuthoredAssetDocumentService::CreateMetadata(const StringView& sourcePath)
         ConfigureSettingsMetadata(meta);
     else
     {
-        ConfigureJsonDocumentMetadata(meta, FileSystem::GetExtension(sourcePath).ToLower(), typeName);
+        ConfigureJsonDocumentMetadata(meta, typeName);
     }
     if (AssetMeta::SaveAtomic(metaPath, meta, diagnostic))
         return fail();
@@ -3460,7 +3453,7 @@ bool AuthoredAssetDocumentService::EnsureSidecars()
     for (const String& path : files)
     {
         const String extension = FileSystem::GetExtension(path).ToLower();
-        if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("scenechunk") && extension != TEXT("json") && extension != TEXT("settings"))
+        if (extension != TEXT("scene") && extension != TEXT("prefab") && extension != TEXT("json") && extension != TEXT("settings"))
             continue;
         const String metaPath = path + TEXT(".meta");
         if (FileSystem::FileExists(metaPath))
