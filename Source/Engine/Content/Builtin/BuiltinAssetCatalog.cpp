@@ -104,7 +104,7 @@ namespace
                     return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, storageEntry.ID, path,
                         TEXT("Built-in asset storage has an invalid object entry."));
                 BuiltinAssetCatalogSerializedEntry entry;
-                entry.ObjectID = AssetObjectId::Main(AssetGuid(storageEntry.ID));
+                entry.ID = storageEntry.ID;
                 entry.TypeName = storageEntry.TypeName;
                 entry.RelativePath = relativePath;
                 entry.Uri = baseUri;
@@ -165,7 +165,7 @@ namespace
                     entry.Uri.StartsWith(TEXT("builtin://Editor/"), StringSearchCase::IgnoreCase));
             if (!uriMatchesRoot)
             {
-                Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, entry.ObjectID.Asset.Value, catalogPath,
+                Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, entry.ID, catalogPath,
                     TEXT("Built-in catalog URI does not belong to its immutable root."));
                 return LoadRootResult::Failure;
             }
@@ -258,11 +258,12 @@ bool BuiltinAssetCatalog::Initialize(AssetPipelineDiagnostic& diagnostic)
             String path = root.Path / serialized.RelativePath;
             ContentStorageManager::FormatPath(path);
             if (!FileSystem::FileExists(path))
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, serialized.ObjectID.Asset.Value, path,
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, serialized.ID, path,
                     TEXT("Built-in catalog refers to a missing immutable artifact."));
 
             BuiltinAssetCatalogEntry entry;
-            entry.Info = AssetInfo(serialized.ObjectID.ToRuntimeObjectGuid(), serialized.ObjectID, serialized.TypeName, path);
+            const AssetObjectId publicBridge = AssetObjectId::Main(AssetGuid(serialized.ID));
+            entry.Info = AssetInfo(serialized.ID, publicBridge, serialized.TypeName, path);
             entry.Uri = serialized.Uri;
             const String pathKey = NormalizeLookupKey(path);
             const String uriKey = NormalizeLookupKey(entry.Uri);

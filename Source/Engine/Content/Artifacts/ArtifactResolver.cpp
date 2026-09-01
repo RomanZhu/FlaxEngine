@@ -58,9 +58,10 @@ namespace
     bool Inspect(const StringView& libraryRoot, const AssetRecord& record, const ArtifactRequest& request, ArtifactInspection& result)
     {
         result = ArtifactInspection();
+        const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(record.ID));
         ArtifactStoragePath manifestPath;
         AssetPipelineDiagnostic diagnostic;
-        if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, request.Object, manifestPath, diagnostic))
+        if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, record.ID, manifestPath, diagnostic))
         {
             result.InvalidDiagnostic = diagnostic;
             return false;
@@ -69,7 +70,7 @@ namespace
             return false;
         StringAnsi json;
         if (File::ReadAllText(manifestPath.Get(), json) || ArtifactManifest::Parse(json, manifestPath.Get(), result.Manifest, diagnostic) ||
-            result.Manifest.ObjectID != request.Object || result.Manifest.Target.BuildKey(ArtifactTargetDimension::All) != request.Target.BuildKey(ArtifactTargetDimension::All))
+            result.Manifest.ObjectID != persistentObject || result.Manifest.Target.BuildKey(ArtifactTargetDimension::All) != request.Target.BuildKey(ArtifactTargetDimension::All))
         {
             if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
                 ResolveFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, request, manifestPath.Get(), TEXT("Current artifact manifest identity or target is invalid."));

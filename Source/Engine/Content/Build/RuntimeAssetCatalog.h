@@ -39,7 +39,7 @@ struct FLAXENGINE_API RuntimeAssetCatalogAlias
 class FLAXENGINE_API RuntimeAssetCatalog
 {
 public:
-    static constexpr uint32 FormatVersion = 3;
+    static constexpr uint32 FormatVersion = 4;
 
     const StringAnsi& GetBuildID() const
     {
@@ -77,12 +77,11 @@ public:
     bool Set(const StringAnsiView& buildID, const ContentHash& targetHash, const Array<RuntimeAssetCatalogEntry>& entries,
         const Array<RuntimeAssetCatalogAlias>& aliases, AssetPipelineDiagnostic& diagnostic);
 
-    /// <summary>Finds an exact GUID/local-file-ID entry without loading an asset.</summary>
+    /// <summary>Finds an entry by its persistent object GUID bridge.</summary>
     bool TryGet(const AssetObjectId& object, RuntimeAssetCatalogEntry& result) const;
 
     /// <summary>
-    /// Finds an object through the legacy derived runtime GUID only when the mapping is unique.
-    /// This compatibility lookup must not be used as persistent object identity.
+    /// Finds an object by its persistent GUID through the temporary public loading bridge.
     /// </summary>
     bool TryGetByLegacyRuntimeGuid(const Guid& runtimeId, AssetObjectId& result) const;
 

@@ -366,6 +366,51 @@ TEST_CASE("Asset database scanner reconciles typed rows and retains unrelated du
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
+TEST_CASE("Asset database scanner indexes persisted subasset GUIDs and keeps tombstones non-ready")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseObjectGuids-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const String source = content / TEXT("Model.fbx");
+    REQUIRE_FALSE(File::WriteAllText(source, TEXT("model"), Encoding::ANSI));
+    AssetMeta meta = MakeDatabaseMeta(Guid::New());
+    meta.AssetType = TEXT("FlaxEngine.Model");
+    meta.Processor.ID = TEXT("Flax.Model");
+    SubAssetMeta live;
+    live.ID = Guid::New();
+    live.LocalId = 21;
+    live.TypeName = TEXT("FlaxEngine.Mesh");
+    live.DisplayName = TEXT("Body");
+    meta.SubAssets.Add(TEXT("mesh:/Body"), live);
+    SubAssetMeta tombstone;
+    tombstone.ID = Guid::New();
+    tombstone.LocalId = 22;
+    tombstone.TypeName = TEXT("FlaxEngine.Mesh");
+    tombstone.DisplayName = TEXT("Removed");
+    tombstone.Removed = true;
+    meta.SubAssets.Add(TEXT("mesh:/Removed"), tombstone);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), meta, diagnostic));
+
+    AssetDatabase database;
+    AssetDatabaseScanOptions options;
+    AssetDatabaseScanResult scan;
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    AssetRecord record;
+    REQUIRE(database.TryGetRecord(live.ID, record));
+    CHECK(record.ID == live.ID);
+    CHECK(record.LocalId == live.LocalId);
+    CHECK(record.Status == AssetRecordStatus::Ready);
+    REQUIRE(database.TryGetRecord(tombstone.ID, record));
+    CHECK(record.ID == tombstone.ID);
+    CHECK(record.LocalId == tombstone.LocalId);
+    CHECK(record.Status == AssetRecordStatus::MissingSource);
+}
+
 TEST_CASE("Asset database detects portable main path collisions")
 {
     AssetDatabase database;

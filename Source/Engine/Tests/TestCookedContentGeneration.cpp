@@ -65,25 +65,24 @@ TEST_CASE("Cooked streaming freshness copies only missing or older output")
     CHECK_FALSE(CookedContentGeneration::ShouldCopyStreamingFile(true, DateTime(20), DateTime(30)));
 }
 
-TEST_CASE("Cooker cache preserves exact object identity")
+TEST_CASE("Cooker cache keys entries by persistent object GUID")
 {
-    const AssetObjectId subAsset(AssetGuid(Guid(101, 202, 303, 404)), 2);
-    const AssetObjectId collidingMain = AssetObjectId::Main(AssetGuid(subAsset.ToRuntimeObjectGuid()));
-    REQUIRE(subAsset.ToRuntimeObjectGuid() == collidingMain.ToRuntimeObjectGuid());
+    const Guid subAsset(101, 202, 303, 404);
+    const Guid mainAsset(501, 502, 503, 504);
 
     CookAssetsStep::CacheData cache;
     cache.CacheFolder = TEXT("Cache/CookedObjects");
-    cache.Entries[subAsset].ObjectID = subAsset;
-    cache.Entries[collidingMain].ObjectID = collidingMain;
+    cache.Entries[subAsset].ID = subAsset;
+    cache.Entries[mainAsset].ID = mainAsset;
     CHECK(cache.Entries.Count() == 2);
 
     String subAssetPath;
     String mainAssetPath;
     cache.GetFilePath(subAsset, subAssetPath);
-    cache.GetFilePath(collidingMain, mainAssetPath);
+    cache.GetFilePath(mainAsset, mainAssetPath);
     CHECK(subAssetPath != mainAssetPath);
-    CHECK(subAssetPath.Contains(subAsset.Asset.Value.ToString(Guid::FormatType::N)));
-    CHECK(mainAssetPath.Contains(collidingMain.Asset.Value.ToString(Guid::FormatType::N)));
+    CHECK(subAssetPath.Contains(subAsset.ToString(Guid::FormatType::N)));
+    CHECK(mainAssetPath.Contains(mainAsset.ToString(Guid::FormatType::N)));
 }
 
 TEST_CASE("Cooked content generation activation is atomic cancellable and deterministic")

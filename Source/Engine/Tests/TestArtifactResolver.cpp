@@ -36,8 +36,8 @@ namespace
         keyBuilder.AddKey(StringAnsiView("input"), fingerprint);
         const ArtifactKey outputKey = keyBuilder.Finalize();
         ArtifactStoragePath outputPath;
-        const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
-        if (ArtifactStore::TryGetArtifactPath(library, request.Target, ArtifactTargetDimension::All, object, request.OutputKind,
+        const AssetObjectId object = AssetObjectId::Main(AssetGuid(record.ID));
+        if (ArtifactStore::TryGetArtifactPath(library, request.Target, ArtifactTargetDimension::All, record.ID, request.OutputKind,
             outputKey, StringAnsiView(".bin"), outputPath, diagnostic))
             return true;
         const String directory = StringUtils::GetDirectoryName(outputPath.Get());
@@ -68,7 +68,7 @@ namespace
         if (manifest.ToJson(json, diagnostic))
             return true;
         ArtifactStoragePath manifestPath;
-        if (ArtifactStore::TryGetManifestPath(library, request.Target, object, manifestPath, diagnostic))
+        if (ArtifactStore::TryGetManifestPath(library, request.Target, record.ID, manifestPath, diagnostic))
             return true;
         const String manifestDirectory = StringUtils::GetDirectoryName(manifestPath.Get());
         return (!FileSystem::DirectoryExists(manifestDirectory) && FileSystem::CreateDirectory(manifestDirectory)) ||
@@ -239,7 +239,7 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SourceMissing);
 }
 
-TEST_CASE("ArtifactResolver isolates composite objects with colliding derived runtime GUIDs")
+TEST_CASE("ArtifactResolver isolates objects by persisted GUID despite legacy composite collisions")
 {
     const String root = Globals::TemporaryFolder / (TEXT("ArtifactResolverCollision-") + Guid::New().ToString(Guid::FormatType::N));
     const String content = root / TEXT("Content");
@@ -302,8 +302,7 @@ TEST_CASE("ArtifactResolver isolates composite objects with colliding derived ru
     {
         plan.CurrentInputFingerprint = fingerprint;
         ArtifactKeyBuilder builder(StringAnsiView("resolver-collision-job-v1"));
-        builder.AddGuid(StringAnsiView("object-guid"), record.SourceAssetID);
-        builder.AddUInt64(StringAnsiView("object-local"), static_cast<uint64>(record.LocalId));
+        builder.AddGuid(StringAnsiView("object-guid"), record.ID);
         plan.BuildRequest.Key.ExactPlan = builder.Finalize();
         planDiagnostic = AssetPipelineDiagnostic();
         return false;

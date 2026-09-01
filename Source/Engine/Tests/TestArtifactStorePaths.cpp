@@ -21,7 +21,7 @@ TEST_CASE("ArtifactStore centrally calculates contained deterministic paths")
     target.Architecture = "x64";
     target.Graphics = "DX12";
     target.Role = "Editor";
-    const AssetObjectId object(AssetGuid(Guid(1, 2, 3, 4)), 7);
+    const Guid object(1, 2, 3, 4);
     const ArtifactKey key(ContentHash::Compute("artifact-a", 10));
     ArtifactStoragePath first;
     const bool firstFailed = ArtifactStore::TryGetArtifactPath(library, target, ArtifactTargetDimension::Platform | ArtifactTargetDimension::Graphics,
@@ -66,9 +66,9 @@ TEST_CASE("ArtifactStore rejects unsafe extensions and bounds long identifiers")
         longKind += 'x';
     ArtifactStoragePath path;
     const bool longFailed = ArtifactStore::TryGetArtifactPath(library, target, ArtifactTargetDimension::Platform,
-        AssetObjectId(AssetGuid(Guid(1, 2, 3, 4)), 7), longKind, ArtifactKey(ContentHash::Compute("key", 3)), StringAnsiView(".bin"), path, diagnostic);
+        Guid(1, 2, 3, 4), longKind, ArtifactKey(ContentHash::Compute("key", 3)), StringAnsiView(".bin"), path, diagnostic);
     REQUIRE_FALSE(longFailed);
     CHECK(path.Get().Length() < library.Length() + 240);
     CHECK(ArtifactStore::TryGetArtifactPath(library, target, ArtifactTargetDimension::Platform,
-        AssetObjectId(AssetGuid(Guid(1, 2, 3, 4)), 7), longKind, ArtifactKey(ContentHash::Compute("key", 3)), StringAnsiView("../bad"), path, diagnostic));
+        Guid(1, 2, 3, 4), longKind, ArtifactKey(ContentHash::Compute("key", 3)), StringAnsiView("../bad"), path, diagnostic));
 }

@@ -28,26 +28,12 @@ namespace
             Data.Add(bytes, ARRAY_COUNT(bytes));
         }
 
-        void WriteUInt64(uint64 value)
-        {
-            byte bytes[8];
-            for (int32 i = 0; i < ARRAY_COUNT(bytes); i++)
-                bytes[i] = static_cast<byte>(value >> (i * 8));
-            Data.Add(bytes, ARRAY_COUNT(bytes));
-        }
-
         void WriteGuid(const Guid& value)
         {
             WriteUInt32(value.A);
             WriteUInt32(value.B);
             WriteUInt32(value.C);
             WriteUInt32(value.D);
-        }
-
-        void WriteObject(const AssetObjectId& value)
-        {
-            WriteGuid(value.Asset.Value);
-            WriteUInt64(static_cast<uint64>(value.LocalId));
         }
 
         void WriteHash(const ContentHash& value)
@@ -96,30 +82,9 @@ namespace
             return false;
         }
 
-        bool ReadUInt64(uint64& value)
-        {
-            byte bytes[8];
-            if (ReadBytes(bytes, ARRAY_COUNT(bytes)))
-                return true;
-            value = 0;
-            for (int32 i = 0; i < ARRAY_COUNT(bytes); i++)
-                value |= static_cast<uint64>(bytes[i]) << (i * 8);
-            return false;
-        }
-
         bool ReadGuid(Guid& value)
         {
             return ReadUInt32(value.A) || ReadUInt32(value.B) || ReadUInt32(value.C) || ReadUInt32(value.D);
-        }
-
-        bool ReadObject(AssetObjectId& value)
-        {
-            Guid guid;
-            uint64 localId;
-            if (ReadGuid(guid) || ReadUInt64(localId))
-                return true;
-            value = AssetObjectId(AssetGuid(guid), static_cast<int64>(localId));
-            return false;
         }
 
         bool ReadHash(ContentHash& value)
@@ -169,21 +134,21 @@ namespace
 
     bool IsEntryValid(const BuiltinAssetCatalogSerializedEntry& entry)
     {
-        return entry.ObjectID.IsValid() && IsStringBounded(entry.TypeName) && IsStringBounded(entry.RelativePath) &&
+        return entry.ID.IsValid() && IsStringBounded(entry.TypeName) && IsStringBounded(entry.RelativePath) &&
             IsStringBounded(entry.Uri) && IsPortableRelativePath(entry.RelativePath) &&
             entry.Uri.StartsWith(TEXT("builtin://"), StringSearchCase::IgnoreCase);
     }
 
     bool ValidateEntries(const Array<BuiltinAssetCatalogSerializedEntry>& entries, AssetPipelineDiagnostic& diagnostic)
     {
-        HashSet<AssetObjectId> objects;
+        HashSet<Guid> objects;
         HashSet<String> uris;
         for (const BuiltinAssetCatalogSerializedEntry& entry : entries)
         {
             if (!IsEntryValid(entry))
-                return Fail(diagnostic, TEXT("Built-in catalog contains an invalid object identity, type, path, or URI."), entry.ObjectID.Asset.Value);
-            if (!objects.Add(entry.ObjectID) || !uris.Add(entry.Uri.ToLower()))
-                return Fail(diagnostic, TEXT("Built-in catalog contains a duplicate object identity or URI."), entry.ObjectID.Asset.Value);
+                return Fail(diagnostic, TEXT("Built-in catalog contains an invalid object identity, type, path, or URI."), entry.ID);
+            if (!objects.Add(entry.ID) || !uris.Add(entry.Uri.ToLower()))
+                return Fail(diagnostic, TEXT("Built-in catalog contains a duplicate object identity or URI."), entry.ID);
         }
         return false;
     }
@@ -202,7 +167,7 @@ bool BuiltinAssetCatalogFormat::ToBytes(const Array<BuiltinAssetCatalogSerialize
     payload.WriteUInt32(entries.Count());
     for (const BuiltinAssetCatalogSerializedEntry& entry : entries)
     {
-        payload.WriteObject(entry.ObjectID);
+        payload.WriteGuid(entry.ID);
         payload.WriteString(entry.TypeName);
         payload.WriteString(entry.RelativePath);
         payload.WriteString(entry.Uri);
@@ -246,7 +211,7 @@ bool BuiltinAssetCatalogFormat::FromBytes(const Span<byte>& input, Array<Builtin
     entries.Resize(count, false);
     for (BuiltinAssetCatalogSerializedEntry& entry : entries)
     {
-        if (payload.ReadObject(entry.ObjectID) || payload.ReadString(entry.TypeName) ||
+        if (payload.ReadGuid(entry.ID) || payload.ReadString(entry.TypeName) ||
             payload.ReadString(entry.RelativePath) || payload.ReadString(entry.Uri))
             return Fail(diagnostic, TEXT("Built-in catalog contains a truncated entry."));
     }
@@ -265,5 +230,5 @@ bool BuiltinAssetCatalogFormat::IsLegacyVersion(const Span<byte>& input)
     CatalogReader header(input.Get(), input.Length());
     uint32 magic;
     uint32 version;
-    return !header.ReadUInt32(magic) && !header.ReadUInt32(version) && magic == CatalogMagic && version == 1;
+    return !header.ReadUInt32(magic) && !header.ReadUInt32(version) && magic == CatalogMagic && version < Version;
 }

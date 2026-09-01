@@ -103,36 +103,44 @@ bool SourceAssetDatabaseState::Validate(AssetPipelineDiagnostic& diagnostic) con
             metaPaths.Add(source.CanonicalMetaPath, 0);
     }
 
-    Dictionary<String, byte> objectIds;
+    Dictionary<String, Guid> objectIds;
+    Dictionary<Guid, byte> objectGuids;
     Dictionary<String, byte> stableObjectIds;
     for (const SourceAssetObjectRow& object : Objects)
     {
         const String objectKey = ObjectKey(object.AssetGuid, object.LocalFileId);
         const String stableKey = StableObjectKey(object.AssetGuid, object.StableIdentifier);
-        if (!sourceIds.ContainsKey(object.AssetGuid) || object.LocalFileId <= 0 || object.StableIdentifier.IsEmpty() ||
+        if (!sourceIds.ContainsKey(object.AssetGuid) || !object.ObjectGuid.IsValid() || object.LocalFileId <= 0 || object.StableIdentifier.IsEmpty() ||
             object.FirstSeenRevision > object.LastSeenRevision || object.LastSeenRevision > Database.CurrentRevision || object.LastModifiedRevision > Database.CurrentRevision ||
-            objectIds.ContainsKey(objectKey) || stableObjectIds.ContainsKey(stableKey))
+            objectIds.ContainsKey(objectKey) || objectGuids.ContainsKey(object.ObjectGuid) || stableObjectIds.ContainsKey(stableKey))
             return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate object row."));
-        objectIds.Add(objectKey, 0);
+        objectIds.Add(objectKey, object.ObjectGuid);
+        objectGuids.Add(object.ObjectGuid, 0);
         stableObjectIds.Add(stableKey, 0);
     }
 
     for (const SourceAssetDependencyRow& dependency : Dependencies)
     {
-        if (!sourceIds.ContainsKey(dependency.OwnerAssetGuid) || dependency.OwnerLocalFileId <= 0 || dependency.TargetId.IsEmpty() ||
-            !objectIds.ContainsKey(ObjectKey(dependency.OwnerAssetGuid, dependency.OwnerLocalFileId)))
+        const Guid* ownerObjectGuid = objectIds.TryGet(ObjectKey(dependency.OwnerAssetGuid, dependency.OwnerLocalFileId));
+        if (!sourceIds.ContainsKey(dependency.OwnerAssetGuid) || !dependency.OwnerObjectGuid.IsValid() || dependency.OwnerLocalFileId <= 0 || dependency.TargetId.IsEmpty() ||
+            !ownerObjectGuid || *ownerObjectGuid != dependency.OwnerObjectGuid || !objectGuids.ContainsKey(dependency.OwnerObjectGuid))
             return Fail(diagnostic, TEXT("Source asset database contains an invalid dependency edge."));
-        if (dependency.TargetLocalFileId != 0 && !objectIds.ContainsKey(ObjectKey(dependency.TargetAssetGuid, dependency.TargetLocalFileId)))
-            return Fail(diagnostic, TEXT("Source asset database dependency points to an unknown object."));
+        if (dependency.TargetLocalFileId != 0)
+        {
+            const Guid* targetObjectGuid = objectIds.TryGet(ObjectKey(dependency.TargetAssetGuid, dependency.TargetLocalFileId));
+            if (!dependency.TargetObjectGuid.IsValid() || !targetObjectGuid || *targetObjectGuid != dependency.TargetObjectGuid || !objectGuids.ContainsKey(dependency.TargetObjectGuid))
+                return Fail(diagnostic, TEXT("Source asset database dependency points to an unknown object."));
+        }
     }
 
     Dictionary<String, byte> publicationIds;
     for (const SourceAssetPublicationRow& publication : Publications)
     {
         const String key = PublicationKey(publication.AssetGuid, publication.LocalFileId, publication.TargetId);
-        if (!sourceIds.ContainsKey(publication.AssetGuid) || publication.LocalFileId <= 0 ||
-            !objectIds.ContainsKey(ObjectKey(publication.AssetGuid, publication.LocalFileId)) || publication.TargetId.IsEmpty() ||
-            publication.SourceRevision > Database.CurrentRevision || publicationIds.ContainsKey(key))
+        const Guid* objectGuid = objectIds.TryGet(ObjectKey(publication.AssetGuid, publication.LocalFileId));
+        if (!sourceIds.ContainsKey(publication.AssetGuid) || !publication.ObjectGuid.IsValid() || publication.LocalFileId <= 0 ||
+            !objectGuid || *objectGuid != publication.ObjectGuid || publication.TargetId.IsEmpty() ||
+            !objectGuids.ContainsKey(publication.ObjectGuid) || publication.SourceRevision > Database.CurrentRevision || publicationIds.ContainsKey(key))
             return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate publication row."));
         publicationIds.Add(key, 0);
     }
@@ -158,7 +166,8 @@ bool SourceAssetDatabaseState::Validate(AssetPipelineDiagnostic& diagnostic) con
     for (const SourceArtifactObjectRow& row : ArtifactObjects)
     {
         const String key = String(row.Artifact.ToString()) + TEXT(":") + ObjectKey(row.AssetGuid, row.LocalFileId);
-        if (row.Artifact.IsZero() || !objectIds.ContainsKey(ObjectKey(row.AssetGuid, row.LocalFileId)) ||
+        const Guid* objectGuid = objectIds.TryGet(ObjectKey(row.AssetGuid, row.LocalFileId));
+        if (row.Artifact.IsZero() || !row.ObjectGuid.IsValid() || !objectGuid || *objectGuid != row.ObjectGuid || !objectGuids.ContainsKey(row.ObjectGuid) ||
             row.TypeName.IsEmpty() || row.ObjectBlobId.IsZero() || artifactObjectIds.ContainsKey(key))
             return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate artifact object row."));
         artifactObjectIds.Add(key, 0);
@@ -251,6 +260,7 @@ void SourceAssetDatabaseState::Serialize(Array<byte>& output) const
     for (const SourceAssetObjectRow& value : Objects)
     {
         writer.Write(value.AssetGuid);
+        writer.Write(value.ObjectGuid);
         writer.Write(value.LocalFileId);
         writer.WriteString(value.StableIdentifier);
         writer.WriteString(value.SubAssetKey);
@@ -269,10 +279,12 @@ void SourceAssetDatabaseState::Serialize(Array<byte>& output) const
     for (const SourceAssetDependencyRow& value : Dependencies)
     {
         writer.Write(value.OwnerAssetGuid);
+        writer.Write(value.OwnerObjectGuid);
         writer.Write(value.OwnerLocalFileId);
         writer.WriteString(value.TargetId);
         writer.Write((byte)value.Kind);
         writer.Write(value.TargetAssetGuid);
+        writer.Write(value.TargetObjectGuid);
         writer.Write(value.TargetLocalFileId);
         writer.WriteString(value.SourcePath);
         writer.Write(value.ExactArtifact);
@@ -290,6 +302,7 @@ void SourceAssetDatabaseState::Serialize(Array<byte>& output) const
     for (const SourceAssetPublicationRow& value : Publications)
     {
         writer.Write(value.AssetGuid);
+        writer.Write(value.ObjectGuid);
         writer.Write(value.LocalFileId);
         writer.WriteString(value.TargetId);
         writer.Write(value.Artifact);
@@ -331,6 +344,7 @@ void SourceAssetDatabaseState::Serialize(Array<byte>& output) const
     {
         writer.Write(value.Artifact);
         writer.Write(value.AssetGuid);
+        writer.Write(value.ObjectGuid);
         writer.Write(value.LocalFileId);
         writer.WriteString(value.TypeName);
         writer.Write(value.ObjectBlobId);
@@ -438,7 +452,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
     for (SourceAssetObjectRow& item : value.Objects)
     {
         byte isMain, isRemoved, status;
-        if (reader.Read(item.AssetGuid) || reader.Read(item.LocalFileId) || reader.ReadString(item.StableIdentifier) ||
+        if (reader.Read(item.AssetGuid) || reader.Read(item.ObjectGuid) || reader.Read(item.LocalFileId) || reader.ReadString(item.StableIdentifier) ||
             reader.ReadString(item.SubAssetKey) || reader.ReadString(item.TypeName) || reader.ReadString(item.DisplayName) || reader.Read(isMain) || reader.Read(isRemoved) || reader.Read(status) ||
             reader.ReadString(item.ObjectMetadata) || reader.Read(item.FirstSeenRevision) || reader.Read(item.LastSeenRevision) || reader.Read(item.LastModifiedRevision) ||
             isMain > 1 || isRemoved > 1 || status > (byte)AssetRecordStatus::PathCollision)
@@ -454,8 +468,8 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
     for (SourceAssetDependencyRow& item : value.Dependencies)
     {
         byte kind;
-        if (reader.Read(item.OwnerAssetGuid) || reader.Read(item.OwnerLocalFileId) || reader.ReadString(item.TargetId) || reader.Read(kind) ||
-            reader.Read(item.TargetAssetGuid) || reader.Read(item.TargetLocalFileId) || reader.ReadString(item.SourcePath) ||
+        if (reader.Read(item.OwnerAssetGuid) || reader.Read(item.OwnerObjectGuid) || reader.Read(item.OwnerLocalFileId) || reader.ReadString(item.TargetId) || reader.Read(kind) ||
+            reader.Read(item.TargetAssetGuid) || reader.Read(item.TargetObjectGuid) || reader.Read(item.TargetLocalFileId) || reader.ReadString(item.SourcePath) ||
             reader.Read(item.ExactArtifact) || reader.ReadString(item.CustomDependency) || reader.Read(item.Content) || reader.Read(item.Flags) ||
             reader.ReadString(item.OriginImporter) || reader.ReadString(item.OriginDescription) ||
             reader.ReadString(item.OriginPath) || reader.Read(item.OriginLine) || reader.Read(item.OriginColumn) ||
@@ -470,7 +484,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
     for (SourceAssetPublicationRow& item : value.Publications)
     {
         byte isLastKnownGood;
-        if (reader.Read(item.AssetGuid) || reader.Read(item.LocalFileId) || reader.ReadString(item.TargetId) || reader.Read(item.Artifact) ||
+        if (reader.Read(item.AssetGuid) || reader.Read(item.ObjectGuid) || reader.Read(item.LocalFileId) || reader.ReadString(item.TargetId) || reader.Read(item.Artifact) ||
             reader.Read(item.ManifestHash) || reader.Read(item.InputFingerprint) || reader.Read(item.SourceRevision) ||
             reader.Read(item.ImporterRegistryGeneration) || reader.Read(item.PublishedUtcTicks) || reader.Read(isLastKnownGood) ||
             isLastKnownGood > 1)
@@ -508,7 +522,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
         value.ArtifactObjects.Resize(count, false);
         for (SourceArtifactObjectRow& item : value.ArtifactObjects)
         {
-            if (reader.Read(item.Artifact) || reader.Read(item.AssetGuid) || reader.Read(item.LocalFileId) ||
+            if (reader.Read(item.Artifact) || reader.Read(item.AssetGuid) || reader.Read(item.ObjectGuid) || reader.Read(item.LocalFileId) ||
                 reader.ReadString(item.TypeName) || reader.Read(item.ObjectBlobId) || reader.Read(item.MetadataBlobId) ||
                 reader.ReadString(item.CompatibilityTag))
                 return Fail(diagnostic, TEXT("Source asset database artifact object table is malformed."));

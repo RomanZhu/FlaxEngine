@@ -4,10 +4,10 @@
 #include "Engine/Content/Artifacts/ArtifactKey.h"
 #include <ThirdParty/catch2/catch.hpp>
 
-TEST_CASE("Built-in catalog format persists only composite object identity")
+TEST_CASE("Built-in catalog format persists object GUID identity")
 {
     BuiltinAssetCatalogSerializedEntry entry;
-    entry.ObjectID = AssetObjectId(AssetGuid(Guid(1, 2, 3, 4)), 42);
+    entry.ID = Guid(1, 2, 3, 4);
     entry.TypeName = TEXT("FlaxEngine.Texture");
     entry.RelativePath = TEXT("Engine/Test.flax");
     entry.Uri = TEXT("builtin://Engine/Test#42");
@@ -24,14 +24,14 @@ TEST_CASE("Built-in catalog format persists only composite object identity")
     CHECK(bytes[7] == 0);
 
     const int32 headerSize = sizeof(uint32) * 3 + sizeof(ContentHash);
-    const int32 payloadSize = sizeof(uint32) + sizeof(Guid) + sizeof(uint64) + sizeof(uint32) * 3 +
+    const int32 payloadSize = sizeof(uint32) + sizeof(Guid) + sizeof(uint32) * 3 +
         StringAnsi(entry.TypeName).Length() + StringAnsi(entry.RelativePath).Length() + StringAnsi(entry.Uri).Length();
     CHECK(bytes.Count() == headerSize + payloadSize);
 
     Array<BuiltinAssetCatalogSerializedEntry> loaded;
     REQUIRE_FALSE(BuiltinAssetCatalogFormat::FromBytes(Span<byte>(bytes.Get(), bytes.Count()), loaded, diagnostic));
     REQUIRE(loaded.Count() == 1);
-    CHECK(loaded[0].ObjectID == entry.ObjectID);
+    CHECK(loaded[0].ID == entry.ID);
     CHECK(loaded[0].TypeName == entry.TypeName);
     CHECK(loaded[0].RelativePath == entry.RelativePath);
     CHECK(loaded[0].Uri == entry.Uri);
@@ -40,7 +40,7 @@ TEST_CASE("Built-in catalog format persists only composite object identity")
 TEST_CASE("Built-in catalog format rejects legacy runtime identity data")
 {
     BuiltinAssetCatalogSerializedEntry entry;
-    entry.ObjectID = AssetObjectId::Main(AssetGuid(Guid(5, 6, 7, 8)));
+    entry.ID = Guid(5, 6, 7, 8);
     entry.TypeName = TEXT("FlaxEngine.Material");
     entry.RelativePath = TEXT("Engine/Material.flax");
     entry.Uri = TEXT("builtin://Engine/Material");
@@ -59,10 +59,10 @@ TEST_CASE("Built-in catalog format rejects legacy runtime identity data")
     CHECK(loaded.IsEmpty());
 }
 
-TEST_CASE("Built-in catalog format rejects duplicate composite identities")
+TEST_CASE("Built-in catalog format rejects duplicate object GUIDs")
 {
     BuiltinAssetCatalogSerializedEntry entry;
-    entry.ObjectID = AssetObjectId(AssetGuid(Guid(9, 10, 11, 12)), 7);
+    entry.ID = Guid(9, 10, 11, 12);
     entry.TypeName = TEXT("FlaxEngine.Texture");
     entry.RelativePath = TEXT("Engine/First.flax");
     entry.Uri = TEXT("builtin://Engine/First");

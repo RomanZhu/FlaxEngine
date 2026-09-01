@@ -209,7 +209,7 @@ namespace
         for (const auto& mapping : meta.SubAssets)
         {
             if (!mapping.Value.Removed)
-                payload->AssignedIDs[mapping.Key] = AssetObjectId(AssetGuid(meta.ID), mapping.Value.LocalId).ToRuntimeObjectGuid();
+                payload->AssignedIDs[mapping.Key] = mapping.Value.ID;
         }
         return false;
     }
@@ -283,8 +283,7 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         return true;
 
     ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-model-build-job-v1"));
-    jobBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
-    jobBuilder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
+    jobBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.AssetID);
     jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
     jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
     jobBuilder.AddKey(StringAnsiView("manifest-target"), request.Target.BuildKey(ArtifactTargetDimension::All));

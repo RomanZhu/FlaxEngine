@@ -216,9 +216,9 @@ TEST_CASE("Object loader deduplicates simultaneous exact object loads")
     CHECK(registry.Count() == 1);
 }
 
-TEST_CASE("Cooked object loader resolves composite entries through runtime catalog")
+TEST_CASE("Cooked object loader resolves persistent GUID entries through runtime catalog")
 {
-    const AssetObjectId object(AssetGuid(Guid(103, 0, 0, 0)), 44);
+    const AssetObjectId object = AssetObjectId::Main(AssetGuid(Guid(103, 0, 0, 0)));
     RuntimeAssetCatalogEntry entry;
     entry.Object = object;
     entry.TypeName = "FlaxEngine.Texture";

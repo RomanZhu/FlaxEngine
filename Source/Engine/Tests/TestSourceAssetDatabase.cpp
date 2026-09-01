@@ -52,6 +52,7 @@ namespace
     {
         SourceAssetObjectRow result;
         result.AssetGuid = assetGuid;
+        result.ObjectGuid = localFileId == 1 ? assetGuid : Guid(assetGuid.A ^ static_cast<uint32>(localFileId), assetGuid.B, assetGuid.C, assetGuid.D);
         result.LocalFileId = localFileId;
         result.StableIdentifier = stableIdentifier;
         result.TypeName = TEXT("FlaxEngine.Model");
@@ -67,9 +68,9 @@ namespace
     }
 }
 
-TEST_CASE("Source asset database schema persists exact composite object identity")
+TEST_CASE("Source asset database schema persists object GUID identity")
 {
-    CHECK(AssetDatabaseSchema::Version == 6);
+    CHECK(AssetDatabaseSchema::Version == 7);
 
     SourceAssetDatabaseState state;
     state.Database.ProjectId = Guid::New();
@@ -93,8 +94,10 @@ TEST_CASE("Source asset database schema persists exact composite object identity
     REQUIRE_FALSE(SourceAssetDatabaseState::Deserialize(serialized.Get(), serialized.Count(), loaded, diagnostic));
     REQUIRE(loaded.Objects.Count() == 2);
     CHECK(loaded.Objects[0].AssetGuid == firstSource);
+    CHECK(loaded.Objects[0].ObjectGuid == state.Objects[0].ObjectGuid);
     CHECK(loaded.Objects[0].LocalFileId == firstLocalId);
     CHECK(loaded.Objects[1].AssetGuid == compatibilityCollision);
+    CHECK(loaded.Objects[1].ObjectGuid == state.Objects[1].ObjectGuid);
     CHECK(loaded.Objects[1].LocalFileId == 1);
 
     state.Database.SchemaVersion = 4;
@@ -277,6 +280,7 @@ TEST_CASE("Source asset database commits durable coherent revisions")
     transaction->ReplaceObjects(assetId, objects);
     SourceAssetPublicationRow publication;
     publication.AssetGuid = assetId;
+    publication.ObjectGuid = assetId;
     publication.LocalFileId = 1;
     publication.TargetId = TEXT("Windows-x64");
     publication.IsLastKnownGood = true;
@@ -456,10 +460,12 @@ TEST_CASE("Source asset database object replacement prunes related rows and repl
     seed->ReplaceObjects(assetId, objects);
     SourceAssetDependencyRow dependency;
     dependency.OwnerAssetGuid = assetId;
+    dependency.OwnerObjectGuid = objects[0].ObjectGuid;
     dependency.OwnerLocalFileId = 1;
     dependency.TargetId = TEXT("Windows-x64");
     dependency.Kind = AssetDependencyKind::RuntimeReference;
     dependency.TargetAssetGuid = assetId;
+    dependency.TargetObjectGuid = objects[1].ObjectGuid;
     dependency.TargetLocalFileId = 2;
     dependency.CustomDependency = AssetObjectId(AssetGuid(assetId), 2).ToString();
     Array<SourceAssetDependencyRow> dependencies;
@@ -467,16 +473,19 @@ TEST_CASE("Source asset database object replacement prunes related rows and repl
     seed->ReplaceDependencies(assetId, 1, dependency.TargetId, dependencies);
     SourceAssetPublicationRow publication;
     publication.AssetGuid = assetId;
+    publication.ObjectGuid = objects[0].ObjectGuid;
     publication.LocalFileId = 1;
     publication.TargetId = dependency.TargetId;
     publication.Artifact = mainArtifact;
     publication.IsLastKnownGood = true;
     seed->UpsertPublication(publication);
     publication.LocalFileId = 2;
+    publication.ObjectGuid = objects[1].ObjectGuid;
     publication.Artifact = subArtifact;
     seed->UpsertPublication(publication);
     SourceArtifactObjectRow artifactObject;
     artifactObject.AssetGuid = assetId;
+    artifactObject.ObjectGuid = objects[0].ObjectGuid;
     artifactObject.LocalFileId = 1;
     artifactObject.TypeName = TEXT("FlaxEngine.Model");
     artifactObject.ObjectBlobId = ContentHash::Compute("main-blob", 9);
@@ -484,6 +493,7 @@ TEST_CASE("Source asset database object replacement prunes related rows and repl
     artifactObjects.Add(artifactObject);
     seed->ReplaceArtifactObjects(mainArtifact, artifactObjects);
     artifactObject.LocalFileId = 2;
+    artifactObject.ObjectGuid = objects[1].ObjectGuid;
     artifactObject.ObjectBlobId = ContentHash::Compute("sub-blob", 8);
     artifactObjects[0] = artifactObject;
     seed->ReplaceArtifactObjects(subArtifact, artifactObjects);

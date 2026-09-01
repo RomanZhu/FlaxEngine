@@ -34,7 +34,7 @@ struct FLAXENGINE_API ArtifactManifestOutput
 /// <summary>Canonical generated record selecting one coherent successful output set.</summary>
 struct FLAXENGINE_API ArtifactManifest
 {
-    static constexpr int32 CurrentVersion = 2;
+    static constexpr int32 CurrentVersion = 3;
 
     int32 ManifestVersion = CurrentVersion;
     AssetObjectId ObjectID;

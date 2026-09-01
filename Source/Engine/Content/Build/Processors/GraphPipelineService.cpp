@@ -360,8 +360,7 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         return true;
 
     ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-graph-document-build-job-v2"));
-    jobBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
-    jobBuilder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
+    jobBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.AssetID);
     jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
     jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
     jobBuilder.AddKey(StringAnsiView("manifest-target"), request.Target.BuildKey(ArtifactTargetDimension::All));

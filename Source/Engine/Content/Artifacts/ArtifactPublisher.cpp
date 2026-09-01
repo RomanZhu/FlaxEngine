@@ -74,7 +74,7 @@ namespace
         diagnostic = AssetPipelineDiagnostic();
         diagnostic.Code = code;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
-        diagnostic.AssetGuid = prepared.ObjectID.Asset.Value;
+        diagnostic.AssetGuid = prepared.AssetID;
         diagnostic.SourcePath = path;
         diagnostic.Message = message;
         return true;
@@ -111,10 +111,22 @@ namespace
         if (!database.IsUsingLibrary(libraryRoot))
             return false;
 
+        AssetRecord ownerRecord;
+        if (!database.TryGetRecord(manifest.ObjectID, ownerRecord))
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+            diagnostic.AssetGuid = manifest.ObjectID.Asset.Value;
+            diagnostic.Message = TEXT("Cannot persist an artifact publication without its object GUID database record.");
+            return true;
+        }
+
         const String targetId(manifest.Target.BuildKey(ArtifactTargetDimension::All).ToString());
         SourceAssetPublicationRow publication;
-        publication.AssetGuid = manifest.ObjectID.Asset.Value;
-        publication.LocalFileId = manifest.ObjectID.LocalId;
+        publication.AssetGuid = ownerRecord.SourceAssetID;
+        publication.ObjectGuid = ownerRecord.ID;
+        publication.LocalFileId = ownerRecord.LocalId;
         publication.TargetId = targetId;
         publication.ManifestHash = ContentHash::Compute(manifestJson.Get(), manifestJson.Length());
         const ArtifactManifestOutput* primaryOutput = nullptr;
@@ -147,6 +159,7 @@ namespace
         {
             SourceAssetDependencyRow dependency;
             dependency.OwnerAssetGuid = publication.AssetGuid;
+            dependency.OwnerObjectGuid = publication.ObjectGuid;
             dependency.OwnerLocalFileId = publication.LocalFileId;
             dependency.TargetId = targetId;
             dependency.Kind = source.Kind;
@@ -169,8 +182,20 @@ namespace
                     diagnostic.Message = TEXT("Cannot persist an artifact dependency that has no asset-object database record.");
                     return true;
                 }
-                dependency.TargetAssetGuid = source.ObjectID.Asset.Value;
-                dependency.TargetLocalFileId = source.ObjectID.LocalId;
+                AssetRecord targetRecord;
+                if (!database.TryGetRecord(source.ObjectID, targetRecord))
+                {
+                    diagnostic = AssetPipelineDiagnostic();
+                    diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactMissing;
+                    diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+                    diagnostic.AssetGuid = source.ObjectID.Asset.Value;
+                    diagnostic.SourcePath = source.Identity;
+                    diagnostic.Message = TEXT("Cannot persist an artifact dependency without its object GUID database record.");
+                    return true;
+                }
+                dependency.TargetAssetGuid = targetRecord.SourceAssetID;
+                dependency.TargetObjectGuid = targetRecord.ID;
+                dependency.TargetLocalFileId = targetRecord.LocalId;
             }
             dependencies.Add(MoveTemp(dependency));
         }
@@ -321,7 +346,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         if (ReadAndHash(staged->AbsolutePath, size, contentHash) || size != staged->Size || contentHash != staged->Hash)
             return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, staged->AbsolutePath, TEXT("Staged artifact output changed before publication."));
         ArtifactStoragePath finalPath;
-        if (ArtifactStore::TryGetArtifactPath(libraryRoot, request.Target, declared.TargetDimensions, prepared.ObjectID,
+        if (ArtifactStore::TryGetArtifactPath(libraryRoot, request.Target, declared.TargetDimensions, prepared.AssetID,
             declared.Kind, plan->Key, declared.Extension, finalPath, diagnostic))
             return true;
         String relativePath;
@@ -403,8 +428,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     // Output kinds may be built independently. Serialize manifest updates per asset so
     // concurrent output publications can merge without dropping each other's entries.
     ArtifactKeyBuilder manifestLockBuilder(StringAnsiView("flax-artifact-manifest-lock-v1"));
-    manifestLockBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
-    manifestLockBuilder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
+    manifestLockBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.AssetID);
     manifestLockBuilder.AddKey(StringAnsiView("target"), request.Target.BuildKey(ArtifactTargetDimension::All));
     ArtifactLock manifestLock;
     if (manifestLock.Acquire(libraryRoot, manifestLockBuilder.Finalize(), context.GetJobID(), context.GetCancellation(), diagnostic))
@@ -438,7 +462,14 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         ArtifactManifestDependency dependency;
         dependency.Kind = source.Kind;
         dependency.Identity = source.StableIdentity;
-        dependency.ObjectID = source.ObjectID;
+        if (source.ObjectID.IsValid())
+        {
+            AssetRecord dependencyRecord;
+            if (!AssetDatabase::Get().TryGetRecord(source.ObjectID, dependencyRecord))
+                return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, prepared, source.Identity,
+                    TEXT("Cannot publish an artifact dependency without its persisted object GUID."));
+            dependency.ObjectID = AssetObjectId::Main(AssetGuid(dependencyRecord.ID));
+        }
         dependency.Hash = source.Content;
         dependency.ExactArtifact = source.ExactArtifact;
         dependency.InterfaceHash = source.SemanticInterface;
@@ -453,7 +484,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     manifest.KeyComponents.Add(MoveTemp(fingerprintComponent));
 
     ArtifactStoragePath manifestPath;
-    if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, prepared.ObjectID, manifestPath, diagnostic))
+    if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, prepared.AssetID, manifestPath, diagnostic))
         return true;
     if (NativeFileExists(manifestPath.Get()))
     {

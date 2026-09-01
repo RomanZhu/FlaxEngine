@@ -230,7 +230,7 @@ void IBuildCache::InvalidateCacheTextures()
 bool CookAssetsStep::CacheEntry::IsValid(bool withDependencies)
 {
     AssetInfo assetInfo;
-    if (Content::GetAssetInfo(ObjectID, assetInfo))
+    if (Content::GetRuntimeAssetInfo(ID, assetInfo))
     {
         if (TypeName == assetInfo.TypeName)
         {
@@ -259,25 +259,25 @@ bool CookAssetsStep::CacheEntry::IsValid(bool withDependencies)
 CookAssetsStep::CacheEntry& CookAssetsStep::CacheData::CreateEntry(const JsonAssetBase* asset, String& cachedFilePath)
 {
     ASSERT(asset->DataTypeName.HasChars());
-    const AssetObjectId objectId = asset->GetPersistentObjectId();
-    ASSERT(objectId.IsValid());
-    auto& entry = Entries[objectId];
-    entry.ObjectID = objectId;
+    const Guid id = asset->GetID();
+    ASSERT(id.IsValid());
+    auto& entry = Entries[id];
+    entry.ID = id;
     entry.TypeName = asset->DataTypeName;
     entry.FileModified = FileSystem::GetFileLastEditTime(asset->GetPath());
-    GetFilePath(objectId, cachedFilePath);
+    GetFilePath(id, cachedFilePath);
     return entry;
 }
 
 CookAssetsStep::CacheEntry& CookAssetsStep::CacheData::CreateEntry(const Asset* asset, String& cachedFilePath)
 {
-    const AssetObjectId objectId = asset->GetPersistentObjectId();
-    ASSERT(objectId.IsValid());
-    auto& entry = Entries[objectId];
-    entry.ObjectID = objectId;
+    const Guid id = asset->GetID();
+    ASSERT(id.IsValid());
+    auto& entry = Entries[id];
+    entry.ID = id;
     entry.TypeName = asset->GetTypeName();
     entry.FileModified = FileSystem::GetFileLastEditTime(asset->GetPath());
-    GetFilePath(objectId, cachedFilePath);
+    GetFilePath(id, cachedFilePath);
     return entry;
 }
 
@@ -296,7 +296,7 @@ void CookAssetsStep::CacheData::InvalidateCachePerType(const StringView& typeNam
 void CookAssetsStep::CacheData::Load(CookingData& data)
 {
     PROFILE_CPU();
-    HeaderFilePath = data.CacheDirectory / String::Format(TEXT("CookedObjectHeader_{0}.bin"), FLAXENGINE_VERSION_BUILD);
+    HeaderFilePath = data.CacheDirectory / String::Format(TEXT("CookedObjectGuidHeader_{0}.bin"), FLAXENGINE_VERSION_BUILD);
     CacheFolder = data.CacheDirectory / TEXT("CookedObjects");
     Entries.Clear();
 
@@ -326,8 +326,8 @@ void CookAssetsStep::CacheData::Load(CookingData& data)
     Array<Pair<String, DateTime>> fileDependencies;
     for (int32 i = 0; i < entriesCount; i++)
     {
-        AssetObjectId objectId;
-        file->Read(objectId);
+        Guid id;
+        file->Read(id);
         String typeName;
         file->Read(typeName);
         DateTime fileModified;
@@ -344,15 +344,15 @@ void CookAssetsStep::CacheData::Load(CookingData& data)
         }
 
         // Skip missing entries
-        if (!objectId.IsValid())
+        if (!id.IsValid())
             continue;
         String cachedFilePath;
-        GetFilePath(objectId, cachedFilePath);
+        GetFilePath(id, cachedFilePath);
         if (!FileSystem::FileExists(cachedFilePath))
             continue;
 
-        auto& e = Entries[objectId];
-        e.ObjectID = objectId;
+        auto& e = Entries[id];
+        e.ID = id;
         e.TypeName = typeName;
         e.FileModified = fileModified;
         e.FileDependencies = fileDependencies;
@@ -453,9 +453,11 @@ void CookAssetsStep::CacheData::Load(CookingData& data)
     }
 
     // Invalidate textures if streaming settings gets modified
-    const AssetObjectId streamingSettingsObject = gameSettings->Streaming;
-    if (Settings.Global.StreamingSettingsObject != streamingSettingsObject ||
-        (Entries.ContainsKey(streamingSettingsObject) && !Entries[streamingSettingsObject].IsValid()))
+    AssetInfo streamingSettingsInfo;
+    const Guid streamingSettingsID = Content::GetAssetInfo(gameSettings->Streaming, streamingSettingsInfo)
+        ? streamingSettingsInfo.ID : Guid::Empty;
+    if (Settings.Global.StreamingSettingsID != streamingSettingsID ||
+        (Entries.ContainsKey(streamingSettingsID) && !Entries[streamingSettingsID].IsValid()))
     {
         InvalidateCachePerType<Texture>();
         InvalidateCachePerType<CubeTexture>();
@@ -479,7 +481,7 @@ void CookAssetsStep::CacheData::Save(CookingData& data)
     for (auto i = Entries.Begin(); i.IsNotEnd(); ++i)
     {
         auto& e = i->Value;
-        file->Write(e.ObjectID);
+        file->Write(e.ID);
         file->Write(e.TypeName);
         file->Write(e.FileModified);
         file->Write(e.FileDependencies.Count());
@@ -1284,7 +1286,9 @@ bool CookAssetsStep::Perform(CookingData& data)
     {
         cache.Settings.Global.ShadersNoOptimize = buildSettings->ShadersNoOptimize;
         cache.Settings.Global.ShadersGenerateDebugData = buildSettings->ShadersGenerateDebugData;
-        cache.Settings.Global.StreamingSettingsObject = gameSettings->Streaming;
+        AssetInfo streamingInfo;
+        cache.Settings.Global.StreamingSettingsID = Content::GetAssetInfo(gameSettings->Streaming, streamingInfo)
+            ? streamingInfo.ID : Guid::Empty;
         cache.Settings.Global.ShadersVersion = GPU_SHADER_CACHE_VERSION;
         cache.Settings.Global.MaterialGraphVersion = MATERIAL_GRAPH_VERSION;
         cache.Settings.Global.ParticleGraphVersion = PARTICLE_GPU_GRAPH_VERSION;
@@ -1328,13 +1332,8 @@ bool CookAssetsStep::Perform(CookingData& data)
         BUILD_STEP_CANCEL_CHECK;
         data.StepProgress(Step1Info, Math::Lerp(Step1ProgressStart, Step1ProgressEnd, static_cast<float>(subStepIndex++) / data.Assets.Count()));
         const AssetObjectId objectId = i->Item;
-        const Guid assetId = objectId.ToRuntimeObjectGuid();
+        Guid assetId = objectId.ToRuntimeObjectGuid();
         const bool isBuiltin = data.BuiltinRootAssets.Contains(objectId);
-
-        // Register asset
-        auto& e = AssetsRegistry[objectId];
-        e.Info.ID = assetId;
-        e.Info.ObjectID = objectId;
 
         // Canonical sources are already target-processed artifacts. Resolve exact bytes and feed them
         // directly to the existing package writer instead of cooking a host-editor object.
@@ -1342,7 +1341,16 @@ bool CookAssetsStep::Perform(CookingData& data)
         const bool foundCanonical = canonicalRecordPtr != nullptr;
         AssetRecord canonicalRecord;
         if (foundCanonical)
+        {
             canonicalRecord = **canonicalRecordPtr;
+            assetId = canonicalRecord.ID;
+        }
+
+        // Package and catalog records are keyed by the persistent object GUID. AssetObjectId is
+        // retained here only as the temporary loading bridge until the public GUID-only API lands.
+        auto& e = AssetsRegistry[objectId];
+        e.Info.ID = assetId;
+        e.Info.ObjectID = AssetObjectId::Main(AssetGuid(assetId));
         if (foundCanonical)
         {
             if (canonicalRecord.SourceKind == AssetSourceKind::Folder)
@@ -1394,10 +1402,10 @@ bool CookAssetsStep::Perform(CookingData& data)
         }
 
         // Check if asset is in cooking cache and was not modified since last build
-        const auto cachedEntry = cache.Entries.TryGet(objectId);
+        const auto cachedEntry = cache.Entries.TryGet(assetId);
         if (cachedEntry)
         {
-            ASSERT(cachedEntry->ObjectID == objectId);
+            ASSERT(cachedEntry->ID == assetId);
 
             // Get actual asset info
             if (isBuiltin ? Content::GetRuntimeAssetInfo(assetId, assetInfo) : Content::GetAssetInfo(objectId, assetInfo))
@@ -1430,7 +1438,7 @@ bool CookAssetsStep::Perform(CookingData& data)
                 else
                 {
                     // Remove invalid entry
-                    cache.Entries.Remove(objectId);
+                    cache.Entries.Remove(assetId);
                 }
             }
         }
@@ -1552,14 +1560,14 @@ bool CookAssetsStep::Perform(CookingData& data)
             BUILD_STEP_CANCEL_CHECK;
             data.StepProgress(Step3Info, Math::Lerp(Step3ProgressStart, Step3ProgressEnd, (float)subStepIndex++ / AssetsRegistry.Count()));
             CookerPackagedAssetEntry& registryEntry = AssetsRegistry[objectId];
-            const Guid assetId = objectId.ToRuntimeObjectGuid();
+            const Guid assetId = registryEntry.Info.ID;
 
             String cookedFilePath;
             const String* exactCookedPath = cookedObjectPaths.TryGet(objectId);
             if (exactCookedPath)
                 cookedFilePath = *exactCookedPath;
             else
-                cache.GetFilePath(objectId, cookedFilePath);
+                cache.GetFilePath(registryEntry.Info.ID, cookedFilePath);
             if (!FileSystem::FileExists(cookedFilePath))
             {
                 data.Error(String::Format(TEXT("Missing cooked file for asset {0}."), assetId));
@@ -1722,7 +1730,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         if (exactCookedPath)
             cookedFilePath = *exactCookedPath;
         else
-            cache.GetFilePath(object, cookedFilePath);
+            cache.GetFilePath(packaged->Info.ID, cookedFilePath);
         ContentHash contentHash;
         if (HashCookedFile(cookedFilePath, contentHash))
         {
@@ -1735,7 +1743,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         if (packageName.StartsWith(TEXT("Content/")))
             packageName = packageName.Right(packageName.Length() - 8);
         RuntimeAssetCatalogEntry catalogEntry;
-        catalogEntry.Object = object;
+        catalogEntry.Object = AssetObjectId::Main(AssetGuid(packaged->Info.ID));
         catalogEntry.TypeName = StringAnsi(packaged->Info.TypeName);
         catalogEntry.PackageName = StringAnsi(packageName);
         catalogEntry.Offset = 0;
@@ -1746,7 +1754,16 @@ bool CookAssetsStep::Perform(CookingData& data)
         {
             if (dependencyRecord.Object == object)
             {
-                catalogEntry.Dependencies = dependencyRecord.Dependencies;
+                for (const AssetObjectId& dependency : dependencyRecord.Dependencies)
+                {
+                    const CookerPackagedAssetEntry* dependencyPackage = AssetsRegistry.TryGet(dependency);
+                    if (!dependencyPackage || !dependencyPackage->Info.ID.IsValid())
+                    {
+                        data.Error(String::Format(TEXT("Runtime dependency {0} has no persistent object GUID."), dependency.ToString()));
+                        return true;
+                    }
+                    catalogEntry.Dependencies.Add(AssetObjectId::Main(AssetGuid(dependencyPackage->Info.ID)));
+                }
                 break;
             }
         }
@@ -1774,18 +1791,22 @@ bool CookAssetsStep::Perform(CookingData& data)
         ContentHash pathHash;
         if (!i->Value.IsValid() || RuntimeAssetCatalog::HashPathAlias(i->Key, pathHash))
             continue;
+        const CookerPackagedAssetEntry* packaged = AssetsRegistry.TryGet(i->Value);
+        if (!packaged || !packaged->Info.ID.IsValid())
+            continue;
+        const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(packaged->Info.ID));
         const AssetObjectId* existing = aliasesByHash.TryGet(pathHash);
-        if (existing && *existing != i->Value)
+        if (existing && *existing != persistentObject)
         {
             data.Error(TEXT("Two runtime asset paths collide after portable normalization."));
             return true;
         }
         if (!existing)
         {
-            aliasesByHash.Add(pathHash, i->Value);
+            aliasesByHash.Add(pathHash, persistentObject);
             RuntimeAssetCatalogAlias alias;
             alias.PathHash = pathHash;
-            alias.Object = i->Value;
+            alias.Object = persistentObject;
             catalogAliases.Add(MoveTemp(alias));
         }
     }
@@ -1809,7 +1830,13 @@ bool CookAssetsStep::Perform(CookingData& data)
         data.Error(String::Format(TEXT("Failed to create binary runtime asset catalog. {0}"), diagnostic.Message));
         return true;
     }
-    runtimeCatalog.SetGameSettingsObject(gameSettingsObject);
+    const CookerPackagedAssetEntry* packagedGameSettings = AssetsRegistry.TryGet(gameSettingsObject);
+    if (!packagedGameSettings || !packagedGameSettings->Info.ID.IsValid())
+    {
+        data.Error(TEXT("Cannot create runtime catalog because GameSettings has no persistent object GUID."));
+        return true;
+    }
+    runtimeCatalog.SetGameSettingsObject(AssetObjectId::Main(AssetGuid(packagedGameSettings->Info.ID)));
     if (runtimeCatalog.SaveAtomic(runtimeCatalogPath, diagnostic))
     {
         data.Error(String::Format(TEXT("Failed to create binary runtime asset catalog. {0}"), diagnostic.Message));

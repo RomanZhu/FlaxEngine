@@ -769,6 +769,8 @@ bool Content::GetRuntimeAssetInfo(const Guid& runtimeId, AssetInfo& info)
         AssetRecord record;
         if (AssetDatabase::Get().TryGetRecord(runtimeId, record))
         {
+            if (record.Status == AssetRecordStatus::MissingSource)
+                return false;
             AssetInfo builtinInfo;
             if (BuiltinAssetCatalog::Get().TryGet(runtimeId, builtinInfo))
             {
@@ -796,6 +798,8 @@ bool Content::GetAssetInfo(const AssetObjectId& id, AssetInfo& info)
     AssetRecord record;
     if (AssetDatabase::Get().TryGetRecord(id, record))
     {
+        if (record.Status == AssetRecordStatus::MissingSource)
+            return false;
         AssetInfo builtinInfo;
         if (BuiltinAssetCatalog::Get().TryGet(id, builtinInfo) || BuiltinAssetCatalog::Get().TryGet(record.ID, builtinInfo))
         {

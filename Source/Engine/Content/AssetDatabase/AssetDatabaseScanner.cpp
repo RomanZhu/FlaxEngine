@@ -103,7 +103,7 @@ namespace
         for (const auto& entry : meta.SubAssets)
         {
             AssetRecord subAsset;
-            subAsset.ID = AssetObjectId(AssetGuid(meta.ID), entry.Value.LocalId).ToRuntimeObjectGuid();
+            subAsset.ID = entry.Value.ID;
             subAsset.SourceAssetID = meta.ID;
             subAsset.LocalId = entry.Value.LocalId;
             subAsset.TypeName = entry.Value.TypeName;

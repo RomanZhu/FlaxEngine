@@ -29,8 +29,8 @@ namespace
 
 TEST_CASE("Runtime asset catalog is deterministic object-level binary data")
 {
-    const AssetObjectId model(AssetGuid(Guid(1, 0, 0, 0)), 42);
-    const AssetObjectId texture(AssetGuid(Guid(1, 0, 0, 0)), 73);
+    const AssetObjectId model = AssetObjectId::Main(AssetGuid(Guid(1, 0, 0, 0)));
+    const AssetObjectId texture = AssetObjectId::Main(AssetGuid(Guid(2, 0, 0, 0)));
     RuntimeAssetCatalogEntry modelEntry = CatalogEntry(model, "FlaxEngine.Model", "base/objects.pak", "model");
     modelEntry.Dependencies.Add(texture);
     const RuntimeAssetCatalogEntry textureEntry = CatalogEntry(texture, "FlaxEngine.Texture", "base/objects.pak", "texture");
@@ -120,26 +120,15 @@ TEST_CASE("Runtime asset catalog rejects source and Library paths")
     CHECK(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
 
     const AssetObjectId subAsset(AssetGuid(Guid(5, 0, 0, 0)), 2);
-    const AssetObjectId collidingMain = AssetObjectId::Main(AssetGuid(subAsset.ToRuntimeObjectGuid()));
     entries.Clear();
     entries.Add(CatalogEntry(subAsset, "FlaxEngine.Texture", "base/objects.pak", "sub"));
-    entries.Add(CatalogEntry(collidingMain, "FlaxEngine.Texture", "base/objects.pak", "main"));
-    CHECK_FALSE(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
-
-    RuntimeAssetCatalogEntry exactEntry;
-    CHECK(catalog.TryGet(subAsset, exactEntry));
-    CHECK(exactEntry.Object == subAsset);
-    CHECK(catalog.TryGet(collidingMain, exactEntry));
-    CHECK(exactEntry.Object == collidingMain);
-
-    AssetObjectId compatibilityObject;
-    CHECK_FALSE(catalog.TryGetByLegacyRuntimeGuid(subAsset.ToRuntimeObjectGuid(), compatibilityObject));
-    CHECK_FALSE(compatibilityObject.IsValid());
+    CHECK(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
 }
 
-TEST_CASE("Runtime asset catalog resolves only unique legacy runtime GUIDs")
+TEST_CASE("Runtime asset catalog resolves persistent object GUIDs")
 {
-    const AssetObjectId object(AssetGuid(Guid(6, 0, 0, 0)), 9);
+    const AssetObjectId object = AssetObjectId::Main(AssetGuid(Guid(6, 0, 0, 0)));
     Array<RuntimeAssetCatalogEntry> entries;
     entries.Add(CatalogEntry(object, "FlaxEngine.Texture", "base/objects.pak", "object"));
     AssetPipelineDiagnostic diagnostic;

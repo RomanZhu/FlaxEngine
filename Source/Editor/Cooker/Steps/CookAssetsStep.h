@@ -38,7 +38,7 @@ public:
         /// <summary>
         /// The exact persistent asset object identifier.
         /// </summary>
-        AssetObjectId ObjectID;
+        Guid ID;
 
         /// <summary>
         /// The stored data full typename. Used to recognize asset type.
@@ -101,7 +101,7 @@ public:
             {
                 bool ShadersNoOptimize;
                 bool ShadersGenerateDebugData;
-                AssetObjectId StreamingSettingsObject;
+                Guid StreamingSettingsID;
                 int32 ShadersVersion;
                 int32 MaterialGraphVersion;
                 int32 ParticleGraphVersion;
@@ -111,19 +111,18 @@ public:
         /// <summary>
         /// The cached entries.
         /// </summary>
-        Dictionary<AssetObjectId, CacheEntry> Entries;
+        Dictionary<Guid, CacheEntry> Entries;
 
     public:
 
         /// <summary>
         /// Gets the path to the asset of the given id (file may be missing).
         /// </summary>
-        /// <param name="objectId">The exact persistent asset object id.</param>
+        /// <param name="id">The persistent asset object GUID.</param>
         /// <param name="cachedFilePath">The cached file path to use for creating cache storage.</param>
-        void GetFilePath(const AssetObjectId& objectId, String& cachedFilePath) const
+        void GetFilePath(const Guid& id, String& cachedFilePath) const
         {
-            cachedFilePath = CacheFolder / String::Format(TEXT("{0}_{1}"),
-                objectId.Asset.Value.ToString(Guid::FormatType::N), objectId.LocalId);
+            cachedFilePath = CacheFolder / id.ToString(Guid::FormatType::N);
         }
 
         /// <summary>

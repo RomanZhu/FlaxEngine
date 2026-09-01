@@ -98,7 +98,7 @@ namespace
 
     bool HasSameObjectContent(const SourceAssetObjectRow& left, const SourceAssetObjectRow& right)
     {
-        return left.StableIdentifier == right.StableIdentifier &&
+        return left.ObjectGuid == right.ObjectGuid && left.StableIdentifier == right.StableIdentifier &&
             left.SubAssetKey == right.SubAssetKey && left.TypeName == right.TypeName &&
             left.DisplayName == right.DisplayName && left.IsMain == right.IsMain &&
             left.IsRemoved == right.IsRemoved && left.Status == right.Status &&
@@ -121,8 +121,8 @@ namespace
 
     bool HasSameDependencyContent(const SourceAssetDependencyRow& left, const SourceAssetDependencyRow& right)
     {
-        return left.OwnerAssetGuid == right.OwnerAssetGuid && left.OwnerLocalFileId == right.OwnerLocalFileId &&
-            left.TargetId == right.TargetId && left.Kind == right.Kind && left.TargetAssetGuid == right.TargetAssetGuid &&
+        return left.OwnerAssetGuid == right.OwnerAssetGuid && left.OwnerObjectGuid == right.OwnerObjectGuid && left.OwnerLocalFileId == right.OwnerLocalFileId &&
+            left.TargetId == right.TargetId && left.Kind == right.Kind && left.TargetAssetGuid == right.TargetAssetGuid && left.TargetObjectGuid == right.TargetObjectGuid &&
             left.TargetLocalFileId == right.TargetLocalFileId && left.SourcePath == right.SourcePath &&
             left.ExactArtifact == right.ExactArtifact && left.CustomDependency == right.CustomDependency &&
             left.Content == right.Content && left.Flags == right.Flags && left.OriginImporter == right.OriginImporter &&
@@ -213,7 +213,7 @@ namespace
             if (!source)
                 continue;
             AssetRecord record;
-            record.ID = AssetObjectId(AssetGuid(object.AssetGuid), object.LocalFileId).ToRuntimeObjectGuid();
+            record.ID = object.ObjectGuid;
             record.SourceAssetID = object.AssetGuid;
             record.LocalId = object.LocalFileId;
             record.TypeName = object.TypeName;
@@ -366,7 +366,8 @@ bool AssetDatabase::TryGetRecord(const AssetObjectId& id, AssetRecord& result) c
 {
     ScopeLock lock(_locker);
     const Guid* backingId = _recordByObject.TryGet(id);
-    const AssetRecord* record = backingId ? _records.TryGet(*backingId) : nullptr;
+    const AssetRecord* record = backingId ? _records.TryGet(*backingId) :
+        (id.IsMainObject() ? _records.TryGet(id.Asset.Value) : nullptr);
     if (!record)
         return false;
     result = *record;
@@ -755,6 +756,9 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
             AddToIndex(nextSubAssetsBySource, record.SourceAssetID, record.ID);
         }
         nextRecordByObject.Add(objectId, record.ID);
+        const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(record.ID));
+        if (persistentObject != objectId)
+            nextRecordByObject.Add(persistentObject, record.ID);
         nextRecords.Add(record.ID, MoveTemp(record));
     }
     for (const auto& entry : nextRecords)
@@ -977,6 +981,9 @@ bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
             next.Labels.Add({ sourceId, label });
     }
 
+    Dictionary<AssetObjectId, Guid> objectGuids;
+    for (const AssetRecord& record : records)
+        objectGuids[AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId)] = record.ID;
     Array<SourceAssetDependencyRow> defaultDependencies;
     for (const AssetRecord& record : records)
     {
@@ -986,6 +993,7 @@ bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
         if (previousObjectPtr)
             object = **previousObjectPtr;
         object.AssetGuid = record.SourceAssetID;
+        object.ObjectGuid = record.ID;
         object.LocalFileId = record.LocalId;
         object.StableIdentifier = record.IsMainAsset() ? String(TEXT("main")) : String(record.SubAsset.Get());
         if (object.StableIdentifier.IsEmpty())
@@ -1002,10 +1010,13 @@ bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
         {
             SourceAssetDependencyRow dependency;
             dependency.OwnerAssetGuid = record.SourceAssetID;
+            dependency.OwnerObjectGuid = record.ID;
             dependency.OwnerLocalFileId = record.LocalId;
             dependency.TargetId = TEXT("default");
             dependency.Kind = AssetDependencyKind::BuildInput;
             dependency.TargetAssetGuid = dependencyId.Asset.Value;
+            const Guid* targetGuid = objectGuids.TryGet(dependencyId);
+            dependency.TargetObjectGuid = targetGuid ? *targetGuid : Guid::Empty;
             dependency.TargetLocalFileId = dependencyId.LocalId;
             dependency.CustomDependency = dependencyId.ToString();
             defaultDependencies.Add(MoveTemp(dependency));
@@ -1014,10 +1025,13 @@ bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
         {
             SourceAssetDependencyRow dependency;
             dependency.OwnerAssetGuid = record.SourceAssetID;
+            dependency.OwnerObjectGuid = record.ID;
             dependency.OwnerLocalFileId = record.LocalId;
             dependency.TargetId = TEXT("default");
             dependency.Kind = AssetDependencyKind::RuntimeReference;
             dependency.TargetAssetGuid = dependencyId.Asset.Value;
+            const Guid* targetGuid = objectGuids.TryGet(dependencyId);
+            dependency.TargetObjectGuid = targetGuid ? *targetGuid : Guid::Empty;
             dependency.TargetLocalFileId = dependencyId.LocalId;
             dependency.CustomDependency = dependencyId.ToString();
             defaultDependencies.Add(MoveTemp(dependency));
@@ -1254,9 +1268,23 @@ bool AssetDatabase::RecordPublication(const SourceAssetPublicationRow& publicati
     std::unique_ptr<AssetDatabaseTransaction> transaction = _sourceDatabase.BeginTransaction();
     if (!transaction)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Cannot begin a publication transaction."));
+    SourceAssetPublicationRow persistedPublication = publication;
+    Array<SourceAssetDependencyRow> persistedDependencies(dependencies);
+    for (const SourceAssetObjectRow& object : transaction->GetState().Objects)
+    {
+        if (object.AssetGuid == persistedPublication.AssetGuid && object.LocalFileId == persistedPublication.LocalFileId)
+            persistedPublication.ObjectGuid = object.ObjectGuid;
+        for (SourceAssetDependencyRow& dependency : persistedDependencies)
+        {
+            if (object.AssetGuid == dependency.OwnerAssetGuid && object.LocalFileId == dependency.OwnerLocalFileId)
+                dependency.OwnerObjectGuid = object.ObjectGuid;
+            if (dependency.TargetLocalFileId != 0 && object.AssetGuid == dependency.TargetAssetGuid && object.LocalFileId == dependency.TargetLocalFileId)
+                dependency.TargetObjectGuid = object.ObjectGuid;
+        }
+    }
     transaction->SetChangeContext(refreshId, pass);
-    transaction->ReplaceDependencies(publication.AssetGuid, publication.LocalFileId, publication.TargetId, dependencies);
-    transaction->UpsertPublication(publication);
+    transaction->ReplaceDependencies(persistedPublication.AssetGuid, persistedPublication.LocalFileId, persistedPublication.TargetId, persistedDependencies);
+    transaction->UpsertPublication(persistedPublication);
     if (transaction->Commit(diagnostic))
         return true;
     AssetDatabaseChangeBatch changes;

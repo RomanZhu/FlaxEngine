@@ -60,8 +60,9 @@ TEST_CASE("ArtifactManifest canonical JSON round-trips coherently")
     StringAnsi first;
     REQUIRE_FALSE(manifest.ToJson(first, diagnostic));
     CHECK(first.EndsWith("\n"));
-    CHECK(first.Contains("\"manifestVersion\": 2"));
-    CHECK(first.Contains("\"fileId\": 1"));
+    CHECK(first.Contains("\"manifestVersion\": 3"));
+    CHECK(first.Contains("\"objectId\": \"00000001000000020000000300000004\""));
+    CHECK_FALSE(first.Contains("fileId"));
     CHECK(first.Contains("\"relativePath\": \"Artifacts/"));
 
     ArtifactManifest parsed;
@@ -108,8 +109,8 @@ TEST_CASE("ArtifactManifest parser rejects malformed field shapes")
         "[]",
         "not-json",
         "{\"manifestVersion\":\"1\"}",
-        "{\"manifestVersion\":2,\"objectId\":null}",
-        "{\"manifestVersion\":2,\"objectId\":{\"guid\":\"xyz\",\"fileId\":1}}",
+        "{\"manifestVersion\":3,\"objectId\":null}",
+        "{\"manifestVersion\":3,\"objectId\":\"xyz\"}",
     };
     AssetPipelineDiagnostic diagnostic;
     ArtifactManifest parsed;

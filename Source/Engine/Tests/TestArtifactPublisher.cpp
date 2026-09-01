@@ -131,7 +131,7 @@ TEST_CASE("ArtifactPublisher atomically selects validated immutable outputs")
     REQUIRE_FALSE(ArtifactStore::TryResolveLibraryRelative(library, result.Manifest.Outputs[0].RelativePath, outputPath, diagnostic));
     CHECK(FileSystem::FileExists(outputPath.Get()));
     ArtifactStoragePath manifestPath;
-    REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, request.Target, prepared.ObjectID, manifestPath, diagnostic));
+    REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, request.Target, prepared.AssetID, manifestPath, diagnostic));
     StringAnsi manifestJson;
     REQUIRE_FALSE(File::ReadAllText(manifestPath.Get(), manifestJson));
     ArtifactManifest parsed;
@@ -209,7 +209,7 @@ TEST_CASE("ArtifactPublisher preserves current manifests across injected failure
     ArtifactPublicationResult result;
     REQUIRE_FALSE(ArtifactPublisher::Publish(library, baselinePrepared, baselineContext, baselineRequest, validators, result, diagnostic));
     ArtifactStoragePath manifestPath;
-    REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, baselineRequest.Target, baselinePrepared.ObjectID, manifestPath, diagnostic));
+    REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, baselineRequest.Target, baselinePrepared.AssetID, manifestPath, diagnostic));
     StringAnsi baselineJson;
     REQUIRE_FALSE(File::ReadAllText(manifestPath.Get(), baselineJson));
 
@@ -301,7 +301,7 @@ TEST_CASE("ArtifactPublisher exposes only complete manifests after atomic replac
         ArtifactPublicationResult result;
         CHECK(ArtifactPublisher::Publish(library, prepared, context, request, validators, result, diagnostic));
         ArtifactStoragePath manifestPath;
-        REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, request.Target, prepared.ObjectID, manifestPath, diagnostic));
+        REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, request.Target, prepared.AssetID, manifestPath, diagnostic));
         StringAnsi json;
         REQUIRE_FALSE(File::ReadAllText(manifestPath.Get(), json));
         ArtifactManifest manifest;

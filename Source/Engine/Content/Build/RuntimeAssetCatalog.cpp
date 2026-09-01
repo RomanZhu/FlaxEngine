@@ -96,7 +96,6 @@ namespace
         void WriteObject(const AssetObjectId& value)
         {
             WriteGuid(value.Asset.Value);
-            WriteUInt64(static_cast<uint64>(value.LocalId));
         }
 
         void WriteString(const StringAnsiView& value)
@@ -168,11 +167,10 @@ namespace
 
         bool ReadObject(AssetObjectId& value)
         {
-            uint64 localId;
             Guid guid;
-            if (ReadGuid(guid) || ReadUInt64(localId))
+            if (ReadGuid(guid))
                 return true;
-            value = AssetObjectId(AssetGuid(guid), static_cast<int64>(localId));
+            value = AssetObjectId::Main(AssetGuid(guid));
             return false;
         }
 
@@ -287,7 +285,7 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
     for (int32 i = 0; i < _entries.Count(); i++)
     {
         const RuntimeAssetCatalogEntry& entry = _entries[i];
-        if (!entry.Object.IsValid() || !IsTextValid(entry.TypeName) || !IsPackageNameValid(entry.PackageName) || entry.Size == 0 ||
+        if (!entry.Object.IsValid() || !entry.Object.IsMainObject() || !IsTextValid(entry.TypeName) || !IsPackageNameValid(entry.PackageName) || entry.Size == 0 ||
             entry.Offset > MAX_uint64 - entry.Size || entry.Content.IsZero() || entry.Compression > RuntimeAssetCompression::Zstd ||
             entry.Dependencies.Count() > MaximumDependenciesPerEntry || !objects.Add(entry.Object))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid or duplicate object entry."));
@@ -296,7 +294,7 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
         for (int32 dependencyIndex = 0; dependencyIndex < entry.Dependencies.Count(); dependencyIndex++)
         {
             const AssetObjectId& dependency = entry.Dependencies[dependencyIndex];
-            if (!dependency.IsValid() || dependency == entry.Object ||
+            if (!dependency.IsValid() || !dependency.IsMainObject() || dependency == entry.Object ||
                 (dependencyIndex != 0 && !Less(entry.Dependencies[dependencyIndex - 1], dependency)))
                 return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid, duplicate, or self object dependency."));
         }
@@ -314,7 +312,7 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
     for (int32 i = 0; i < _aliases.Count(); i++)
     {
         const RuntimeAssetCatalogAlias& alias = _aliases[i];
-        if (alias.PathHash.IsZero() || !objects.Contains(alias.Object) ||
+        if (alias.PathHash.IsZero() || !alias.Object.IsMainObject() || !objects.Contains(alias.Object) ||
             (i != 0 && !LessHash(_aliases[i - 1].PathHash, alias.PathHash)))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid, duplicate, or unresolved path alias."));
     }
@@ -348,18 +346,12 @@ bool RuntimeAssetCatalog::TryGetByLegacyRuntimeGuid(const Guid& runtimeId, Asset
     result = AssetObjectId();
     if (!runtimeId.IsValid())
         return false;
-    for (const RuntimeAssetCatalogEntry& entry : _entries)
-    {
-        if (entry.Object.ToRuntimeObjectGuid() != runtimeId)
-            continue;
-        if (result.IsValid())
-        {
-            result = AssetObjectId();
-            return false;
-        }
-        result = entry.Object;
-    }
-    return result.IsValid();
+    RuntimeAssetCatalogEntry entry;
+    result = AssetObjectId::Main(AssetGuid(runtimeId));
+    if (TryGet(result, entry))
+        return true;
+    result = AssetObjectId();
+    return false;
 }
 
 bool RuntimeAssetCatalog::TryGetByPathHash(const ContentHash& pathHash, AssetObjectId& result) const

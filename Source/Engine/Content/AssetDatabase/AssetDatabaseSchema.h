@@ -10,7 +10,7 @@
 class FLAXENGINE_API AssetDatabaseSchema
 {
 public:
-    static constexpr uint32 Version = 6;
+    static constexpr uint32 Version = 7;
 };
 
 /// <summary>Persisted singleton database state.</summary>
@@ -54,6 +54,7 @@ struct FLAXENGINE_API SourceAssetRow
 struct FLAXENGINE_API SourceAssetObjectRow
 {
     Guid AssetGuid = Guid::Empty;
+    Guid ObjectGuid = Guid::Empty;
     int64 LocalFileId = 0;
     String StableIdentifier;
     String SubAssetKey;
@@ -72,10 +73,12 @@ struct FLAXENGINE_API SourceAssetObjectRow
 struct FLAXENGINE_API SourceAssetDependencyRow
 {
     Guid OwnerAssetGuid = Guid::Empty;
+    Guid OwnerObjectGuid = Guid::Empty;
     int64 OwnerLocalFileId = 0;
     String TargetId;
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
     Guid TargetAssetGuid = Guid::Empty;
+    Guid TargetObjectGuid = Guid::Empty;
     int64 TargetLocalFileId = 0;
     String SourcePath;
     ArtifactKey ExactArtifact;
@@ -93,6 +96,7 @@ struct FLAXENGINE_API SourceAssetDependencyRow
 struct FLAXENGINE_API SourceAssetPublicationRow
 {
     Guid AssetGuid = Guid::Empty;
+    Guid ObjectGuid = Guid::Empty;
     int64 LocalFileId = 0;
     String TargetId;
     ArtifactKey Artifact;
@@ -134,6 +138,7 @@ struct FLAXENGINE_API SourceArtifactObjectRow
 {
     ArtifactKey Artifact;
     Guid AssetGuid = Guid::Empty;
+    Guid ObjectGuid = Guid::Empty;
     int64 LocalFileId = 0;
     String TypeName;
     ContentHash ObjectBlobId;
