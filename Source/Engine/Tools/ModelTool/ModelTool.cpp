@@ -1463,7 +1463,7 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
 
                 // Customize base material based on imported material (blind guess based on the common names used in materials)
                 Texture* tex;
-#define TRY_SETUP_TEXTURE_PARAM(component, names, type) if (material.component.TextureIndex != -1 && ((tex = Content::LoadRuntimeObjectAsync<Texture>(data.Textures[material.component.TextureIndex].AssetID)))) TrySetupMaterialParameter(materialInstance, ToSpan(names, ARRAY_COUNT(names)), tex, MaterialParameterType::type);
+#define TRY_SETUP_TEXTURE_PARAM(component, names, type) if (material.component.TextureIndex != -1 && ((tex = Content::LoadAssetAsync<Texture>(data.Textures[material.component.TextureIndex].AssetID)))) TrySetupMaterialParameter(materialInstance, ToSpan(names, ARRAY_COUNT(names)), tex, MaterialParameterType::type);
                 const Char* diffuseNames[] = { TEXT("color"), TEXT("col"), TEXT("diffuse"), TEXT("basecolor"), TEXT("base color"), TEXT("tint") };
                 TrySetupMaterialParameter(materialInstance, ToSpan(diffuseNames, ARRAY_COUNT(diffuseNames)), material.Diffuse.Color, MaterialParameterType::Color);
                 TRY_SETUP_TEXTURE_PARAM(Diffuse, diffuseNames, Texture);

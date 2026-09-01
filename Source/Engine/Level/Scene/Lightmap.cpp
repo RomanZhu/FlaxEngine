@@ -124,7 +124,7 @@ void Lightmap::EnsureSize(int32 size)
             {
                 LOG(Error, "Cannot import empty lightmap {0}:{1}", _index, textureIndex);
             }
-            auto result = Content::LoadRuntimeObjectAsync<Texture>(id);
+            auto result = Content::LoadAssetAsync<Texture>(id);
 #else
 			auto result = nullptr;
 #endif

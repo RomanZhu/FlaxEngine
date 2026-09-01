@@ -149,7 +149,7 @@ void EnvironmentProbe::SetProbeData(TextureData& data)
     }
 
     // Link probe texture
-    _probe = Content::LoadRuntimeObjectAsync<CubeTexture>(id);
+    _probe = Content::LoadAssetAsync<CubeTexture>(id);
 #else
     // Create virtual asset
     if (!_probe || !_probe->IsVirtual())

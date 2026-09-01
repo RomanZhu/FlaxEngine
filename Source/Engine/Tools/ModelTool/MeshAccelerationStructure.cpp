@@ -366,7 +366,7 @@ void MeshAccelerationStructure::Add(const ModelData* modelData, int32 lodIndex, 
         const MaterialSlotEntry& materialSlot = modelData->Materials[mesh->MaterialSlotIndex];
         if (!loadMaterials && (!Math::IsOne(materialSlot.Opacity.Value) || materialSlot.Opacity.TextureIndex != -1))
             continue;
-        auto material = loadMaterials ? Content::LoadRuntimeObjectAsync<MaterialBase>(materialSlot.AssetID) : nullptr;
+        auto material = loadMaterials ? Content::LoadAssetAsync<MaterialBase>(materialSlot.AssetID) : nullptr;
         if (material && !material->WaitForLoaded())
         {
             // Skip transparent materials

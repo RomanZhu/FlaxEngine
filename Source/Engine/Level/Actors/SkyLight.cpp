@@ -94,7 +94,7 @@ void SkyLight::SetProbeData(TextureData& data)
     }
 
     // Link probe texture
-    _bakedProbe = Content::LoadRuntimeObjectAsync<CubeTexture>(id);
+    _bakedProbe = Content::LoadAssetAsync<CubeTexture>(id);
 }
 
 void SkyLight::UpdateBounds()

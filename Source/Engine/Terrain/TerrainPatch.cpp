@@ -976,7 +976,7 @@ bool TerrainPatch::SetupHeightMap(int32 heightMapLength, const float* heightMap,
             LOG(Error, "Cannot import generated heightmap texture asset.");
             return true;
         }
-        Heightmap = Content::LoadRuntimeObjectAsync<Texture>(id);
+        Heightmap = Content::LoadAssetAsync<Texture>(id);
         if (Heightmap == nullptr)
         {
             LOG(Error, "Cannot load generated heightmap texture asset.");
@@ -1037,7 +1037,7 @@ bool TerrainPatch::SetupHeightMap(int32 heightMapLength, const float* heightMap,
             LOG(Error, "Cannot import generated heightfield collision asset.");
             return true;
         }
-        _heightfield = Content::LoadRuntimeObjectAsync<RawDataAsset>(id);
+        _heightfield = Content::LoadAssetAsync<RawDataAsset>(id);
         if (_heightfield == nullptr)
         {
             LOG(Error, "Cannot load generated heightfield collision asset.");
@@ -1193,7 +1193,7 @@ bool TerrainPatch::SetupSplatMap(int32 index, int32 splatMapLength, const Color3
             LOG(Error, "Cannot import generated splatmap texture asset.");
             return true;
         }
-        splatmapAsset = Content::LoadRuntimeObjectAsync<Texture>(id);
+        splatmapAsset = Content::LoadAssetAsync<Texture>(id);
         if (splatmapAsset == nullptr)
         {
             LOG(Error, "Cannot load generated splatmap texture asset.");
@@ -1754,7 +1754,7 @@ bool TerrainPatch::ModifySplatMap(int32 index, const Color32* samples, const Int
                 LOG(Error, "Cannot import generated splatmap texture asset.");
                 return true;
             }
-            splatmap = Content::LoadRuntimeObjectAsync<Texture>(id);
+            splatmap = Content::LoadAssetAsync<Texture>(id);
             if (splatmap == nullptr)
             {
                 LOG(Error, "Cannot load generated splatmap texture asset.");
