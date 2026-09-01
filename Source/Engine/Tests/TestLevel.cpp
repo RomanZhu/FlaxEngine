@@ -1106,7 +1106,7 @@ TEST_CASE("ExternalActorsSceneStorage")
 TEST_CASE("LegacyExternalActorsClone")
 {
 
-    SECTION("Clone external actors scene rejects empty destination actors folder")
+    SECTION("Clone external actors scene rejects before creating destination data")
     {
         const Guid sceneId = ParseGuid("99999999999999999999999999999991");
         const Guid actorId = ParseGuid("99999999999999999999999999999992");
@@ -1122,12 +1122,47 @@ TEST_CASE("LegacyExternalActorsClone")
         };
         WriteTestSceneAsset(scenePath, sceneId, true);
         WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
-        EnsureDirectory(SceneFragmentStore::GetScenePath(cloneSceneId));
 
         REQUIRE(Content::CloneAssetFile(clonePath, scenePath, cloneSceneId));
 
         CHECK(!FileSystem::FileExists(clonePath));
-        CHECK(FileSystem::DirectoryExists(SceneFragmentStore::GetScenePath(cloneSceneId)));
+        CHECK(!FileSystem::DirectoryExists(SceneFragmentStore::GetScenePath(cloneSceneId)));
+        CHECK(FileSystem::FileExists(scenePath));
+        CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+    }
+
+    SECTION("Clone external actors scene preserves an existing destination")
+    {
+        const Guid sceneId = ParseGuid("99999999999999999999999999999994");
+        const Guid actorId = ParseGuid("99999999999999999999999999999995");
+        const Guid destinationSceneId = ParseGuid("99999999999999999999999999999996");
+        const Guid destinationActorId = ParseGuid("99999999999999999999999999999997");
+        const String scenePath = GetTestScenePath(TEXT("CloneOverwriteSource"));
+        const String destinationPath = GetTestScenePath(TEXT("CloneOverwriteTarget"));
+        CleanupTestSceneFiles(scenePath);
+        CleanupTestSceneFiles(destinationPath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+            CleanupTestSceneFiles(destinationPath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+        WriteExternalActorFile(scenePath, actorId, sceneId, "SourceActor", 1024);
+        WriteTestSceneAsset(destinationPath, destinationSceneId, true);
+        WriteExternalActorFile(destinationPath, destinationActorId, destinationSceneId, "DestinationActor", 1024);
+        BytesContainer destinationSceneBytes;
+        BytesContainer destinationActorBytes;
+        ReadFileBytes(destinationPath, destinationSceneBytes);
+        ReadFileBytes(GetExternalActorPath(destinationPath, destinationActorId), destinationActorBytes);
+
+        REQUIRE(Content::CloneAssetFile(destinationPath, scenePath, destinationSceneId, true));
+
+        BytesContainer preservedSceneBytes;
+        BytesContainer preservedActorBytes;
+        ReadFileBytes(destinationPath, preservedSceneBytes);
+        ReadFileBytes(GetExternalActorPath(destinationPath, destinationActorId), preservedActorBytes);
+        CHECK(AreBytesEqual(destinationSceneBytes, preservedSceneBytes));
+        CHECK(AreBytesEqual(destinationActorBytes, preservedActorBytes));
     }
 
 }

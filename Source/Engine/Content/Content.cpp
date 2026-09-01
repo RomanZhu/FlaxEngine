@@ -23,8 +23,6 @@
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/String.h"
 #include "Engine/Core/ObjectsRemovalService.h"
-#include "Engine/Serialization/JsonTools.h"
-#include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/Serialization.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -355,16 +353,6 @@ namespace
         return false;
     }
 
-    bool WriteJsonDocument(const StringView& path, rapidjson_flax::Document& document)
-    {
-        if (FileSystem::CreateDirectory(StringUtils::GetDirectoryName(path)))
-            return true;
-        rapidjson_flax::StringBuffer buffer;
-        PrettyJsonWriter writer(buffer);
-        document.Accept(writer.GetWriter());
-        return File::WriteAllBytes(path, buffer.GetString(), static_cast<int32>(buffer.GetSize()));
-    }
-
     bool IsExternalActorsSceneDocument(const rapidjson_flax::Document& document)
     {
         if (!document.IsObject())
@@ -383,67 +371,6 @@ namespace
             return true;
         }
         sceneGuid = meta.ID;
-        return false;
-    }
-
-    bool CopyExternalActorsSceneData(const StringView& dstPath, const StringView& srcPath, const Guid& dstId, rapidjson_flax::Document& sceneDocument)
-    {
-        Guid srcId;
-        if (TryGetSceneGuid(srcPath, srcId))
-            return true;
-        if (FileSystem::DirectoryExists(SceneFragmentStore::GetScenePath(dstId)))
-        {
-            LOG(Error, "Cannot copy private scene fragments because destination scene identity already exists: '{0}'.", dstId);
-            return true;
-        }
-        SceneFragmentIndex sourceIndex;
-        Array<Array<byte>> sourceFragments;
-        String fragmentError;
-        if (SceneFragmentStore::Load(srcId, sourceIndex, sourceFragments, fragmentError))
-        {
-            LOG(Error, "Cannot load private scene fragments for clone '{0}': {1}", srcPath, fragmentError);
-            return true;
-        }
-        Dictionary<Guid, Guid> remap;
-        remap.Add(srcId, dstId);
-        Array<SceneFragmentWrite> writes;
-        for (int32 i = 0; i < sourceIndex.Fragments.Count(); i++)
-        {
-            rapidjson_flax::Document fragment;
-            fragment.Parse(reinterpret_cast<const char*>(sourceFragments[i].Get()), sourceFragments[i].Count());
-            const auto payload = fragment.FindMember("payload");
-            const auto contained = fragment.FindMember("containedLocalIds");
-            if (fragment.HasParseError() || payload == fragment.MemberEnd() || !payload->value.IsArray() ||
-                contained == fragment.MemberEnd() || !contained->value.IsArray())
-                return true;
-            rapidjson_flax::Document payloadDocument;
-            payloadDocument.CopyFrom(payload->value, payloadDocument.GetAllocator());
-            JsonTools::ChangeIds(payloadDocument, remap);
-            rapidjson_flax::StringBuffer payloadBytes;
-            PrettyJsonWriter writer(payloadBytes);
-            payloadDocument.Accept(writer.GetWriter());
-            SceneFragmentWrite write;
-            write.RootActorLocalId = sourceIndex.Fragments[i].RootActorLocalId;
-            write.SerializerVersion = sourceIndex.Fragments[i].SerializerVersion;
-            for (const rapidjson_flax::Value& localId : contained->value.GetArray())
-            {
-                if (!localId.IsInt64())
-                    return true;
-                write.ContainedLocalIds.Add(localId.GetInt64());
-            }
-            write.Payload.Set(reinterpret_cast<const byte*>(payloadBytes.GetString()), static_cast<int32>(payloadBytes.GetSize()));
-            writes.Add(MoveTemp(write));
-        }
-
-        JsonTools::ChangeIds(sceneDocument, remap);
-        if (WriteJsonDocument(dstPath, sceneDocument))
-            return true;
-        if (SceneFragmentStore::Save(dstId, writes, fragmentError))
-        {
-            FileSystem::DeleteFile(dstPath);
-            LOG(Error, "Cannot publish cloned private scene fragments for '{0}': {1}", dstPath, fragmentError);
-            return true;
-        }
         return false;
     }
 
@@ -1647,6 +1574,17 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
             LOG(Warning, "Missing source file.");
             return true;
         }
+        if (IsSceneAssetPath(srcPath))
+        {
+            rapidjson_flax::Document sourceDocument;
+            if (ReadJsonDocument(srcPath, sourceDocument))
+                return true;
+            if (IsExternalActorsSceneDocument(sourceDocument))
+            {
+                LOG(Error, "[FLX-ASSET-CLONE-EXTERNAL-ACTORS-0006] Legacy asset clone cannot copy external-actor scene '{0}'. Use AssetOperationService::CopyAsset so the scene source, metadata, and private fragments commit atomically.", srcPath);
+                return true;
+            }
+        }
         const bool destinationExists = FileSystem::FileExists(dstPath);
         if (destinationExists || FileSystem::DirectoryExists(dstPath))
         {
@@ -1673,17 +1611,6 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
             };
 
             const bool isJson = JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(srcPath).ToLower());
-            if (isJson && IsSceneAssetPath(srcPath))
-            {
-                rapidjson_flax::Document sourceDocument;
-                if (ReadJsonDocument(srcPath, sourceDocument))
-                    return true;
-                if (IsExternalActorsSceneDocument(sourceDocument))
-                {
-                    DeleteSceneFragments(dstPath, &dstId);
-                    return CopyExternalActorsSceneData(dstPath, srcPath, dstId, sourceDocument);
-                }
-            }
 
             // Prepare and validate the complete replacement without touching the destination.
             if (FileSystem::CopyFile(stagingPath, srcPath))
@@ -1794,19 +1721,6 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
         // Special case for json resources
         if (JsonStorageProxy::IsValidExtension(FileSystem::GetExtension(srcPath).ToLower()))
         {
-            if (IsSceneAssetPath(srcPath))
-            {
-                rapidjson_flax::Document sourceDocument;
-                if (ReadJsonDocument(srcPath, sourceDocument))
-                    return true;
-                if (IsExternalActorsSceneDocument(sourceDocument))
-                {
-                    const bool failed = CopyExternalActorsSceneData(dstPath, srcPath, dstId, sourceDocument);
-                    destinationCreated = !failed;
-                    return failed;
-                }
-            }
-
             if (FileSystem::CopyFile(dstPath, srcPath))
             {
                 LOG(Warning, "Cannot copy file to destination.");
