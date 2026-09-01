@@ -56,6 +56,9 @@ namespace
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
         Dictionary<Guid, ArtifactKey> Fingerprints;
+#if FLAX_TESTS
+        Dictionary<Guid, bool> PausedBuilds;
+#endif
         uint64 ForceGeneration = 0;
         bool Initialized = false;
     };
@@ -65,6 +68,15 @@ namespace
         static TexturePipelineState state;
         return state;
     }
+
+#if FLAX_TESTS
+    bool IsBuildPausedForTesting(const Guid& assetID)
+    {
+        TexturePipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        return state.PausedBuilds.ContainsKey(assetID);
+    }
+#endif
 
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, AssetPipelineDiagnosticStage stage,
         const Guid& assetID, const StringView& message)
@@ -474,6 +486,17 @@ bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, Asset
     if (CreatePlan(record, request, plan, diagnostic))
         return true;
     plan.BuildRequest.Priority = priority;
+#if FLAX_TESTS
+    const AssetBuildJobAction build = plan.BuildRequest.Build;
+    plan.BuildRequest.Build.Bind([assetID, build](const AssetCancellationToken& token, AssetPipelineDiagnostic& buildDiagnostic) mutable
+    {
+        while (IsBuildPausedForTesting(assetID) && !token.IsCancellationRequested())
+            Platform::Sleep(1);
+        if (token.IsCancellationRequested())
+            return false;
+        return build(token, buildDiagnostic);
+    });
+#endif
     if (force)
     {
         TexturePipelineState& state = State();
@@ -547,6 +570,18 @@ bool TexturePipelineService::Cancel(const Guid& assetID)
     return false;
 }
 
+#if FLAX_TESTS
+void TexturePipelineService::SetBuildPausedForTesting(const Guid& assetID, bool paused)
+{
+    TexturePipelineState& state = State();
+    std::lock_guard<std::mutex> lock(state.Locker);
+    if (paused)
+        state.PausedBuilds[assetID] = true;
+    else
+        state.PausedBuilds.Remove(assetID);
+}
+#endif
+
 void TexturePipelineService::Shutdown()
 {
     ArtifactResolver::Get().Reset();
@@ -559,6 +594,9 @@ void TexturePipelineService::Shutdown()
             return;
         state.Handles.Clear();
         state.Fingerprints.Clear();
+#if FLAX_TESTS
+        state.PausedBuilds.Clear();
+#endif
         builds = MoveTemp(state.Builds);
         registration = MoveTemp(state.Registration);
         state.Initialized = false;

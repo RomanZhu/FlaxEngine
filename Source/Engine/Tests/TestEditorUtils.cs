@@ -2125,9 +2125,17 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(AssetPipelineService.RefreshSources(paths));
 
                 stage = "overlapping builds";
+                var cancelledId = ids[2];
+                AssetPipelineService.SetBuildPausedForTesting(cancelledId, true);
                 foreach (var id in ids)
                     Assert.IsFalse(AssetPipelineService.BuildAsset(id));
-                Assert.IsFalse(AssetPipelineService.CancelBuild(ids[ids.Count - 1]));
+                while (AssetPipelineService.GetBuildStatus(cancelledId) != "Building")
+                {
+                    Assert.Less(total.ElapsedMilliseconds, 5 * 60 * 1000, "Cancellation target did not start before the hard abort ceiling.");
+                    Thread.Sleep(1);
+                }
+                Assert.IsFalse(AssetPipelineService.CancelBuild(cancelledId));
+                AssetPipelineService.SetBuildPausedForTesting(cancelledId, false);
                 var statusLatency = System.Diagnostics.Stopwatch.StartNew();
                 var initialStatuses = ids.Select(AssetPipelineService.GetBuildStatus).ToArray();
                 Assert.Less(statusLatency.ElapsedMilliseconds, 1000, "Human-facing build status queries stalled Editor interaction.");
@@ -2146,8 +2154,8 @@ namespace FlaxEngine.Tests
                     Thread.Sleep(2);
                 }
                 Assert.GreaterOrEqual(peakActive, 2, "The reduced cohort never exposed overlapping human-facing job states.");
-                Assert.AreEqual("Cancelled", AssetPipelineService.GetBuildStatus(ids[ids.Count - 1]));
-                foreach (var id in ids.Take(ids.Count - 1))
+                Assert.AreEqual("Cancelled", AssetPipelineService.GetBuildStatus(cancelledId));
+                foreach (var id in ids.Where(id => id != cancelledId))
                     Assert.AreEqual("ReadyExact", AssetPipelineService.GetBuildStatus(id), AssetPipelineService.GetBuildDiagnostic(id).Message);
 
                 stage = "selection";
@@ -2199,6 +2207,8 @@ namespace FlaxEngine.Tests
             }
             finally
             {
+                if (ids.Count > 2)
+                    AssetPipelineService.SetBuildPausedForTesting(ids[2], false);
                 Debug.LogMessageReceived -= capture;
                 foreach (var path in paths)
                     CleanupCanonicalCopyAsset(path);

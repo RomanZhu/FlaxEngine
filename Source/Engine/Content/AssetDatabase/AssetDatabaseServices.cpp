@@ -3265,6 +3265,15 @@ bool AssetPipelineService::CancelBuild(const Guid& assetID)
     return true;
 }
 
+#if FLAX_TESTS
+void AssetPipelineService::SetBuildPausedForTesting(const Guid& assetID, bool paused)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR && COMPILE_WITH_TEXTURE_TOOL
+    TexturePipelineService::SetBuildPausedForTesting(assetID, paused);
+#endif
+}
+#endif
+
 bool AssetPipelineService::RebuildAsset(const Guid& assetID, bool synchronous)
 {
     return BuildAsset(assetID, true, synchronous);

@@ -18,6 +18,9 @@ public:
     /// <summary>Returns the latest queued build state for an asset.</summary>
     static AssetBuildJobStatus GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic);
     static bool Cancel(const Guid& assetID);
+#if FLAX_TESTS
+    static void SetBuildPausedForTesting(const Guid& assetID, bool paused);
+#endif
 
     /// <summary>Creates the exact build plan used by the resolver and cooker.</summary>
     static bool CreatePlan(const AssetRecord& record, const ArtifactRequest& request, ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& diagnostic);
