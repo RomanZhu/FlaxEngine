@@ -6,6 +6,7 @@
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Utilities/Crc.h"
+#include <algorithm>
 
 namespace
 {
@@ -32,6 +33,26 @@ namespace
     bool IsMeta(const StringView& path)
     {
         return path.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
+    }
+
+    String MakeScanOrderKey(const StringView& path)
+    {
+        String result(path);
+        FileSystem::NormalizePath(result);
+        result.Replace(TEXT('\\'), TEXT('/'));
+        return result.ToLower();
+    }
+
+    void SortScanPaths(Array<String>& paths)
+    {
+        if (paths.Count() < 2)
+            return;
+        std::sort(paths.Get(), paths.Get() + paths.Count(), [](const String& left, const String& right)
+        {
+            const String leftKey = MakeScanOrderKey(left);
+            const String rightKey = MakeScanOrderKey(right);
+            return leftKey == rightKey ? left < right : leftKey < rightKey;
+        });
     }
 
     bool IsExcluded(const StringView& path, const StringView& contentRoot, const StringView& libraryRoot)
@@ -100,24 +121,29 @@ namespace
     void AddMetaRecords(const AssetMeta& meta, const StringView& sourcePath, const StringView& metaPath, const AssetPathPolicy::ProjectPath& normalizedPath, uint64 semanticHash, AssetRecordStatus status, Array<AssetRecord>& records)
     {
         records.Add(MakeMainRecord(meta, sourcePath, metaPath, normalizedPath, semanticHash, status));
-        for (const auto& entry : meta.SubAssets)
+        Array<String> subAssetKeys;
+        meta.SubAssets.GetKeys(subAssetKeys);
+        if (subAssetKeys.Count() > 1)
+            std::sort(subAssetKeys.Get(), subAssetKeys.Get() + subAssetKeys.Count());
+        for (const String& key : subAssetKeys)
         {
+            const SubAssetMeta& value = meta.SubAssets[key];
             AssetRecord subAsset;
-            subAsset.ID = entry.Value.ID;
+            subAsset.ID = value.ID;
             subAsset.SourceAssetID = meta.ID;
-            subAsset.LocalId = entry.Value.LocalId;
-            subAsset.TypeName = entry.Value.TypeName;
+            subAsset.LocalId = value.LocalId;
+            subAsset.TypeName = value.TypeName;
             subAsset.CanonicalPath = CanonicalAssetPath(sourcePath);
             subAsset.SourcePath = SourceFilePath(sourcePath);
             subAsset.MetaPath = MetaFilePath(metaPath);
-            subAsset.SubAsset = SubAssetKey(entry.Key);
-            subAsset.DisplayName = entry.Value.DisplayName;
+            subAsset.SubAsset = SubAssetKey(key);
+            subAsset.DisplayName = value.DisplayName;
             subAsset.ProcessorID = meta.Processor.ID;
             subAsset.PortabilityKey = normalizedPath.PortabilityKey;
             subAsset.MetaSemanticHash = semanticHash;
             subAsset.ImporterSettingsVersion = static_cast<uint32>(meta.Processor.SettingsVersion);
             subAsset.SourceKind = meta.SourceKind;
-            subAsset.Status = entry.Value.Removed ? AssetRecordStatus::MissingSource : status;
+            subAsset.Status = value.Removed ? AssetRecordStatus::MissingSource : status;
             records.Add(MoveTemp(subAsset));
         }
     }
@@ -227,10 +253,12 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         result.Diagnostics.Add(MoveTemp(rootDiagnostic));
         return true;
     }
+    Array<String> orderedFiles = files;
+    SortScanPaths(orderedFiles);
     SourceHashCache localHashCache;
     SourceHashCache& hashCache = options.HashCache ? *options.HashCache : localHashCache;
     HashSet<String> fileSet;
-    for (const String& file : files)
+    for (const String& file : orderedFiles)
     {
         if (!IsExcluded(file, contentRoot, libraryRoot))
         {
@@ -250,7 +278,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
     Dictionary<Guid, int32> recordIndices;
     Dictionary<String, int32> mainPathIndices;
     HashSet<String> consumedMeta;
-    for (const String& sourcePath : files)
+    for (const String& sourcePath : orderedFiles)
     {
         if ((options.Cancel && *options.Cancel) || IsExcluded(sourcePath, contentRoot, libraryRoot) || IsMeta(sourcePath))
         {
@@ -333,7 +361,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         }
     }
 
-    for (const String& metaPath : files)
+    for (const String& metaPath : orderedFiles)
     {
         if (IsExcluded(metaPath, contentRoot, libraryRoot) || !IsMeta(metaPath) || consumedMeta.Contains(metaPath))
             continue;

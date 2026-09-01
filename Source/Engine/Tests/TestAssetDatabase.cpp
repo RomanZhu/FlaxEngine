@@ -508,6 +508,122 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
+TEST_CASE("Startup reconstruction is deterministic and rejects invalid current metadata")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("DeterministicStartupIndex-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    const String externalActors = root / TEXT("ExternalActors");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(externalActors));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const String alpha = content / TEXT("Alpha.png");
+    const String model = content / TEXT("Model.fbx");
+    const String broken = content / TEXT("ZBroken.png");
+    REQUIRE_FALSE(File::WriteAllText(alpha, TEXT("alpha"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(model, TEXT("model"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(broken, TEXT("broken"), Encoding::ANSI));
+
+    const Guid alphaId = Guid::New();
+    AssetMeta modelMeta = MakeDatabaseMeta(Guid::New());
+    modelMeta.AssetType = TEXT("FlaxEngine.Model");
+    modelMeta.Processor.ID = TEXT("Flax.Model");
+    SubAssetMeta zeta;
+    zeta.ID = Guid::New();
+    zeta.LocalId = 22;
+    zeta.TypeName = TEXT("FlaxEngine.Mesh");
+    zeta.DisplayName = TEXT("Zeta");
+    SubAssetMeta body = zeta;
+    body.ID = Guid::New();
+    body.LocalId = 21;
+    body.DisplayName = TEXT("Body");
+    modelMeta.SubAssets.Add(TEXT("mesh:/Zeta"), zeta);
+    modelMeta.SubAssets.Add(TEXT("mesh:/Body"), body);
+    const Guid brokenId = Guid::New();
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(alpha + TEXT(".meta"), MakeDatabaseMeta(alphaId), diagnostic));
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(model + TEXT(".meta"), modelMeta, diagnostic));
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(broken + TEXT(".meta"), MakeDatabaseMeta(brokenId), diagnostic));
+
+    AssetDatabase database;
+    const Guid projectId = Guid::New();
+    AssetDatabaseScanOptions options;
+    options.StrictMetadata = true;
+    AssetDatabaseScanResult scan;
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    AssetRecord record;
+    REQUIRE(database.TryGetRecord(brokenId, record));
+
+    REQUIRE_FALSE(File::WriteAllText(broken + TEXT(".meta"),
+        TEXT("{\"fileFormatVersion\":2,\"guid\":\"invalid-current-record\"}"), Encoding::ANSI));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    REQUIRE(database.TryGetRecord(brokenId, record));
+    CHECK(record.Status == AssetRecordStatus::MalformedMeta);
+    bool invalidCurrentReported = false;
+    for (const AssetPipelineDiagnostic& item : scan.Diagnostics)
+    {
+        if (item.Code == AssetPipelineDiagnosticCode::InvalidMeta &&
+            FileSystem::AreFilePathsEquivalent(item.SourcePath, broken + TEXT(".meta")))
+            invalidCurrentReported = true;
+    }
+    CHECK(invalidCurrentReported);
+    REQUIRE_FALSE(database.Close(&diagnostic));
+
+    Array<String> forward;
+    forward.Add(model + TEXT(".meta"));
+    forward.Add(broken);
+    forward.Add(alpha + TEXT(".meta"));
+    forward.Add(externalActors / TEXT("private.sceneactor"));
+    forward.Add(model);
+    forward.Add(library / TEXT("disposable.bin"));
+    forward.Add(alpha);
+    forward.Add(broken + TEXT(".meta"));
+    Array<String> reverse = forward;
+    for (int32 left = 0, right = reverse.Count() - 1; left < right; left++, right--)
+        Swap(reverse[left], reverse[right]);
+
+    AssetDatabaseSnapshot empty;
+    Array<AssetRecord> forwardRecords;
+    Array<AssetRecord> reverseRecords;
+    AssetDatabaseScanResult forwardScan;
+    AssetDatabaseScanResult reverseScan;
+    REQUIRE_FALSE(AssetDatabaseScanner::CollectFromFiles(root, content, library, forward, options, empty,
+        forwardRecords, forwardScan));
+    REQUIRE_FALSE(AssetDatabaseScanner::CollectFromFiles(root, content, library, reverse, options, empty,
+        reverseRecords, reverseScan));
+    REQUIRE(forwardRecords.Count() == 4);
+    REQUIRE(reverseRecords.Count() == forwardRecords.Count());
+    CHECK(forwardRecords[0].ID == alphaId);
+    CHECK(forwardRecords[1].ID == modelMeta.ID);
+    CHECK(forwardRecords[2].ID == body.ID);
+    CHECK(forwardRecords[3].ID == zeta.ID);
+    for (int32 i = 0; i < forwardRecords.Count(); i++)
+        CHECK(forwardRecords[i].HasSameIdentityAndContent(reverseRecords[i]));
+    REQUIRE(forwardScan.Diagnostics.Count() == reverseScan.Diagnostics.Count());
+    REQUIRE(forwardScan.FileStates.Count() == reverseScan.FileStates.Count());
+    for (int32 i = 0; i < forwardScan.Diagnostics.Count(); i++)
+    {
+        CHECK(forwardScan.Diagnostics[i].Code == reverseScan.Diagnostics[i].Code);
+        CHECK(forwardScan.Diagnostics[i].SourcePath == reverseScan.Diagnostics[i].SourcePath);
+    }
+    for (int32 i = 0; i < forwardScan.FileStates.Count(); i++)
+        CHECK(forwardScan.FileStates[i].Path == reverseScan.FileStates[i].Path);
+
+    REQUIRE_FALSE(FileSystem::DeleteDirectory(library, true));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK_FALSE(database.TryGetRecord(brokenId, record));
+    REQUIRE(database.TryGetRecord(alphaId, record));
+    REQUIRE(database.TryGetRecord(modelMeta.ID, record));
+    REQUIRE(database.TryGetRecord(body.ID, record));
+    REQUIRE(database.TryGetRecord(zeta.ID, record));
+    REQUIRE_FALSE(database.Close(&diagnostic));
+}
+
 TEST_CASE("Asset database detects portable main path collisions")
 {
     AssetDatabase database;
