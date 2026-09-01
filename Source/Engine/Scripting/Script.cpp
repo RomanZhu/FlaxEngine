@@ -105,6 +105,11 @@ void Script::SetParent(Actor* value, bool canBreakPrefabLink)
     const auto previous = _parent;
     _parent = value;
 
+#if USE_EDITOR
+    if (_parent && _parent->GetScene())
+        SetPersistentDocumentIdentity(AssetGuid(_parent->GetScene()->GetID()), GetLocalFileId());
+#endif
+
     // Link to the new one
     if (_parent)
     {

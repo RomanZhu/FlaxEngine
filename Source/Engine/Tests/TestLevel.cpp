@@ -1550,6 +1550,7 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
         const Guid sceneAId = ParseGuid("45454545454545454545454545454501");
         const Guid sceneBId = ParseGuid("45454545454545454545454545454502");
         const Guid actorId = ParseGuid("45454545454545454545454545454503");
+        const Guid scriptId = ParseGuid("45454545454545454545454545454504");
         const String sceneAPath = GetTestScenePath(TEXT("MoveActorSource"));
         const String sceneBPath = GetTestScenePath(TEXT("MoveActorDestination"));
         CleanupTestSceneFiles(sceneAPath);
@@ -1561,6 +1562,12 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
         };
         WriteTestSceneAsset(sceneAPath, sceneAId, true);
         WriteTestSceneAsset(sceneBPath, sceneBId, true);
+
+        AssetReference<Model> model = Content::LoadAsync<Model>(Globals::EngineContentFolder / TEXT("Editor/Primitives/Cube.flax"));
+        REQUIRE(model);
+        REQUIRE(!model->WaitForLoaded());
+        const Guid modelId = model.GetID();
+        REQUIRE(modelId.IsValid());
 
         Scene* sceneA = Scene::Spawn(ScriptingObject::SpawnParams(sceneAId, Scene::TypeInitializer));
         Scene* sceneB = Scene::Spawn(ScriptingObject::SpawnParams(sceneBId, Scene::TypeInitializer));
@@ -1574,10 +1581,18 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
         sceneA->UseExternalActors = true;
         sceneB->UseExternalActors = true;
 
-        EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
+        StaticModel* actor = StaticModel::Spawn(ScriptingObject::SpawnParams(actorId, StaticModel::TypeInitializer));
         REQUIRE(actor);
         actor->SetName(TEXT("Moved actor"));
+        actor->Model = model.Get();
         actor->SetParent(sceneA);
+        ModelPrefab* script = ModelPrefab::Spawn(ScriptingObject::SpawnParams(scriptId, ModelPrefab::TypeInitializer));
+        REQUIRE(script);
+        script->SetParent(actor);
+        const int64 scriptLocalId = script->GetLocalFileId();
+        CHECK(actor->GetGlobalObjectId().SourceAsset.Value == sceneAId);
+        CHECK(script->GetGlobalObjectId().SourceAsset.Value == sceneAId);
+        CHECK(actor->Model.GetID() == modelId);
 
         Array<Scene*> scenes;
         scenes.Add(sceneA);
@@ -1593,6 +1608,11 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
         REQUIRE(actor->GetParent() == sceneB);
         CHECK(actor->GetID() == actorId);
         CHECK(actor->GetLocalFileId() == localId);
+        CHECK(actor->GetGlobalObjectId().SourceAsset.Value == sceneBId);
+        CHECK(actor->GetGlobalObjectId().LocalFileId == localId);
+        CHECK(script->GetGlobalObjectId().SourceAsset.Value == sceneBId);
+        CHECK(script->GetGlobalObjectId().LocalFileId == scriptLocalId);
+        CHECK(actor->Model.GetID() == modelId);
         REQUIRE(!Level::SaveScenes(scenes));
 
         CHECK_FALSE(FileSystem::FileExists(sourceFragment));
@@ -1614,6 +1634,32 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
         movedFragment.Parse(reinterpret_cast<const char*>(destinationFragments[0].Get()), destinationFragments[0].Count());
         REQUIRE(!movedFragment.HasParseError());
         CHECK(JsonTools::GetGuid(movedFragment, "ownerSceneGuid") == sceneBId);
+        const rapidjson_flax::Value& movedData = GetDataArray(movedFragment);
+        REQUIRE(movedData.Size() == 2);
+        REQUIRE(movedData[0].HasMember("Model"));
+        REQUIRE(movedData[0]["Model"].IsString());
+        Guid serializedModel;
+        REQUIRE_FALSE(Guid::Parse(StringAnsiView(movedData[0]["Model"].GetString(), movedData[0]["Model"].GetStringLength()), serializedModel));
+        CHECK(serializedModel == modelId);
+
+        // ParentActorsAction undo performs the same hierarchy transition back to the original scene.
+        actor->SetParent(sceneA);
+        CHECK(actor->GetGlobalObjectId().SourceAsset.Value == sceneAId);
+        CHECK(actor->GetGlobalObjectId().LocalFileId == localId);
+        CHECK(script->GetGlobalObjectId().SourceAsset.Value == sceneAId);
+        CHECK(script->GetGlobalObjectId().LocalFileId == scriptLocalId);
+        CHECK(actor->Model.GetID() == modelId);
+        REQUIRE(!Level::SaveScenes(scenes));
+        CHECK(FileSystem::FileExists(sourceFragment));
+        CHECK_FALSE(FileSystem::FileExists(destinationFragment));
+
+        REQUIRE(!SceneFragmentStore::Load(sceneAId, sourceIndex, sourceFragments, error));
+        REQUIRE(!SceneFragmentStore::Load(sceneBId, destinationIndex, destinationFragments, error));
+        REQUIRE(sourceIndex.Fragments.Count() == 1);
+        REQUIRE(sourceFragments.Count() == 1);
+        CHECK(sourceIndex.Fragments[0].RootActorLocalId == localId);
+        CHECK(destinationIndex.Fragments.IsEmpty());
+        CHECK(destinationFragments.IsEmpty());
     }
 
     SECTION("Rename external actors scene preserves GUID-keyed fragments")

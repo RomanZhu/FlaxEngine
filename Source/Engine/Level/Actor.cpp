@@ -142,6 +142,16 @@ void Actor::SetSceneInHierarchy(Scene* scene)
 {
     _scene = scene;
 
+#if USE_EDITOR
+    if (scene)
+    {
+        const AssetGuid sourceAsset(scene->GetID());
+        SetPersistentDocumentIdentity(sourceAsset, GetLocalFileId());
+        for (Script* script : Scripts)
+            script->SetPersistentDocumentIdentity(sourceAsset, script->GetLocalFileId());
+    }
+#endif
+
     for (int32 i = 0; i < Children.Count(); i++)
     {
         Children.Get()[i]->SetSceneInHierarchy(scene);
