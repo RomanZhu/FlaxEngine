@@ -34,7 +34,7 @@ Guid Prefab::GetRootObjectId() const
     {
         const auto& data = *Data;
         const Guid basePrefabId = JsonTools::GetGuid(data[objectIndex], "PrefabID");
-        if (const auto basePrefab = Content::LoadRuntimeObject<Prefab>(basePrefabId))
+        if (const auto basePrefab = Content::LoadAsset<Prefab>(basePrefabId))
         {
             const Guid basePrefabRootId = basePrefab->GetRootObjectId();
             for (int32 i = 0; i < ObjectsCount; i++)

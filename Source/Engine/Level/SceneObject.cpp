@@ -206,7 +206,7 @@ void SceneObject::LinkPrefab(const Guid& prefabId, const Guid& prefabObjectId)
 
     if (_prefabID.IsValid() && _prefabObjectID.IsValid())
     {
-        auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(_prefabID);
+        auto prefab = Content::LoadAssetAsync<Prefab>(_prefabID);
         if (prefab == nullptr || prefab->WaitForLoaded())
         {
             _prefabID = Guid::Empty;

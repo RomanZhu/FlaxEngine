@@ -474,7 +474,7 @@ bool PrefabManager::CreatePrefab(Actor* targetActor, const StringView& outputPat
 bool FindPrefabLink(const Guid& targetPrefabId, const Guid& prefabId)
 {
     // Get prefab asset
-    auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(prefabId);
+    auto prefab = Content::LoadAssetAsync<Prefab>(prefabId);
     if (prefab == nullptr)
     {
         Log::Exception(TEXT("Missing prefab asset."));
@@ -558,7 +558,7 @@ bool PrefabManager::ApplyAll(Actor* instance)
     }
 
     // Get prefab asset
-    auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(instance->GetPrefabID());
+    auto prefab = Content::LoadAssetAsync<Prefab>(instance->GetPrefabID());
     if (prefab == nullptr)
     {
         Log::Exception(TEXT("Missing prefab asset."));
@@ -615,7 +615,7 @@ bool PrefabManager::ApplyAddedObject(Actor* instanceRoot, SceneObject* addedObje
     }
 
     // Get prefab asset
-    auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(instanceRoot->GetPrefabID());
+    auto prefab = Content::LoadAssetAsync<Prefab>(instanceRoot->GetPrefabID());
     if (prefab == nullptr)
     {
         Log::Exception(TEXT("Missing prefab asset."));

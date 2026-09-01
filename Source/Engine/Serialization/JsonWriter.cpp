@@ -404,7 +404,7 @@ void JsonWriter::SceneObject(::SceneObject* obj)
     if (obj->HasPrefabLink())
     {
         // Load prefab
-        auto prefab = Content::LoadRuntimeObject<Prefab>(obj->GetPrefabID());
+        auto prefab = Content::LoadAsset<Prefab>(obj->GetPrefabID());
         if (prefab)
         {
             // Request the prefab to be deserialized to the default instance (used for comparison to generate a diff)

@@ -289,7 +289,7 @@ namespace
         bool serialized = false;
         if (obj->HasPrefabLink())
         {
-            auto prefab = Content::LoadRuntimeObject<Prefab>(obj->GetPrefabID());
+            auto prefab = Content::LoadAsset<Prefab>(obj->GetPrefabID());
             if (prefab)
             {
                 prefab->GetDefaultInstance();
@@ -2424,7 +2424,7 @@ bool Level::LoadScene(const Guid& id)
     }
 
     // Preload scene asset
-    const auto sceneAsset = Content::LoadRuntimeObjectAsync<JsonAsset>(id);
+    const auto sceneAsset = Content::LoadAssetAsync<JsonAsset>(id);
     if (sceneAsset == nullptr)
     {
         LOG(Error, "Cannot load scene asset.");
@@ -2464,7 +2464,7 @@ bool Level::LoadSceneAsync(const Guid& id)
     }
 
     // Preload scene asset
-    const auto sceneAsset = Content::LoadRuntimeObjectAsync<JsonAsset>(id);
+    const auto sceneAsset = Content::LoadAssetAsync<JsonAsset>(id);
     if (sceneAsset == nullptr)
     {
         LOG(Error, "Cannot load scene asset.");

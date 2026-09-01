@@ -220,7 +220,7 @@ SceneObject* SceneObjectsFactory::SpawnInternal(Context& context, const ISeriali
         const Guid prefabObjectId = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId, GlobalObjectKind::PrefabObject);
 
         // Load prefab
-        auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(prefabId);
+        auto prefab = Content::LoadAssetAsync<Prefab>(prefabId);
         if (prefab == nullptr)
         {
             LOG(Warning, "Missing prefab {0}.", prefabId);
@@ -371,7 +371,7 @@ void SceneObjectsFactory::DeserializeInternal(Context& context, SceneObject* obj
         const Guid prefabObjectId = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId, GlobalObjectKind::PrefabObject);
 
         // Load prefab
-        auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(prefabId);
+        auto prefab = Content::LoadAssetAsync<Prefab>(prefabId);
         if (prefab == nullptr)
         {
             LOG(Warning, "Missing prefab {0}.", prefabId);
@@ -594,7 +594,7 @@ void SceneObjectsFactory::SetupPrefabInstances(Context& context, const PrefabSyn
         }
         const SceneObject* obj = data.SceneObjects[i];
         const Guid id = obj ? obj->GetID() : GetDocumentObjectId(stream, "FileId", context.SourceAssetId, context.DocumentKind);
-        auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(prefabId);
+        auto prefab = Content::LoadAssetAsync<Prefab>(prefabId);
         if (!prefab)
             continue;
         if (prefab->WaitForLoaded())
@@ -631,7 +631,7 @@ void SceneObjectsFactory::SetupPrefabInstances(Context& context, const PrefabSyn
         if (prefab->ObjectsDataCache.TryGet(prefabObjectId, prefabData) && (prefabObjectId = GetPrefabObjectId(*prefabData)).IsValid())
         {
             prefabId = JsonTools::GetGuid(*prefabData, "PrefabID");
-            prefab = Content::LoadRuntimeObjectAsync<Prefab>(prefabId);
+            prefab = Content::LoadAssetAsync<Prefab>(prefabId);
             if (prefab && !prefab->WaitForLoaded())
             {
                 // If prefab instance contains multiple nested prefabs, then need to build separate Ids remapping for each of them to prevent collisions
@@ -776,7 +776,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstances(Context& context, Prefab
             continue;
 
         // Load prefab
-        auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(prefabId);
+        auto prefab = Content::LoadAssetAsync<Prefab>(prefabId);
         if (prefab == nullptr)
         {
             LOG(Warning, "Missing prefab {0}.", prefabId);
@@ -812,7 +812,7 @@ void SceneObjectsFactory::SynchronizePrefabInstances(Context& context, PrefabSyn
         const Guid parentPrefabObjectId = parent->GetPrefabObjectID();
 
         // Load prefab
-        auto prefab = Content::LoadRuntimeObjectAsync<Prefab>(prefabId);
+        auto prefab = Content::LoadAssetAsync<Prefab>(prefabId);
         if (prefab == nullptr)
         {
             LOG(Warning, "Missing prefab {0}.", prefabId);
@@ -1016,7 +1016,7 @@ void SceneObjectsFactory::SynchronizeNewPrefabInstance(Context& context, PrefabS
             int32 nestedIndex = -1;
             if (!prefabInstance.ObjectToNested.TryGet(nestedInstanceId, nestedIndex))
             {
-                if (auto* nestedPrefab = Content::LoadRuntimeObjectAsync<Prefab>(JsonTools::GetGuid(*prefabData, "PrefabID")))
+                if (auto* nestedPrefab = Content::LoadAssetAsync<Prefab>(JsonTools::GetGuid(*prefabData, "PrefabID")))
                 {
                     if (prefabInstance.Nested.HasItems())
                     {

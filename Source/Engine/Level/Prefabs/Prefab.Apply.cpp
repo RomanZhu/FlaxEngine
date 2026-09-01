@@ -637,7 +637,7 @@ bool PrefabInstanceData::SynchronizePrefabInstances(PrefabInstancesData& prefabI
                 // Preserve order in parent (values from prefab are used)
                 if (obj != instance.TargetActor)
                 {
-                    auto prefab = Content::LoadRuntimeObject<Prefab>(prefabId);
+                    auto prefab = Content::LoadAsset<Prefab>(prefabId);
                     const auto defaultInstance = prefab ? prefab->GetDefaultInstance(obj->GetPrefabObjectID()) : nullptr;
                     if (defaultInstance)
                     {
@@ -787,7 +787,7 @@ bool PrefabInstanceData::SynchronizePrefabInstances(PrefabInstancesData& prefabI
     // Build cache data
     IdToDataLookupType prefabObjectIdToDiffData;
     prefabObjectIdToDiffData.EnsureCapacity(defaultInstanceData.Size());
-    const auto currentPrefab = Content::LoadRuntimeObject<Prefab>(prefabId);
+    const auto currentPrefab = Content::LoadAsset<Prefab>(prefabId);
     for (int32 i = 0; i < sceneObjects->Count(); i++)
     {
         SceneObject* obj = sceneObjects.Value->At(i);
@@ -861,7 +861,7 @@ bool Prefab::ApplyAll(Actor* targetActor)
         if (JsonTools::GetGuidIfValid(prefabId, newRootData, "PrefabID") && prefabObjectFileId != newRootData.MemberEnd() && prefabObjectFileId->value.IsInt64())
         {
             const Guid prefabObjectID = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId->value.GetInt64(), GlobalObjectKind::PrefabObject);
-            const auto nestedPrefab = Content::LoadRuntimeObject<Prefab>(prefabId);
+            const auto nestedPrefab = Content::LoadAsset<Prefab>(prefabId);
             if (nestedPrefab && nestedPrefab->GetRootObjectId() != prefabObjectID)
             {
                 LOG(Error, "Cannot change the prefab root object is from other nested prefab (excluding root of that nested prefab prefab).");
@@ -914,7 +914,7 @@ bool Prefab::ApplyAll(Actor* targetActor)
         }
         for (int32 i = 0; i < nestedPrefabIds.Count(); i++)
         {
-            const auto nestedPrefab = Content::LoadRuntimeObjectAsync<Prefab>(nestedPrefabIds[i]);
+            const auto nestedPrefab = Content::LoadAssetAsync<Prefab>(nestedPrefabIds[i]);
             if (nestedPrefab && nestedPrefab != this && EnumHasNoneFlags(nestedPrefab->Flags, ObjectFlags::WasMarkedToDelete))
             {
                 allPrefabs.Add(nestedPrefab);
@@ -1071,7 +1071,7 @@ bool Prefab::ApplyAddedObject(Actor* targetActor, SceneObject* addedObject)
         }
         for (int32 i = 0; i < nestedPrefabIds.Count(); i++)
         {
-            const auto nestedPrefab = Content::LoadRuntimeObjectAsync<Prefab>(nestedPrefabIds[i]);
+            const auto nestedPrefab = Content::LoadAssetAsync<Prefab>(nestedPrefabIds[i]);
             if (nestedPrefab && nestedPrefab != this && EnumHasNoneFlags(nestedPrefab->Flags, ObjectFlags::WasMarkedToDelete))
             {
                 allPrefabs.Add(nestedPrefab);
@@ -1202,7 +1202,7 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             Guid nestedPrefabId = obj->GetPrefabID(), nestedPrefabObjectId = obj->GetPrefabObjectID();
             while (!brokenPrefab && nestedPrefabId.IsValid() && nestedPrefabObjectId.IsValid())
             {
-                auto prefab = Content::LoadRuntimeObject<Prefab>(nestedPrefabId);
+                auto prefab = Content::LoadAsset<Prefab>(nestedPrefabId);
                 if (prefab)
                 {
                     prefab->GetNestedObject(nestedPrefabObjectId, nestedPrefabId, nestedPrefabObjectId);
