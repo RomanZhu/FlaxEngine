@@ -257,6 +257,7 @@ namespace
         AssetRecord record;
         record.ID = Guid::New();
         record.SourceAssetID = record.ID;
+        record.LocalId = 1;
         record.TypeName = TEXT("FlaxEngine.Texture");
         record.CanonicalPath = CanonicalAssetPath(path);
         record.SourcePath = SourceFilePath(path);
@@ -283,7 +284,8 @@ TEST_CASE("Texture processor Prepare probes every supported source format determ
     REQUIRE_FALSE(registry.Register(TextureProcessor::CreateDescriptor(), registration, diagnostic));
     AssetProcessorLease lease;
     REQUIRE_FALSE(registry.TryAcquire(TextureProcessorSettings::ProcessorID(), AssetProcessorInvocationStage::Prepare, lease, diagnostic));
-    REQUIRE(lease.Get().Outputs.Count() == 2);
+    REQUIRE(lease.Get().Outputs.Count() == 1);
+    CHECK(lease.Get().Outputs[0].Kind == StringAnsiView("runtime"));
 
     StringAnsi settingsJson;
     REQUIRE_FALSE(TextureProcessorSettings::Defaults().ToJson(settingsJson, diagnostic));
@@ -328,7 +330,8 @@ TEST_CASE("Texture processor Prepare probes every supported source format determ
         CHECK(first.MemoryEstimate >= payload->EstimatedDecodedBytes);
         REQUIRE(first.Dependencies.Count() == 3);
         CHECK(first.Dependencies[0].Kind == AssetDependencyKind::SourceFile);
-        CHECK(first.Outputs.Count() == 2);
+        REQUIRE(first.Outputs.Count() == 1);
+        CHECK(first.Outputs[0].Kind == StringAnsiView("runtime"));
 
         PreparedAsset second;
         PrepareAssetContext secondContext(root, content, library, record, lease.Get(), settingsJson, hashCache, cancellation.GetToken());

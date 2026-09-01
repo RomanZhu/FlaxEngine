@@ -122,14 +122,14 @@ TEST_CASE("Texture processor settings round-trip every legacy importer option an
 TEST_CASE("Texture processor settings accept Stone meta and preserve explicit defaults")
 {
     const StringAnsi stoneMeta = R"({
-        "metaVersion":1,
+        "fileFormatVersion":2,
         "guid":"36f15f0c4b354af88ba2f72f6cb82e22",
-        "assetType":"FlaxEngine.Texture",
-        "sourceKind":"ImportedSource",
-        "processor":{"id":"Flax.Texture","settingsVersion":2,"settings":{
+        "folderAsset":false,
+        "importer":{"id":"Flax.Texture","version":2,"settings":{
             "type":"NormalMap","srgb":false,"generateMipMaps":true,"maxSize":4096,
             "compression":"Default","platformOverrides":{}}},
-        "subAssets":{},"labels":["environment","stone"]})";
+        "objectIds":{"main":{"fileId":1,"type":"FlaxEngine.Texture"}},
+        "labels":["environment","stone"]})";
     AssetPipelineDiagnostic diagnostic;
     AssetMeta meta;
     REQUIRE_FALSE(AssetMeta::Parse(stoneMeta, TEXT("Stone.png.meta"), meta, diagnostic));

@@ -322,6 +322,7 @@ namespace
             AssetRecord record;
             record.ID = AssetID;
             record.SourceAssetID = AssetID;
+            record.LocalId = 1;
             record.TypeName = RawDataAsset::TypeName;
             record.CanonicalPath = CanonicalAssetPath(SourcePath);
             record.SourcePath = SourceFilePath(SourcePath);
