@@ -22,7 +22,10 @@ void GPUTask::Execute(GPUTasksContext* context)
     }
     else if (result != Result::Ok)
     {
-        LOG(Warning, "\'{0}\' failed with result: {1}", ToString(), ToString(result));
+        if (result == Result::MissingResources)
+            LOG(Info, "\'{0}\' ended after its GPU resource was released", ToString());
+        else
+            LOG(Warning, "\'{0}\' failed with result: {1}", ToString(), ToString(result));
         OnFail();
     }
     else

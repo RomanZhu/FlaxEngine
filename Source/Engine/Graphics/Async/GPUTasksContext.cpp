@@ -36,7 +36,7 @@ GPUTasksContext::~GPUTasksContext()
         if (task->IsSyncing() && task->_context == this)
         {
             if (!Engine::IsRequestingExit)
-                LOG(Warning, "'{0}' has been canceled before a sync", task->ToString());
+                LOG(Info, "'{0}' has been canceled before a sync", task->ToString());
             task->CancelSync();
         }
     }
@@ -59,7 +59,7 @@ void GPUTasksContext::OnCancelSync(GPUTask* task)
 {
     _tasksSyncing.Remove(task);
     if (!Engine::IsRequestingExit)
-        LOG(Warning, "'{0}' has been canceled before a sync", task->ToString());
+        LOG(Info, "'{0}' has been canceled before a sync", task->ToString());
 }
 
 void GPUTasksContext::OnFrameBegin()
