@@ -899,6 +899,74 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(AreBytesEqual(originalBytes, repairedBytes));
     }
 
+    SECTION("Convert internal actors scene without adjacent backup files")
+    {
+        const Guid sceneId = ParseGuid("76767676767676767676767676767671");
+        const Guid actorId = ParseGuid("76767676767676767676767676767672");
+        const String scenePath = GetTestScenePath(TEXT("Externalize"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, false);
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            scene->DeleteObject();
+        };
+        EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
+        REQUIRE(actor);
+        actor->SetName(TEXT("Actor"));
+        actor->SetParent(scene);
+
+        REQUIRE(!Level::ConvertSceneToExternalActors(scene));
+        CHECK(scene->UseExternalActors);
+        CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+
+        Array<String> backups;
+        const String backupPattern = String(StringUtils::GetFileName(scenePath)) + TEXT(".*.bak");
+        const String sceneDirectory(StringUtils::GetDirectoryName(scenePath));
+        REQUIRE_FALSE(FileSystem::DirectoryGetFiles(backups, sceneDirectory, *backupPattern,
+            DirectorySearchOption::TopDirectoryOnly));
+        CHECK(backups.IsEmpty());
+    }
+
+    SECTION("Failed external actor conversion restores in-memory and source state")
+    {
+        const Guid sceneId = ParseGuid("75757575757575757575757575757571");
+        const Guid actorId = ParseGuid("75757575757575757575757575757572");
+        const String scenePath = GetTestScenePath(TEXT("ExternalizeFailure"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, false);
+        EnsureDirectory(SceneFragmentStore::GetScenePath(sceneId));
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            scene->DeleteObject();
+        };
+        EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
+        REQUIRE(actor);
+        actor->SetParent(scene);
+        BytesContainer before;
+        BytesContainer after;
+        ReadFileBytes(scenePath, before);
+
+        REQUIRE(Level::ConvertSceneToExternalActors(scene));
+        CHECK_FALSE(scene->UseExternalActors);
+        ReadFileBytes(scenePath, after);
+        CHECK(AreBytesEqual(before, after));
+        CHECK_FALSE(FileSystem::FileExists(SceneFragmentStore::GetIndexPath(sceneId)));
+    }
+
     SECTION("Convert external actors scene to internal actors")
     {
         const Guid sceneId = ParseGuid("77777777777777777777777777777771");

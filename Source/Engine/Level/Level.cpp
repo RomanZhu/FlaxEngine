@@ -2495,25 +2495,16 @@ bool Level::ConvertSceneToExternalActors(Scene* scene)
         return true;
     }
 
-    if (!scene->UseExternalActors)
+    if (scene->UseExternalActors)
+        return saveScene(scene);
+
+    scene->UseExternalActors = true;
+    if (saveScene(scene))
     {
-        const String backupBase = path + TEXT(".") + DateTime::Now().ToFileNameString();
-        String backupPath = backupBase + TEXT(".bak");
-        int32 index = 1;
-        while (FileSystem::FileExists(backupPath))
-            backupPath = backupBase + TEXT("_") + StringUtils::ToString(index++) + TEXT(".bak");
-
-        if (FileSystem::CopyFile(backupPath, path))
-        {
-            LOG(Error, "Cannot create scene backup '{0}'.", backupPath);
-            return true;
-        }
-        LOG(Info, "Created scene backup '{0}'.", backupPath);
-
-        scene->UseExternalActors = true;
+        scene->UseExternalActors = false;
+        return true;
     }
-
-    return saveScene(scene);
+    return false;
 }
 
 bool Level::ConvertSceneToInternalActors(Scene* scene)
