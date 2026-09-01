@@ -22,6 +22,36 @@ namespace FlaxEngine.Tests
     [TestFixture]
     public class TestEditorUtils
     {
+        private static ContentFolder CreateCanonicalTextFolder(string folderPath, out string assetPath, out Guid assetId)
+        {
+            Directory.CreateDirectory(folderPath);
+            assetPath = Path.Combine(folderPath, "Canonical.txt");
+            File.WriteAllText(assetPath, "canonical source");
+            assetId = AssetOperationService.CreateImportedSourceMetadata(assetPath, typeof(RawDataAsset).FullName, "Flax.Text");
+            Assert.AreNotEqual(Guid.Empty, assetId);
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(assetPath, out var record));
+
+            var item = new BinaryAssetItem(assetPath, ref assetId, typeof(RawDataAsset).FullName,
+                typeof(RawDataAsset), ContentItemSearchFilter.Other);
+            item.SetAssetDatabaseRecord(record);
+            var folder = new ContentFolder(ContentFolderType.Content, folderPath, null);
+            item.ParentFolder = folder;
+            return folder;
+        }
+
+        private static void CleanupCanonicalCopyAsset(string path)
+        {
+            if (!File.Exists(path))
+                return;
+            if (AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out _))
+                AssetOperationService.DeleteAsset(path);
+            else
+            {
+                File.Delete(path);
+                File.Delete(path + ".meta");
+            }
+        }
+
         /// <summary>
         /// Test floating point values formatting to readable text.
         /// </summary>
@@ -210,22 +240,88 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
-        public void TestCanonicalMetadataGuidReaderUsesClonedRootIdentity()
+        public void TestFolderCopyRoutesCanonicalChildrenThroughNativeAuthority()
         {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxCanonicalCopyTests", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(root);
+            var root = Path.Combine(Globals.ProjectContentFolder, "__CanonicalFolderCopy_" + Guid.NewGuid().ToString("N"));
+            var sourceFolderPath = Path.Combine(root, "Source");
+            var destinationFolderPath = Path.Combine(root, "Destination");
+            string sourceAssetPath = null;
+            var destinationAssetPath = Path.Combine(destinationFolderPath, "Canonical.txt");
+            int nativeCopies = 0;
             try
             {
-                var expected = Guid.NewGuid();
-                var serializedId = FlaxEngine.Json.JsonSerializer.GetStringID(expected);
-                var metadataPath = Path.Combine(root, "Artifact.prefab.meta");
-                File.WriteAllText(metadataPath, "{\"metaVersion\":1,\"guid\":\"" + serializedId + "\"}");
+                Directory.CreateDirectory(root);
+                var sourceFolder = CreateCanonicalTextFolder(sourceFolderPath, out sourceAssetPath, out var sourceAssetId);
+                AssetWorkspaceModule.CanonicalCopyObserver = (source, destination) =>
+                {
+                    Assert.AreEqual(Path.GetFullPath(sourceAssetPath), Path.GetFullPath(source));
+                    Assert.AreEqual(Path.GetFullPath(destinationAssetPath), Path.GetFullPath(destination));
+                    nativeCopies++;
+                };
 
-                Assert.AreEqual(expected, AssetWorkspaceModule.ReadCanonicalMetadataGuid(metadataPath));
+                var result = new AssetWorkspaceModule(null).Copy(sourceFolder, destinationFolderPath);
+
+                Assert.IsTrue(result.Succeeded, result.Message);
+                Assert.AreEqual(1, nativeCopies);
+                Assert.IsTrue(File.Exists(destinationAssetPath));
+                Assert.IsTrue(File.Exists(destinationAssetPath + ".meta"));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(destinationAssetPath, out var destinationRecord));
+                Assert.AreNotEqual(sourceAssetId, destinationRecord.SourceAssetID);
             }
             finally
             {
-                Directory.Delete(root, true);
+                AssetWorkspaceModule.CanonicalCopyObserver = null;
+                CleanupCanonicalCopyAsset(destinationAssetPath);
+                CleanupCanonicalCopyAsset(sourceAssetPath);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
+            }
+        }
+
+        [Test]
+        public void TestFolderCopyRollbackDeletesCanonicalChildrenThroughNativeAuthority()
+        {
+            var root = Path.Combine(Globals.ProjectContentFolder, "__CanonicalFolderRollback_" + Guid.NewGuid().ToString("N"));
+            var sourceFolderPath = Path.Combine(root, "Source");
+            var destinationFolderPath = Path.Combine(root, "Destination");
+            string sourceAssetPath = null;
+            var destinationAssetPath = Path.Combine(destinationFolderPath, "Canonical.txt");
+            int nativeCopies = 0;
+            int nativeDeletes = 0;
+            try
+            {
+                Directory.CreateDirectory(root);
+                var sourceFolder = CreateCanonicalTextFolder(sourceFolderPath, out sourceAssetPath, out _);
+                AssetWorkspaceModule.CanonicalCopyObserver = (_, _) => nativeCopies++;
+                AssetWorkspaceModule.CanonicalDeleteObserver = path =>
+                {
+                    Assert.AreEqual(Path.GetFullPath(destinationAssetPath), Path.GetFullPath(path));
+                    nativeDeletes++;
+                };
+                ContentMutationTransaction.FaultInjector = point =>
+                    point == "after-copy" ? new IOException("Injected canonical folder copy rollback") : null;
+
+                var result = new AssetWorkspaceModule(null).Copy(sourceFolder, destinationFolderPath);
+
+                Assert.IsFalse(result.Succeeded);
+                Assert.IsFalse(result.RequiresRecovery);
+                Assert.AreEqual(1, nativeCopies);
+                Assert.AreEqual(1, nativeDeletes);
+                Assert.IsTrue(File.Exists(sourceAssetPath));
+                Assert.IsTrue(File.Exists(sourceAssetPath + ".meta"));
+                Assert.IsFalse(Directory.Exists(destinationFolderPath));
+            }
+            finally
+            {
+                ContentMutationTransaction.FaultInjector = null;
+                AssetWorkspaceModule.CanonicalCopyObserver = null;
+                AssetWorkspaceModule.CanonicalDeleteObserver = null;
+                CleanupCanonicalCopyAsset(destinationAssetPath);
+                CleanupCanonicalCopyAsset(sourceAssetPath);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
             }
         }
 

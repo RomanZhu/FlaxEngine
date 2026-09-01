@@ -14,7 +14,6 @@ using FlaxEditor.Content.Settings;
 using FlaxEditor.Scripting;
 using FlaxEngine;
 using FlaxEngine.Utilities;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace FlaxEditor.Modules
@@ -1408,7 +1407,7 @@ namespace FlaxEditor.Modules
                     if (!preflight.Succeeded)
                         return preflight;
                     ContentMutationDiagnostics.Log("mutation.copy.begin", $"source='{item.Path}'; destination='{targetPath}'; native=true");
-                    if (AssetOperationService.CopyAsset(item.Path, targetPath, out _))
+                    if (CopyCanonicalAsset(item.Path, targetPath))
                     {
                         ContentMutationDiagnostics.Log("mutation.copy.failed", $"source='{item.Path}'; destination='{targetPath}'; native=true");
                         return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, item.Path, targetPath, "The native asset copy transaction failed.");
@@ -1439,7 +1438,7 @@ namespace FlaxEditor.Modules
                 int firstEntry = plan.Entries.Count;
                 plan.Entries.AddRange(itemPlan.Entries);
                 var entryIndices = Enumerable.Range(firstEntry, itemPlan.Entries.Count).ToArray();
-                var clonedAssets = new List<string>();
+                var clonedAssets = new List<CopiedAssetRollback>();
                 steps.Add(new ContentMutationStep(
                     requests.Count == 1 ? "copy" : "copy-" + i,
                     entryIndices,
@@ -1505,7 +1504,8 @@ namespace FlaxEditor.Modules
             var entry = new ContentMutationEntry(item.Path, targetPath, descendant ? ContentMutationPathRole.Descendant : ContentMutationPathRole.Main, item.IsFolder)
             {
                 DestinationParentProducedByTransaction = descendant,
-                AssetCloneExpected = !item.IsFolder && UseContentBackendForCopy(item),
+                AssetCloneExpected = !item.IsFolder &&
+                                     (item is AssetItem { IsCanonicalSource: true } || UseContentBackendForCopy(item)),
             };
             plan.Entries.Add(entry);
             if ((item.IsFolder || item is AssetItem { IsCanonicalSource: true }) && File.Exists(item.Path + ".meta"))
@@ -1525,7 +1525,19 @@ namespace FlaxEditor.Modules
             }
         }
 
-        private ContentMutationResult CommitCopy(ContentItem item, string targetPath, List<string> clonedAssets)
+        private readonly struct CopiedAssetRollback
+        {
+            public readonly string Path;
+            public readonly bool IsCanonical;
+
+            public CopiedAssetRollback(string path, bool isCanonical)
+            {
+                Path = path;
+                IsCanonical = isCanonical;
+            }
+        }
+
+        private ContentMutationResult CommitCopy(ContentItem item, string targetPath, List<CopiedAssetRollback> clonedAssets)
         {
             try
             {
@@ -1588,14 +1600,23 @@ namespace FlaxEditor.Modules
             return true;
         }
 
-        private static bool RollbackCopy(ContentMutationPlan plan, int[] entryIndices, List<string> clonedAssets)
+        private static bool RollbackCopy(ContentMutationPlan plan, int[] entryIndices, List<CopiedAssetRollback> clonedAssets)
         {
             bool succeeded = true;
             for (int i = clonedAssets.Count - 1; i >= 0; i--)
             {
                 try
                 {
-                    FlaxEngine.Content.DeleteAsset(clonedAssets[i]);
+                    var clonedAsset = clonedAssets[i];
+                    if (clonedAsset.IsCanonical)
+                    {
+                        if (DeleteCanonicalCopy(clonedAsset.Path))
+                            succeeded = false;
+                    }
+                    else
+                    {
+                        FlaxEngine.Content.DeleteAsset(clonedAsset.Path);
+                    }
                 }
                 catch
                 {
@@ -1659,7 +1680,7 @@ namespace FlaxEditor.Modules
             return true;
         }
 
-        private void CopyFolderChildren(ContentFolder folder, string targetPath, List<string> clonedAssets)
+        private void CopyFolderChildren(ContentFolder folder, string targetPath, List<CopiedAssetRollback> clonedAssets)
         {
             for (int i = 0; i < folder.Children.Count; i++)
             {
@@ -1691,55 +1712,45 @@ namespace FlaxEditor.Modules
                 throw new IOException($"Cannot clone folder metadata for '{sourcePath}'.");
         }
 
-        private void CopyFileItem(ContentItem item, string targetPath, List<string> clonedAssets)
+#if FLAX_TESTS
+        internal static Action<string, string> CanonicalCopyObserver;
+        internal static Action<string> CanonicalDeleteObserver;
+#endif
+
+        private static bool CopyCanonicalAsset(string sourcePath, string targetPath)
+        {
+#if FLAX_TESTS
+            CanonicalCopyObserver?.Invoke(sourcePath, targetPath);
+#endif
+            return AssetOperationService.CopyAsset(sourcePath, targetPath, out _);
+        }
+
+        private static bool DeleteCanonicalCopy(string path)
+        {
+#if FLAX_TESTS
+            CanonicalDeleteObserver?.Invoke(path);
+#endif
+            return AssetOperationService.DeleteAsset(path);
+        }
+
+        private void CopyFileItem(ContentItem item, string targetPath, List<CopiedAssetRollback> clonedAssets)
         {
             if (item is AssetItem assetItem && assetItem.IsCanonicalSource)
             {
-                var targetMetaPath = targetPath + ".meta";
-                if (AssetOperationService.CloneMetadata(item.Path + ".meta", targetMetaPath))
-                    throw new IOException($"Cannot clone metadata for canonical source '{item.Path}'.");
-                if (UseContentBackendForCopy(item))
-                {
-                    var cloneId = ReadCanonicalMetadataGuid(targetMetaPath);
-                    if (Editor.ContentEditing.CloneAssetFile(item.Path, targetPath, cloneId))
-                        throw new IOException($"The Content backend failed to clone canonical asset '{item.Path}'.");
-                    clonedAssets.Add(targetPath);
-                }
-                else
-                {
-                    File.Copy(item.Path, targetPath, false);
-                }
+                if (CopyCanonicalAsset(item.Path, targetPath))
+                    throw new IOException($"The native asset copy transaction failed for canonical source '{item.Path}'.");
+                clonedAssets.Add(new CopiedAssetRollback(targetPath, true));
             }
             else if (UseContentBackendForFileOperation(item))
             {
                 if (Editor.ContentEditing.CloneAssetFile(item.Path, targetPath, Guid.NewGuid()))
                     throw new IOException($"The Content backend failed to clone '{item.Path}'.");
-                clonedAssets.Add(targetPath);
+                clonedAssets.Add(new CopiedAssetRollback(targetPath, false));
             }
             else
             {
                 File.Copy(item.Path, targetPath, false);
             }
-        }
-
-        internal static Guid ReadCanonicalMetadataGuid(string metadataPath)
-        {
-            try
-            {
-                var document = JObject.Parse(File.ReadAllText(metadataPath));
-                var value = document.Value<string>("guid");
-                if (value?.Length == 32 && Guid.TryParseExact(value, "N", out _))
-                {
-                    var id = FlaxEngine.Json.JsonSerializer.ParseID(value);
-                    if (id != Guid.Empty)
-                        return id;
-                }
-            }
-            catch (Exception ex) when (ex is IOException || ex is JsonException)
-            {
-                throw new IOException($"Cannot read cloned canonical metadata '{metadataPath}'.", ex);
-            }
-            throw new IOException($"Cloned canonical metadata '{metadataPath}' has no valid root GUID.");
         }
 
         /// <summary>
