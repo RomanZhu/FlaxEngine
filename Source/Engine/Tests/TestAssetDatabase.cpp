@@ -528,7 +528,7 @@ TEST_CASE("Default canonical metadata preserves typed authored document families
     CHECK(diagnostics[0].Code == AssetPipelineDiagnosticCode::InvalidMeta);
 }
 
-TEST_CASE("Canonical refresh narrowly repairs regression-damaged authored metadata")
+TEST_CASE("Canonical refresh rejects mismatched authored metadata without mutation")
 {
     const String folder = Globals::ProjectContentFolder / (TEXT("__AuthoredMetadataRepair_") + Guid::New().ToString(Guid::FormatType::N));
     REQUIRE_FALSE(FileSystem::CreateDirectory(folder));
@@ -555,16 +555,14 @@ TEST_CASE("Canonical refresh narrowly repairs regression-damaged authored metada
     damaged.UserDataJson = "{\"owner\":\"test\"}";
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), damaged, diagnostic));
+    BytesContainer before;
+    REQUIRE_FALSE(File::ReadAllBytes(source + TEXT(".meta"), before));
 
-    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
-    AssetMeta repaired;
-    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), repaired, diagnostic));
-    CHECK(repaired.ID == damaged.ID);
-    CHECK(repaired.AssetType == TEXT("FlaxEngine.ParticleSystem"));
-    CHECK(repaired.SourceKind == AssetSourceKind::TextDocument);
-    CHECK(repaired.Processor.ID == TEXT("Flax.ParticleSystem"));
-    CHECK(repaired.Labels.Contains(TEXT("preserved")));
-    CHECK(repaired.UserDataJson == StringAnsiView("{\"owner\":\"test\"}"));
+    CHECK(AssetPipelineService::RefreshSources(refresh));
+    BytesContainer after;
+    REQUIRE_FALSE(File::ReadAllBytes(source + TEXT(".meta"), after));
+    REQUIRE(after.Length() == before.Length());
+    CHECK(Platform::MemoryCompare(after.Get(), before.Get(), before.Length()) == 0);
 }
 
 TEST_CASE("Asset database snapshot is disposable checksummed and project scoped")
