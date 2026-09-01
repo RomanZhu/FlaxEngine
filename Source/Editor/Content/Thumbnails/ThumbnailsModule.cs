@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using FlaxEditor.Modules;
 using FlaxEngine;
@@ -17,6 +18,12 @@ namespace FlaxEditor.Content.Thumbnails
     public sealed class ThumbnailsModule : EditorModule, IContentItemOwner
     {
         private const int CacheVersion = 5;
+        private const int PrepareChecksPerUpdate = 32;
+        private const int ReadyChecksPerRender = 64;
+        private const int MaxRendersPerFrame = 4;
+        private const int MaxFlushesPerInterval = 2;
+        private const double RenderBudgetMilliseconds = 3.0;
+        private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
 
         /// <summary>
         /// The minimum required quality (in range [0;1]) for content streaming resources to be loaded in order to generate thumbnail for them.
@@ -27,8 +34,13 @@ namespace FlaxEditor.Content.Thumbnails
         private readonly string _cacheFolder;
         private readonly List<ThumbnailRequest> _requests = new List<ThumbnailRequest>(128);
         private readonly HashSet<ContentItem> _pendingRequests = new HashSet<ContentItem>();
+        private readonly HashSet<ContentItem> _pendingForcedRequests = new HashSet<ContentItem>();
+        private readonly HashSet<ContentItem> _pendingHighPriorityRequests = new HashSet<ContentItem>();
         private readonly PreviewRoot _guiRoot = new PreviewRoot();
         private DateTime _lastFlushTime;
+        private int _prepareCursor;
+        private int _renderCursor;
+        private int _flushCursor;
         private RenderTask _task;
         private GPUTexture _output;
 
@@ -43,14 +55,20 @@ namespace FlaxEditor.Content.Thumbnails
         /// Requests the item preview.
         /// </summary>
         /// <param name="item">The item.</param>
+        /// <param name="forceRegenerate">Whether to regenerate and prioritize the preview while retaining stale pixels.</param>
+        /// <param name="highPriority">Whether to insert the request at the front of the queue.</param>
         /// <exception cref="System.ArgumentNullException"></exception>
-        public void RequestPreview(ContentItem item)
+        public void RequestPreview(ContentItem item, bool forceRegenerate = false, bool highPriority = false)
         {
             if (item == null)
                 throw new ArgumentNullException();
             if (_task == null)
             {
                 _pendingRequests.Add(item);
+                if (forceRegenerate)
+                    _pendingForcedRequests.Add(item);
+                if (highPriority)
+                    _pendingHighPriorityRequests.Add(item);
                 return;
             }
 
@@ -81,15 +99,19 @@ namespace FlaxEditor.Content.Thumbnails
                 var existingRequest = FindRequest(assetItem);
                 if (existingRequest != null)
                 {
-                    if (existingRequest.CacheVersion == cacheVersion || cacheVersion == Guid.Empty)
+                    if (!forceRegenerate && (existingRequest.CacheVersion == cacheVersion || cacheVersion == Guid.Empty))
+                    {
+                        if (highPriority)
+                            PrioritizeRequest(existingRequest);
                         return;
+                    }
                     RemoveRequest(existingRequest);
                 }
 
                 SpriteHandle staleThumbnail = SpriteHandle.Invalid;
                 for (int i = 0; i < _cache.Count; i++)
                 {
-                    if (!assetItem.IsCanonicalSource || cacheVersion != Guid.Empty)
+                    if (!forceRegenerate && (!assetItem.IsCanonicalSource || cacheVersion != Guid.Empty))
                     {
                         var sprite = _cache[i].FindSlotVersioned(assetItem.ID, cacheVersion);
                         if (sprite.IsValid)
@@ -106,7 +128,7 @@ namespace FlaxEditor.Content.Thumbnails
                 // Keep the previous pixels visible while a newer artifact is rendered.
                 if (staleThumbnail.IsValid)
                     item.Thumbnail = staleThumbnail;
-                AddRequest(assetItem, proxy, cacheVersion);
+                AddRequest(assetItem, proxy, cacheVersion, forceRegenerate || highPriority);
             }
         }
 
@@ -134,6 +156,8 @@ namespace FlaxEditor.Content.Thumbnails
                 return;
 
             _pendingRequests.Remove(item);
+            _pendingForcedRequests.Remove(item);
+            _pendingHighPriorityRequests.Remove(item);
             DeletePreview(assetItem.ID);
             item.Thumbnail = SpriteHandle.Invalid;
         }
@@ -366,6 +390,9 @@ namespace FlaxEditor.Content.Thumbnails
             _task.Enabled = false;
             _task.Render += OnRender;
 
+            Editor.Undo.UndoDone += OnUndoRedo;
+            Editor.Undo.RedoDone += OnUndoRedo;
+
             if (_pendingRequests.Count != 0)
             {
                 var pendingRequests = new List<ContentItem>(_pendingRequests);
@@ -373,86 +400,114 @@ namespace FlaxEditor.Content.Thumbnails
                 for (int i = 0; i < pendingRequests.Count; i++)
                 {
                     if (!pendingRequests[i].IsDisposing)
-                        RequestPreview(pendingRequests[i]);
+                        RequestPreview(pendingRequests[i], _pendingForcedRequests.Remove(pendingRequests[i]),
+                            _pendingHighPriorityRequests.Remove(pendingRequests[i]));
                 }
+                _pendingForcedRequests.Clear();
+                _pendingHighPriorityRequests.Clear();
             }
+        }
+
+        private void OnUndoRedo(IUndoAction action)
+        {
+            if (UndoActionMetadata.DoesNotModifyData(action))
+                return;
+
+            var info = UndoActionMetadata.GetActionInfo(action);
+            AssetItem item = null;
+            if (info.OwnerId != Guid.Empty)
+                item = Editor.ContentDatabase.FindAsset(info.OwnerId);
+            else if (info.TargetType == UndoActionTargetType.Asset && info.TargetId != Guid.Empty)
+                item = Editor.ContentDatabase.FindAsset(info.TargetId);
+
+            var path = !string.IsNullOrEmpty(info.OwnerPath) ? info.OwnerPath : info.TargetPath;
+            if (item == null && !string.IsNullOrEmpty(path))
+                item = Editor.ContentDatabase.Find(path) as AssetItem;
+
+            if (item?.HasThumbnailReference == true)
+                item.RefreshThumbnail();
         }
 
         private void OnRender(RenderTask task, GPUContext context)
         {
             lock (_requests)
             {
-                // Check if there is ready next asset to render thumbnail for it
-                // But don't check whole queue, only a few items
-                var request = GetReadyRequest(10);
-                if (request == null)
+                var stopwatch = Stopwatch.StartNew();
+                for (int rendered = 0; rendered < MaxRendersPerFrame; rendered++)
                 {
-                    // Disable task
-                    _task.Enabled = false;
-                    return;
+                    var request = GetReadyRequest(ReadyChecksPerRender);
+                    if (request == null)
+                    {
+                        _task.Enabled = false;
+                        break;
+                    }
+
+                    if (!RenderPreview(request, context) || stopwatch.Elapsed.TotalMilliseconds >= RenderBudgetMilliseconds)
+                        break;
                 }
-
-                // Find atlas with an free slot
-                var atlas = GetValidAtlas(request.Item.ID);
-                if (atlas == null)
-                {
-                    // Error
-                    _task.Enabled = false;
-                    _requests.Clear();
-                    Editor.LogError("Failed to get atlas.");
-                    return;
-                }
-
-                // Wait for atlas being loaded
-                if (!atlas.IsReady)
-                    return;
-
-                try
-                {
-                    // Setup
-                    _guiRoot.RemoveChildren();
-                    _guiRoot.AccentColor = request.Proxy.AccentColor;
-
-                    // Call proxy to prepare for thumbnail rendering
-                    request.Proxy.OnThumbnailDrawBegin(request, _guiRoot, context);
-                    _guiRoot.UnlockChildrenRecursive();
-
-                    // Draw preview
-                    context.Clear(_output.View(), Color.Black);
-                    Render2D.CallDrawing(_guiRoot, context, _output);
-
-                    // Call proxy and cleanup UI (delete create controls, shared controls should be unlinked during OnThumbnailDrawEnd event)
-                    request.Proxy.OnThumbnailDrawEnd(request, _guiRoot);
-                }
-                catch (Exception ex)
-                {
-                    // Handle internal errors gracefully (eg. when asset is corrupted and proxy fails)
-                    Editor.LogError("Failed to render thumbnail icon for asset: " + request.Item);
-                    Editor.LogWarning(ex);
-                    request.FinishRender(ref SpriteHandle.Invalid);
-                    RemoveRequest(request);
-                    return;
-                }
-                finally
-                {
-                    _guiRoot.DisposeChildren();
-                }
-
-                // Copy backbuffer with rendered preview into atlas
-                SpriteHandle icon = atlas.OccupySlotVersioned(_output, request.Item.ID, request.CacheVersion);
-                if (!icon.IsValid)
-                {
-                    // Error
-                    _task.Enabled = false;
-                    _requests.Clear();
-                    Editor.LogError("Failed to occupy previews cache atlas slot.");
-                    return;
-                }
-
-                // End
-                request.FinishRender(ref icon);
-                RemoveRequest(request);
             }
+        }
+
+        private bool RenderPreview(ThumbnailRequest request, GPUContext context)
+        {
+            // Find atlas with a free slot
+            var atlas = GetValidAtlas(request.Item.ID);
+            if (atlas == null)
+            {
+                _task.Enabled = false;
+                ClearRequests();
+                Editor.LogError("Failed to get atlas.");
+                return false;
+            }
+
+            // Wait for atlas being loaded
+            if (!atlas.IsReady || atlas.IsFlushing)
+                return false;
+
+            try
+            {
+                // Setup
+                _guiRoot.RemoveChildren();
+                _guiRoot.AccentColor = request.Proxy.AccentColor;
+
+                // Call proxy to prepare for thumbnail rendering
+                request.Proxy.OnThumbnailDrawBegin(request, _guiRoot, context);
+                _guiRoot.UnlockChildrenRecursive();
+
+                // Draw preview
+                context.Clear(_output.View(), Color.Black);
+                Render2D.CallDrawing(_guiRoot, context, _output);
+
+                // Call proxy and cleanup UI (delete create controls, shared controls should be unlinked during OnThumbnailDrawEnd event)
+                request.Proxy.OnThumbnailDrawEnd(request, _guiRoot);
+            }
+            catch (Exception ex)
+            {
+                // Handle internal errors gracefully (eg. when asset is corrupted and proxy fails)
+                Editor.LogError("Failed to render thumbnail icon for asset: " + request.Item);
+                Editor.LogWarning(ex);
+                request.FinishRender(ref SpriteHandle.Invalid);
+                RemoveRequest(request);
+                return true;
+            }
+            finally
+            {
+                _guiRoot.DisposeChildren();
+            }
+
+            // Copy backbuffer with rendered preview into atlas
+            SpriteHandle icon = atlas.OccupySlotVersioned(_output, request.Item.ID, request.CacheVersion);
+            if (!icon.IsValid)
+            {
+                _task.Enabled = false;
+                ClearRequests();
+                Editor.LogError("Failed to occupy previews cache atlas slot.");
+                return false;
+            }
+
+            request.FinishRender(ref icon);
+            RemoveRequest(request);
+            return true;
         }
 
         private void StartPreviewsQueue()
@@ -476,18 +531,57 @@ namespace FlaxEditor.Content.Thumbnails
             return null;
         }
 
-        private void AddRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion)
+        private void AddRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion, bool highPriority)
         {
             var request = new ThumbnailRequest(item, proxy, cacheVersion);
-            _requests.Add(request);
-            item.AddReference(this);
+            if (highPriority)
+            {
+                _requests.Insert(0, request);
+                _prepareCursor = 0;
+                _renderCursor = 0;
+            }
+            else
+            {
+                _requests.Add(request);
+            }
+            item.AddReference(this, false);
+        }
+
+        private void PrioritizeRequest(ThumbnailRequest request)
+        {
+            var index = _requests.IndexOf(request);
+            if (index <= 0)
+                return;
+            _requests.RemoveAt(index);
+            _requests.Insert(0, request);
+            _prepareCursor = 0;
+            _renderCursor = 0;
         }
 
         private void RemoveRequest(ThumbnailRequest request)
         {
+            var index = _requests.IndexOf(request);
+            if (index == -1)
+                return;
             request.Dispose();
-            _requests.Remove(request);
+            _requests.RemoveAt(index);
+            AdjustCursorAfterRemove(ref _prepareCursor, index);
+            AdjustCursorAfterRemove(ref _renderCursor, index);
             request.Item.RemoveReference(this);
+        }
+
+        private void ClearRequests()
+        {
+            while (_requests.Count > 0)
+                RemoveRequest(_requests[_requests.Count - 1]);
+        }
+
+        private void AdjustCursorAfterRemove(ref int cursor, int removedIndex)
+        {
+            if (removedIndex < cursor)
+                cursor--;
+            if (cursor >= _requests.Count)
+                cursor = 0;
         }
 
         private void RemoveRequest(AssetItem item)
@@ -500,9 +594,12 @@ namespace FlaxEditor.Content.Thumbnails
         private ThumbnailRequest GetReadyRequest(int maxChecks)
         {
             maxChecks = Mathf.Min(maxChecks, _requests.Count);
-            for (int i = 0; i < maxChecks; i++)
+            for (int checkedCount = 0; checkedCount < maxChecks && _requests.Count != 0; checkedCount++)
             {
-                var request = _requests[i];
+                if (_renderCursor >= _requests.Count)
+                    _renderCursor = 0;
+                var request = _requests[_renderCursor];
+                _renderCursor++;
                 try
                 {
                     if (request.IsReady)
@@ -513,7 +610,6 @@ namespace FlaxEditor.Content.Thumbnails
                     Editor.LogWarning($"Failed to prepare thumbnail rendering for {request.Item.ShortName}.");
                     Editor.LogWarning(ex);
                     RemoveRequest(request);
-                    i--;
                 }
             }
 
@@ -550,11 +646,20 @@ namespace FlaxEditor.Content.Thumbnails
             return atlas;
         }
 
-        private void Flush()
+        private void Flush(bool all = false)
         {
-            for (int i = 0; i < _cache.Count; i++)
+            int flushed = 0;
+            int checks = _cache.Count;
+            int limit = all ? _cache.Count : MaxFlushesPerInterval;
+            while (checks-- > 0 && flushed < limit)
             {
-                _cache[i].Flush();
+                if (_flushCursor >= _cache.Count)
+                    _flushCursor = 0;
+                var atlas = _cache[_flushCursor++];
+                if (!atlas.IsDirty || atlas.IsFlushing)
+                    continue;
+                atlas.Flush();
+                flushed++;
             }
         }
 
@@ -609,53 +714,46 @@ namespace FlaxEditor.Content.Thumbnails
             {
                 var now = DateTime.UtcNow;
 
-                // Check if has any request pending
-                int count = _requests.Count;
-                if (count > 0)
+                // Prepare a moving window so slow assets cannot block later requests.
+                int checks = Mathf.Min(PrepareChecksPerUpdate, _requests.Count);
+                for (int checkedCount = 0; checkedCount < checks && _requests.Count != 0; checkedCount++)
                 {
-                    // Prepare requests
-                    bool isAnyReady = false;
-                    int checks = Mathf.Min(10, _requests.Count);
-                    for (int i = 0; i < checks && i < _requests.Count; i++)
+                    if (_prepareCursor >= _requests.Count)
+                        _prepareCursor = 0;
+                    var request = _requests[_prepareCursor];
+                    var removed = false;
+                    try
                     {
-                        var request = _requests[i];
-                        try
+                        request.Update();
+                        if (request.State == ThumbnailRequest.States.Created)
                         {
-                            request.Update();
-                            if (request.IsReady)
-                            {
-                                isAnyReady = true;
-                            }
-                            else if (request.State == ThumbnailRequest.States.Created)
-                            {
-                                request.Prepare();
-                            }
-                            else if (request.State == ThumbnailRequest.States.Failed)
-                            {
-                                RemoveRequest(request);
-                                i--;
-                            }
+                            request.Prepare();
                         }
-                        catch (Exception ex)
+                        else if (request.State == ThumbnailRequest.States.Failed)
                         {
-                            Editor.LogWarning($"Failed to prepare thumbnail rendering for {request.Item.ShortName}.");
-                            Editor.LogWarning(ex);
+                            Editor.LogWarning($"Failed to generate thumbnail for '{request.Item.Path}': {request.FailureMessage ?? "asset could not be loaded"}");
                             RemoveRequest(request);
-                            i--;
+                            removed = true;
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        Editor.LogWarning($"Failed to prepare thumbnail rendering for {request.Item.ShortName}.");
+                        Editor.LogWarning(ex);
+                        RemoveRequest(request);
+                        removed = true;
                     }
 
-                    // Check if has no rendering task enabled but should be
-                    if (isAnyReady && _task.Enabled == false)
-                    {
-                        // Start generating preview
-                        StartPreviewsQueue();
-                    }
+                    if (!removed)
+                        _prepareCursor++;
                 }
-                // Don't flush every frame
-                else if (now - _lastFlushTime >= TimeSpan.FromSeconds(1))
+
+                if (_requests.Count > 0 && !_task.Enabled)
+                    StartPreviewsQueue();
+
+                // Persist completed work even while other thumbnails are still pending.
+                if (now - _lastFlushTime >= FlushInterval)
                 {
-                    // Flush data
                     _lastFlushTime = now;
                     Flush();
                 }
@@ -665,16 +763,19 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         public override void OnExit()
         {
+            Editor.Undo.UndoDone -= OnUndoRedo;
+            Editor.Undo.RedoDone -= OnUndoRedo;
+
             if (_task)
                 _task.Enabled = false;
 
             lock (_requests)
             {
-                // Clear data
-                while (_requests.Count > 0)
-                    RemoveRequest(_requests[0]);
+                Flush(true);
+                ClearRequests();
                 _cache.Clear();
                 _pendingRequests.Clear();
+                _pendingForcedRequests.Clear();
             }
 
             _guiRoot.Dispose();

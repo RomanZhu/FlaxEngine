@@ -267,26 +267,15 @@ void ScriptingService::Update()
     PROFILE_CPU_NAMED("Scripting::Update");
     INVOKE_EVENT(Update);
 
-    // Flush update actions
-    _objectsLocker.Lock();
-    int32 count = UpdateActions.Count();
-    for (int32 i = 0; i < count; i++)
+    // Detach the current batch under the queue lock, then invoke user actions without it.
+    // Actions can wait for content loading, which may need the object registry guarded by the same lock.
+    Array<Function<void()>> actions;
     {
-        UpdateActions[i]();
+        ScopeLock lock(_objectsLocker);
+        UpdateActions.Swap(actions);
     }
-    int32 newlyAdded = UpdateActions.Count() - count;
-    if (newlyAdded == 0)
-        UpdateActions.Clear();
-    else
-    {
-        // Someone added another action within current callback
-        Array<Function<void()>> tmp;
-        for (int32 i = newlyAdded; i < UpdateActions.Count(); i++)
-            tmp.Add(UpdateActions[i]);
-        UpdateActions.Clear();
-        UpdateActions.Add(tmp);
-    }
-    _objectsLocker.Unlock();
+    for (auto& action : actions)
+        action();
 
 #if defined(USE_NETCORE) && !USE_EDITOR
     // Force GC to run in background periodically to avoid large blocking collections causing hitches

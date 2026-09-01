@@ -907,7 +907,8 @@ bool FlaxStorage::Create(const StringView& path, Span<AssetInitData> assets, boo
     ContentStorageManager::FormatPath(pathNorm);
     const StringView filePath(pathNorm);
     ZoneText(*filePath, filePath.Length());
-    LOG(Info, "Creating package at \'{0}\'. Silent Mode: {1}", filePath, silentMode);
+    if (!silentMode)
+        LOG(Info, "Creating package at '{0}'. Silent Mode: false", filePath);
 
     // Serialize into a sibling file and replace the destination only after the complete asset
     // has been written. This prevents file watchers and readers from observing a truncated asset.

@@ -83,6 +83,16 @@ public:
     /// <summary>Gets a stable cache version derived from the currently published artifact key.</summary>
     API_FUNCTION() static Guid GetPublishedArtifactCacheID(const Guid& assetID, const StringView& outputKind);
 
+    /// <summary>Queues an exact artifact build without waiting for it to finish.</summary>
+    /// <returns>True on failure.</returns>
+    API_FUNCTION() static bool RequestArtifactBuild(const Guid& assetID, const StringView& outputKind);
+
+    /// <summary>Gets the latest build status for a runtime or thumbnail artifact.</summary>
+    API_FUNCTION() static String GetArtifactBuildStatus(const Guid& assetID, const StringView& outputKind);
+
+    /// <summary>Gets the latest build diagnostic for a runtime or thumbnail artifact.</summary>
+    API_FUNCTION() static AssetPipelineDiagnostic GetArtifactBuildDiagnostic(const Guid& assetID, const StringView& outputKind);
+
     /// <summary>Loads a still-current disposable snapshot or performs one full scan.</summary>
     /// <returns>True if the scan infrastructure failed. Content diagnostics remain queryable.</returns>
     API_FUNCTION() static bool LoadOrScan(bool strictMetadata = false);

@@ -190,6 +190,90 @@ namespace
         LastDiagnostics = diagnostics;
     }
 
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    bool RequestArtifactBuildInternal(const AssetRecord& record, const StringView& outputKind, AssetPipelineDiagnostic& diagnostic)
+    {
+        if (outputKind == TEXT("thumbnail"))
+        {
+#if COMPILE_WITH_TEXTURE_TOOL
+            if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+                return TexturePipelineService::RequestThumbnailBuild(record.ID, diagnostic);
+#endif
+        }
+        else if (outputKind == TEXT("runtime"))
+        {
+#if COMPILE_WITH_TEXTURE_TOOL
+            if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+                return TexturePipelineService::RequestBuild(record.ID, false, diagnostic);
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+            if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
+                return ModelPipelineService::RequestBuild(record.ID, false, diagnostic);
+#endif
+            if (GraphPipelineService::OwnsProcessor(record.ProcessorID))
+                return GraphPipelineService::RequestBuild(record.ID, false, diagnostic);
+        }
+
+        diagnostic = AssetPipelineDiagnostic();
+        diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = record.ID;
+        diagnostic.SourcePath = record.SourcePath.Get();
+        diagnostic.ProcessorId = record.ProcessorID;
+        diagnostic.OutputKind = String(outputKind);
+        diagnostic.Message = TEXT("The requested artifact output has no supported build pipeline.");
+        return true;
+    }
+
+    AssetBuildJobStatus GetArtifactBuildStatusInternal(const AssetRecord& record, const StringView& outputKind, AssetPipelineDiagnostic& diagnostic)
+    {
+        if (outputKind == TEXT("thumbnail"))
+        {
+#if COMPILE_WITH_TEXTURE_TOOL
+            if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+                return TexturePipelineService::GetThumbnailStatus(record.ID, diagnostic);
+#endif
+        }
+        else if (outputKind == TEXT("runtime"))
+        {
+#if COMPILE_WITH_TEXTURE_TOOL
+            if (record.ProcessorID == TextureProcessorSettings::ProcessorID())
+                return TexturePipelineService::GetStatus(record.ID, diagnostic);
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+            if (record.ProcessorID == ModelProcessorSettings::ProcessorID())
+                return ModelPipelineService::GetStatus(record.ID, diagnostic);
+#endif
+            if (GraphPipelineService::OwnsProcessor(record.ProcessorID))
+                return GraphPipelineService::GetStatus(record.ID, diagnostic);
+        }
+
+        diagnostic = AssetPipelineDiagnostic();
+        diagnostic.Code = AssetPipelineDiagnosticCode::ProcessorMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = record.ID;
+        diagnostic.SourcePath = record.SourcePath.Get();
+        diagnostic.ProcessorId = record.ProcessorID;
+        diagnostic.OutputKind = String(outputKind);
+        diagnostic.Message = TEXT("The requested artifact output has no supported build pipeline.");
+        return AssetBuildJobStatus::Invalid;
+    }
+
+    String ArtifactBuildStatusName(AssetBuildJobStatus status)
+    {
+        switch (status)
+        {
+        case AssetBuildJobStatus::Queued: return TEXT("Queued");
+        case AssetBuildJobStatus::Building: return TEXT("Building");
+        case AssetBuildJobStatus::Publishing: return TEXT("Publishing");
+        case AssetBuildJobStatus::Succeeded: return TEXT("Succeeded");
+        case AssetBuildJobStatus::Failed: return TEXT("Failed");
+        case AssetBuildJobStatus::Cancelled: return TEXT("Cancelled");
+        default: return TEXT("Invalid");
+        }
+    }
+#endif
+
     String NormalizeAbsolutePath(const StringView& path)
     {
         String result(path);
@@ -703,6 +787,64 @@ bool AssetDatabaseFacade::Scan(bool strictMetadata)
 #else
     return true;
 #endif
+}
+
+bool AssetDatabaseFacade::RequestArtifactBuild(const Guid& assetID, const StringView& outputKind)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    AssetRecord record;
+    AssetPipelineDiagnostic diagnostic;
+    if (!assetID.IsValid() || !AssetDatabase::Get().TryGetRecord(assetID, record))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = assetID;
+        diagnostic.OutputKind = String(outputKind);
+        diagnostic.Message = TEXT("Asset database contains no record for the requested artifact build.");
+    }
+    else if (!RequestArtifactBuildInternal(record, outputKind, diagnostic))
+    {
+        return false;
+    }
+    Array<AssetPipelineDiagnostic> diagnostics;
+    diagnostics.Add(diagnostic);
+    SetDiagnostics(diagnostics);
+    return true;
+#else
+    return true;
+#endif
+}
+
+String AssetDatabaseFacade::GetArtifactBuildStatus(const Guid& assetID, const StringView& outputKind)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    AssetRecord record;
+    if (!assetID.IsValid() || !AssetDatabase::Get().TryGetRecord(assetID, record))
+        return TEXT("Invalid");
+    AssetPipelineDiagnostic diagnostic;
+    return ArtifactBuildStatusName(GetArtifactBuildStatusInternal(record, outputKind, diagnostic));
+#else
+    return TEXT("Invalid");
+#endif
+}
+
+AssetPipelineDiagnostic AssetDatabaseFacade::GetArtifactBuildDiagnostic(const Guid& assetID, const StringView& outputKind)
+{
+    AssetPipelineDiagnostic diagnostic;
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    AssetRecord record;
+    if (!assetID.IsValid() || !AssetDatabase::Get().TryGetRecord(assetID, record))
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = assetID;
+        diagnostic.OutputKind = String(outputKind);
+        diagnostic.Message = TEXT("Asset database contains no record for the requested artifact build.");
+        return diagnostic;
+    }
+    GetArtifactBuildStatusInternal(record, outputKind, diagnostic);
+#endif
+    return diagnostic;
 }
 
 bool AssetDatabaseFacade::LoadOrScan(bool strictMetadata)
