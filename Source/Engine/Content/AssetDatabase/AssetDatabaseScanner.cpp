@@ -36,6 +36,10 @@ namespace
 
     bool IsExcluded(const StringView& path, const StringView& contentRoot, const StringView& libraryRoot)
     {
+        // File-list collection is a strict root boundary. In particular, an explicitly supplied
+        // project-private ExternalActors path must not be hashed, diagnosed, or imported.
+        if (!AssetPathPolicy::IsSameOrChild(path, contentRoot))
+            return true;
         if (AssetPathPolicy::IsSameOrChild(path, libraryRoot))
             return true;
         String normalized(path);

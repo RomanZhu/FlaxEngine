@@ -128,6 +128,25 @@ namespace
     Array<AssetDatabaseFileState> LastFileStates;
     SourceHashCache HashCache;
     bool IsBound = false;
+    bool IsFacadeAssetPath(const StringView& path);
+    bool TrySanitizeFacadePath(const StringView& path, const Guid& ownerAssetGuid, String& result);
+
+    bool IsFacadeRecord(const AssetRecord& record)
+    {
+        return IsFacadeAssetPath(record.SourcePath.Get());
+    }
+
+    bool IsFacadeAssetGuid(const Guid& assetGuid)
+    {
+        AssetRecord record;
+        return AssetDatabase::Get().TryGetRecord(assetGuid, record) && IsFacadeRecord(record);
+    }
+
+    bool IsKnownPrivateAssetGuid(const Guid& assetGuid)
+    {
+        AssetRecord record;
+        return AssetDatabase::Get().TryGetRecord(assetGuid, record) && !IsFacadeRecord(record);
+    }
 
     class FacadeModificationProcessor final : public IAssetModificationProcessor
     {
@@ -305,19 +324,26 @@ namespace
         result.RefreshId = change.RefreshId;
         result.Pass = change.Pass;
         for (const AssetAddedChange& value : change.Added)
-            result.Added.Add(value.AssetGuid);
+            if (IsFacadeAssetPath(value.Path))
+                result.Added.Add(value.AssetGuid);
         for (const AssetRemovedChange& value : change.Removed)
-            result.Removed.Add(value.AssetGuid);
+            if (IsFacadeAssetPath(value.PreviousPath))
+                result.Removed.Add(value.AssetGuid);
         for (const AssetMovedChange& value : change.Moved)
-            result.Changed.Add(value.AssetGuid);
+            if (IsFacadeAssetPath(value.PreviousPath) || IsFacadeAssetPath(value.Path))
+                result.Changed.Add(value.AssetGuid);
         for (const AssetSourceChangedChange& value : change.SourceChanged)
-            result.Changed.Add(value.AssetGuid);
+            if (!IsKnownPrivateAssetGuid(value.AssetGuid))
+                result.Changed.Add(value.AssetGuid);
         for (const AssetMetadataChangedChange& value : change.MetadataChanged)
-            result.Changed.Add(value.AssetGuid);
+            if (!IsKnownPrivateAssetGuid(value.AssetGuid))
+                result.Changed.Add(value.AssetGuid);
         for (const AssetObjectsChangedChange& value : change.ObjectsChanged)
-            result.Changed.Add(value.AssetGuid);
+            if (!IsKnownPrivateAssetGuid(value.AssetGuid))
+                result.Changed.Add(value.AssetGuid);
         for (const AssetStatusChangedChange& value : change.StatusChanged)
-            result.StatusChanged.Add(value.AssetGuid);
+            if (!IsKnownPrivateAssetGuid(value.AssetGuid))
+                result.StatusChanged.Add(value.AssetGuid);
         return result;
     }
 
@@ -361,11 +387,11 @@ namespace
         default: result.Kind = TEXT("Unknown"); break;
         }
         result.TargetObject = AssetObjectId(AssetGuid(dependency.TargetAssetGuid), dependency.TargetLocalFileId);
-        result.SourcePath = dependency.SourcePath;
+        TrySanitizeFacadePath(dependency.SourcePath, dependency.OwnerAssetGuid, result.SourcePath);
         result.ExactArtifact = String(dependency.ExactArtifact.ToString());
         result.CustomDependency = dependency.CustomDependency;
         result.ContentHash = String(dependency.Content.ToString());
-        result.OriginPath = dependency.OriginPath;
+        TrySanitizeFacadePath(dependency.OriginPath, dependency.OwnerAssetGuid, result.OriginPath);
         result.OriginLine = dependency.OriginLine;
         result.OriginColumn = dependency.OriginColumn;
         return result;
@@ -546,6 +572,27 @@ namespace
     {
         return AssetPathPolicy::IsSameOrChild(path, Globals::ProjectContentFolder) ||
             AssetPathPolicy::IsSameOrChild(path, AssetSourceRoots::GetEngineRoot());
+    }
+
+    bool TrySanitizeFacadePath(const StringView& path, const Guid& ownerAssetGuid, String& result)
+    {
+        result.Clear();
+        if (path.IsEmpty())
+            return true;
+        if (IsFacadeAssetPath(path))
+        {
+            result = path;
+            return true;
+        }
+        const String privateRoot = Globals::ProjectFolder / TEXT("ExternalActors");
+        if (!AssetPathPolicy::IsSameOrChild(path, privateRoot))
+            return false;
+        AssetRecord owner;
+        if (!ownerAssetGuid.IsValid() || !AssetDatabase::Get().TryGetRecord(ownerAssetGuid, owner) ||
+            !IsFacadeRecord(owner))
+            return false;
+        result = owner.SourcePath.Get();
+        return true;
     }
 
     String PathKey(const StringView& path)
@@ -1757,7 +1804,10 @@ Array<AssetDatabaseRecordInfo> AssetDatabaseQueryService::GetRecords()
     Array<AssetDatabaseRecordInfo> result;
     result.EnsureCapacity(snapshot.Records.Count());
     for (const AssetRecord& record : snapshot.Records)
-        result.Add(ToInfo(record));
+    {
+        if (IsFacadeRecord(record))
+            result.Add(ToInfo(record));
+    }
     if (result.Count() > 1)
     {
         std::sort(result.Get(), result.Get() + result.Count(), [](const AssetDatabaseRecordInfo& a, const AssetDatabaseRecordInfo& b)
@@ -1790,7 +1840,10 @@ Array<AssetDatabaseRecordInfo> AssetDatabaseQueryService::QueryRecords(const Ass
     AssetDatabase::Get().QueryRecords(nativeQuery, records);
     result.EnsureCapacity(records.Count());
     for (const AssetRecord& record : records)
-        result.Add(ToInfo(record));
+    {
+        if (IsFacadeRecord(record))
+            result.Add(ToInfo(record));
+    }
     return result;
 }
 
@@ -1800,7 +1853,7 @@ bool AssetDatabaseQueryService::TryGetRecord(const AssetObjectId& objectID, Asse
     if (!objectID.IsValid() || EnsureDatabaseLoaded())
         return false;
     AssetRecord record;
-    if (!AssetDatabase::Get().TryGetRecord(objectID, record))
+    if (!AssetDatabase::Get().TryGetRecord(objectID, record) || !IsFacadeRecord(record))
         return false;
     result = ToInfo(record);
     return true;
@@ -1814,7 +1867,7 @@ bool AssetDatabaseQueryService::TryGetMainRecordAtPath(const StringView& path, A
     String key = ResolveFacadeAssetPath(path).ToLower();
     key.Replace(TEXT('\\'), TEXT('/'));
     AssetRecord record;
-    if (!AssetDatabase::Get().TryGetMainRecordByPath(key, record))
+    if (!AssetDatabase::Get().TryGetMainRecordByPath(key, record) || !IsFacadeRecord(record))
         return false;
     result = ToInfo(record);
     return true;
@@ -1823,7 +1876,7 @@ bool AssetDatabaseQueryService::TryGetMainRecordAtPath(const StringView& path, A
 Array<String> AssetDatabaseQueryService::GetLabels(const Guid& sourceID)
 {
     Array<String> result;
-    if (sourceID.IsValid() && !EnsureDatabaseLoaded())
+    if (sourceID.IsValid() && !EnsureDatabaseLoaded() && IsFacadeAssetGuid(sourceID))
         AssetDatabase::Get().GetLabels(sourceID, result);
     return result;
 }
@@ -1881,7 +1934,7 @@ String AssetPipelineService::GetCustomDependencyHash(const StringView& name)
 Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetDependencies(const AssetObjectId& objectID)
 {
     Array<AssetDatabaseDependencyInfo> result;
-    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !IsFacadeAssetGuid(objectID.Asset.Value))
         return result;
     const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
     if (!snapshot.IsValid())
@@ -1910,14 +1963,15 @@ Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetDependencies(co
 Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetReferencers(const AssetObjectId& objectID)
 {
     Array<AssetDatabaseDependencyInfo> result;
-    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !IsFacadeAssetGuid(objectID.Asset.Value))
         return result;
     const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
     if (!snapshot.IsValid())
         return result;
     for (const SourceAssetDependencyRow& dependency : snapshot.GetState().Dependencies)
     {
-        if (dependency.TargetAssetGuid == objectID.Asset.Value && dependency.TargetLocalFileId == objectID.LocalId)
+        if (dependency.TargetAssetGuid == objectID.Asset.Value && dependency.TargetLocalFileId == objectID.LocalId &&
+            IsFacadeAssetGuid(dependency.OwnerAssetGuid))
             result.Add(ToInfo(dependency));
     }
     if (result.Count() > 1)
@@ -1939,7 +1993,7 @@ Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetReferencers(con
 Array<AssetDatabasePublicationInfo> AssetDatabaseQueryService::GetPublications(const AssetObjectId& objectID)
 {
     Array<AssetDatabasePublicationInfo> result;
-    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !IsFacadeAssetGuid(objectID.Asset.Value))
         return result;
     const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
     if (!snapshot.IsValid())
@@ -1961,8 +2015,39 @@ Array<AssetDatabasePublicationInfo> AssetDatabaseQueryService::GetPublications(c
 
 Array<AssetPipelineDiagnostic> AssetDatabaseQueryService::GetDiagnostics()
 {
-    ScopeLock lock(StateLocker);
-    return LastDiagnostics;
+    Array<AssetPipelineDiagnostic> diagnostics;
+    {
+        ScopeLock lock(StateLocker);
+        diagnostics = LastDiagnostics;
+    }
+    Array<AssetPipelineDiagnostic> result;
+    result.EnsureCapacity(diagnostics.Count());
+    const String privateRoot = Globals::ProjectFolder / TEXT("ExternalActors");
+    for (AssetPipelineDiagnostic diagnostic : diagnostics)
+    {
+        if (AssetPathPolicy::IsSameOrChild(diagnostic.SourcePath, privateRoot))
+        {
+            AssetRecord owner;
+            if (!diagnostic.AssetGuid.IsValid() || !AssetDatabase::Get().TryGetRecord(diagnostic.AssetGuid, owner) ||
+                !IsFacadeRecord(owner))
+                continue;
+            diagnostic.SourcePath = owner.SourcePath.Get();
+            diagnostic.Related.Clear();
+        }
+        else
+        {
+            Array<String> publicRelated;
+            publicRelated.EnsureCapacity(diagnostic.Related.Count());
+            for (const String& related : diagnostic.Related)
+            {
+                if (!AssetPathPolicy::IsSameOrChild(related, privateRoot))
+                    publicRelated.Add(related);
+            }
+            diagnostic.Related = MoveTemp(publicRelated);
+        }
+        result.Add(MoveTemp(diagnostic));
+    }
+    return result;
 }
 
 AssetDatabaseChangeInfo AssetDatabaseQueryService::GetLastChange()
@@ -1994,7 +2079,9 @@ Guid AssetDatabaseQueryService::AssetPathToGUID(const StringView& path)
     String key = ResolveFacadeAssetPath(path).ToLower();
     key.Replace(TEXT('\\'), TEXT('/'));
     AssetRecord record;
-    return AssetDatabase::Get().TryGetMainRecordByPath(key, record) ? record.SourceAssetID : Guid::Empty;
+    return AssetDatabase::Get().TryGetMainRecordByPath(key, record) && IsFacadeRecord(record)
+        ? record.SourceAssetID
+        : Guid::Empty;
 }
 
 String AssetDatabaseQueryService::GUIDToAssetPath(const Guid& assetID)
@@ -2002,7 +2089,7 @@ String AssetDatabaseQueryService::GUIDToAssetPath(const Guid& assetID)
     if (!assetID.IsValid() || EnsureDatabaseLoaded())
         return String::Empty;
     AssetRecord record;
-    return AssetDatabase::Get().TryGetRecord(assetID, record)
+    return AssetDatabase::Get().TryGetRecord(assetID, record) && IsFacadeRecord(record)
         ? ToLogicalAssetPath(record.CanonicalPath.Get())
         : String::Empty;
 }
@@ -2015,7 +2102,7 @@ Array<String> AssetDatabaseQueryService::GetAllAssetPaths()
     const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
     for (const AssetRecord& record : snapshot.Records)
     {
-        if (record.IsMainAsset())
+        if (record.IsMainAsset() && IsFacadeRecord(record))
             result.Add(ToLogicalAssetPath(record.CanonicalPath.Get()));
     }
     if (result.Count() > 1)
@@ -2029,7 +2116,7 @@ bool AssetDatabaseQueryService::TryGetAssetObjectId(Asset* asset, AssetObjectId&
     if (!asset || EnsureDatabaseLoaded())
         return false;
     AssetRecord record;
-    if (!AssetDatabase::Get().TryGetRecord(asset->GetID(), record))
+    if (!AssetDatabase::Get().TryGetRecord(asset->GetID(), record) || !IsFacadeRecord(record))
         return false;
     result = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
     return true;
@@ -2040,13 +2127,13 @@ Guid AssetDatabaseQueryService::GetBackingAssetID(const AssetObjectId& objectID)
     if (!objectID.IsValid() || EnsureDatabaseLoaded())
         return Guid::Empty;
     AssetRecord record;
-    return AssetDatabase::Get().TryGetRecord(objectID, record) ? record.ID : Guid::Empty;
+    return AssetDatabase::Get().TryGetRecord(objectID, record) && IsFacadeRecord(record) ? record.ID : Guid::Empty;
 }
 
 String AssetDatabaseQueryService::GetCanonicalSourcePath(const Guid& assetID)
 {
     AssetRecord record;
-    return assetID.IsValid() && AssetDatabase::Get().TryGetRecord(assetID, record)
+    return assetID.IsValid() && AssetDatabase::Get().TryGetRecord(assetID, record) && IsFacadeRecord(record)
         ? String(record.SourcePath.Get())
         : String::Empty;
 }

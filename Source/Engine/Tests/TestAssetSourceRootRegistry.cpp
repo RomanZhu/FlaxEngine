@@ -67,6 +67,16 @@ TEST_CASE("Asset source root registry owns permissions visibility and logical pa
     REQUIRE_FALSE(registry.RegisterExternalReadOnlyRoot(Guid(5, 6, 7, 8), TEXT("Shared"), external,
         TEXT("External/Shared"), diagnostic));
     REQUIRE(registry.GetRoots().Count() == 5);
+    Array<AssetSourceRoot> browsableRoots;
+    registry.GetBrowsableRoots(browsableRoots);
+    REQUIRE(browsableRoots.Count() == 4);
+    for (const AssetSourceRoot& root : browsableRoots)
+    {
+        CHECK(root.Kind != AssetSourceRootKind::SceneFragments);
+        CHECK(root.IsPublic());
+        CHECK(root.PublicAssetNamespace);
+        CHECK(root.BrowserVisible);
+    }
 
     const AssetSourceRoot* projectRoot = FindRoot(registry, AssetSourceRootKind::ProjectContent);
     const AssetSourceRoot* fragmentsRoot = FindRoot(registry, AssetSourceRootKind::SceneFragments);
@@ -103,8 +113,9 @@ TEST_CASE("Asset source root registry owns permissions visibility and logical pa
     CHECK(AssetPathPolicy::IsSameOrChild(writable.AbsolutePath, projectRoot->PhysicalPath));
 
     ResolvedAssetSourcePath resolved;
-    REQUIRE_FALSE(registry.Resolve(externalActors / TEXT("scene/actor.sceneactor"), resolved, diagnostic));
-    CHECK(resolved.Root.Kind == AssetSourceRootKind::SceneFragments);
+    CHECK(registry.Resolve(externalActors / TEXT("scene/actor.sceneactor"), resolved, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
+    CHECK(diagnostic.SourcePath.IsEmpty());
     CHECK(registry.Resolve(root / TEXT("SceneActors/scene/actor.actor"), resolved, diagnostic));
     CHECK(registry.Resolve(TEXT("ExternalActors/scene/actor.sceneactor"), resolved, diagnostic));
     CHECK(registry.Resolve(TEXT("SceneActors/scene/actor.actor"), resolved, diagnostic));
@@ -114,6 +125,20 @@ TEST_CASE("Asset source root registry owns permissions visibility and logical pa
     String privateLogical;
     CHECK(registry.PhysicalToLogical(externalActors / TEXT("scene/actor.sceneactor"), privateLogical, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
+
+    const Guid ownerSceneGuid(0xabcdef01u, 0x23456789u, 0xabcdef01u, 0x23456789u);
+    const String ownerName = ownerSceneGuid.ToString(Guid::FormatType::N).ToLower();
+    const String ownerPath = externalActors / ownerName;
+    REQUIRE_FALSE(registry.ResolveForSceneFragments(ownerPath / TEXT("12/123.sceneactor"), ownerSceneGuid,
+        resolved, diagnostic));
+    CHECK(resolved.Root.Kind == AssetSourceRootKind::SceneFragments);
+    CHECK(registry.ResolveForSceneFragments(externalActors / ownerName.ToUpper() / TEXT("12/123.sceneactor"),
+        ownerSceneGuid, resolved, diagnostic));
+    CHECK(diagnostic.SourcePath.IsEmpty());
+    CHECK(registry.ResolveForSceneFragments(externalActors / Guid::New().ToString(Guid::FormatType::N).ToLower() /
+        TEXT("12/123.sceneactor"), ownerSceneGuid, resolved, diagnostic));
+    CHECK(diagnostic.SourcePath.IsEmpty());
+    CHECK(registry.ResolveForSceneFragments(ownerPath, Guid::Empty, resolved, diagnostic));
 
     REQUIRE_FALSE(registry.ResolveForScan(TEXT("PluginContent/Tests/Model.fbx"), resolved, diagnostic));
     CHECK(resolved.Root.Kind == AssetSourceRootKind::PluginContent);
@@ -149,5 +174,15 @@ TEST_CASE("Asset database scanner rejects the private ExternalActors root")
     CHECK(AssetDatabaseScanner::Collect(root, externalActors, library, options, previous, records, result));
     REQUIRE(result.Diagnostics.Count() == 1);
     CHECK(result.Diagnostics[0].Code == AssetPipelineDiagnosticCode::UndeclaredInput);
+    CHECK(result.Diagnostics[0].SourcePath.IsEmpty());
     CHECK(records.IsEmpty());
+
+    const String privateFragment = externalActors / TEXT("00000000000000000000000000000001/00/2.sceneactor");
+    Array<String> suppliedFiles;
+    suppliedFiles.Add(privateFragment);
+    CHECK_FALSE(AssetDatabaseScanner::CollectFromFiles(root, content, library, suppliedFiles, options, previous,
+        records, result));
+    CHECK(records.IsEmpty());
+    CHECK(result.Diagnostics.IsEmpty());
+    CHECK(result.FileStates.IsEmpty());
 }

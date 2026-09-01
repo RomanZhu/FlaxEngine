@@ -76,6 +76,16 @@ const Array<AssetSourceRoot>& AssetSourceRootRegistry::GetRoots() const
     return _roots;
 }
 
+void AssetSourceRootRegistry::GetBrowsableRoots(Array<AssetSourceRoot>& roots) const
+{
+    roots.Clear();
+    for (const AssetSourceRoot& root : _roots)
+    {
+        if (root.IsPublic() && root.PublicAssetNamespace && root.BrowserVisible)
+            roots.Add(root);
+    }
+}
+
 bool AssetSourceRootRegistry::RegisterProjectRoots(const StringView& contentRoot, AssetPipelineDiagnostic& diagnostic)
 {
     AssetSourceRoot content;
@@ -204,6 +214,33 @@ bool AssetSourceRootRegistry::ResolveForScan(const StringView& input, ResolvedAs
     return ResolveWithPermission(input, AssetSourceRootPermission::Scan, result, diagnostic);
 }
 
+bool AssetSourceRootRegistry::ResolveForSceneFragments(const StringView& input, const Guid& ownerSceneGuid,
+    ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic) const
+{
+    if (!ownerSceneGuid.IsValid() || FileSystem::IsRelative(input) ||
+        ResolveWithPermission(input, AssetSourceRootPermission::Read, result, diagnostic, true) ||
+        result.Root.Kind != AssetSourceRootKind::SceneFragments)
+    {
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, StringView::Empty,
+            TEXT("Private scene fragment access requires a valid owning scene."), AssetPipelineDiagnosticStage::Prepare);
+    }
+
+    const String ownerPath = result.Root.PhysicalPath / ownerSceneGuid.ToString(Guid::FormatType::N).ToLower();
+    String candidate(input);
+    FileSystem::NormalizePath(candidate);
+    candidate.Replace((Char)92, '/');
+    const bool exactOwner = candidate == ownerPath;
+    const bool ownedChild = candidate.Length() > ownerPath.Length() && candidate.StartsWith(ownerPath) &&
+        candidate[ownerPath.Length()] == '/';
+    if (!exactOwner && !ownedChild)
+    {
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, StringView::Empty,
+            TEXT("Private scene fragment path does not belong to the owning scene."), AssetPipelineDiagnosticStage::Prepare);
+    }
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
 bool AssetSourceRootRegistry::ResolveForGenericMutation(const StringView& input, AssetPathPolicy::ProjectPath& result,
     AssetPipelineDiagnostic& diagnostic) const
 {
@@ -247,7 +284,7 @@ bool AssetSourceRootRegistry::LogicalToPhysical(const StringView& logicalPath, S
 }
 
 bool AssetSourceRootRegistry::ResolveWithPermission(const StringView& input, AssetSourceRootPermission permission,
-    ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic) const
+    ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic, bool allowPrivate) const
 {
     result = ResolvedAssetSourcePath();
     if (input.IsEmpty())
@@ -272,8 +309,12 @@ bool AssetSourceRootRegistry::ResolveWithPermission(const StringView& input, Ass
     if (!selected)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, input,
             TEXT("Asset source path is outside every registered root."), AssetPipelineDiagnosticStage::Prepare);
+    if (!allowPrivate && !selected->IsPublic())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, StringView::Empty,
+            TEXT("Private scene source roots are unavailable to ordinary asset operations."), AssetPipelineDiagnosticStage::Prepare);
     if (!selected->HasPermission(permission))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, input,
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput,
+            selected->IsPublic() ? input : StringView::Empty,
             TEXT("Asset source root does not grant the requested operation."), AssetPipelineDiagnosticStage::Prepare);
 
     String absolute = candidate;

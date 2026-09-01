@@ -24,6 +24,9 @@ public:
 
     const Array<AssetSourceRoot>& GetRoots() const;
 
+    /// <summary>Copies only roots that may be presented by ordinary asset browsers.</summary>
+    void GetBrowsableRoots(Array<AssetSourceRoot>& roots) const;
+
     /// <summary>Registers public Content and private ExternalActors roots for a project.</summary>
     /// <returns>True on failure.</returns>
     bool RegisterProjectRoots(const StringView& contentRoot, AssetPipelineDiagnostic& diagnostic);
@@ -46,13 +49,19 @@ public:
     /// <returns>True on failure.</returns>
     bool Register(AssetSourceRoot root, AssetPipelineDiagnostic& diagnostic);
 
-    /// <summary>Resolves a readable logical or physical source path.</summary>
+    /// <summary>Resolves a readable public logical or physical source path.</summary>
     /// <returns>True on failure.</returns>
     bool Resolve(const StringView& input, ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic) const;
 
     /// <summary>Resolves a path that may be consumed by the ordinary database scanner.</summary>
     /// <returns>True on failure.</returns>
     bool ResolveForScan(const StringView& input, ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic) const;
+
+    /// <summary>Resolves the private canonical fragment directory owned by one scene.</summary>
+    /// <remarks>This is the only root-registry entry point for private ExternalActors paths.</remarks>
+    /// <returns>True on failure.</returns>
+    bool ResolveForSceneFragments(const StringView& input, const Guid& ownerSceneGuid,
+        ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic) const;
 
     /// <summary>Resolves a writable public path accepted by generic asset operations.</summary>
     /// <returns>True on failure.</returns>
@@ -69,5 +78,5 @@ public:
 
 private:
     bool ResolveWithPermission(const StringView& input, AssetSourceRootPermission permission,
-        ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic) const;
+        ResolvedAssetSourcePath& result, AssetPipelineDiagnostic& diagnostic, bool allowPrivate = false) const;
 };
