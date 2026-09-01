@@ -309,6 +309,8 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
         state->LogPath = logPath.Get();
     _impl->Jobs.emplace(request.Key, state);
     _impl->EnqueueLocked(state);
+    _impl->Metrics.QueuedJobs++;
+    _impl->Metrics.PeakQueuedJobs = Math::Max(_impl->Metrics.PeakQueuedJobs, _impl->Metrics.QueuedJobs);
     _impl->WriteLogLocked(state, AssetBuildJobStatus::Queued);
     _impl->Changed.notify_all();
     return AssetBuildRequestHandle(state, requester);
@@ -534,12 +536,14 @@ void AssetBuildService::Impl::Worker()
                     {
                         job = Queue[i];
                         Queue.erase(Queue.begin() + i);
+                        Metrics.QueuedJobs--;
                         break;
                     }
                     if (dependencyFailure.Code != AssetPipelineDiagnosticCode::None)
                     {
                         const auto rejected = Queue[i];
                         Queue.erase(Queue.begin() + i);
+                        Metrics.QueuedJobs--;
                         FinishLocked(rejected,
                             dependencyFailure.Code == AssetPipelineDiagnosticCode::BuildCancelled ? AssetBuildJobStatus::Cancelled : AssetBuildJobStatus::Failed,
                             dependencyFailure);
@@ -554,14 +558,21 @@ void AssetBuildService::Impl::Worker()
             ActiveMemory += job->Request.MemoryBytes;
             ActiveExternalTools += job->Request.ExternalToolSlots;
             ActiveWorkers++;
-            ActiveProcessorClasses[ProcessorKey(job->Request.ProcessorClass)]++;
+            const int32 processorConcurrency = ++ActiveProcessorClasses[ProcessorKey(job->Request.ProcessorClass)];
             if (job->Request.SerialGroup.HasChars())
                 ActiveSerialGroups.insert(ProcessorKey(job->Request.SerialGroup));
             job->BuildStartedAt = std::chrono::steady_clock::now();
-            Metrics.QueueWaitMilliseconds += std::chrono::duration_cast<std::chrono::milliseconds>(job->BuildStartedAt - job->QueuedAt).count();
+            const uint64 queueWait = std::chrono::duration_cast<std::chrono::milliseconds>(job->BuildStartedAt - job->QueuedAt).count();
+            Metrics.QueueWaitMilliseconds += queueWait;
+            Metrics.MaximumQueueWaitMilliseconds = Math::Max(Metrics.MaximumQueueWaitMilliseconds, queueWait);
             Metrics.BuildsStarted++;
+            Metrics.ActiveMemoryBytes = ActiveMemory;
             Metrics.PeakMemoryBytes = Math::Max(Metrics.PeakMemoryBytes, ActiveMemory);
+            Metrics.ActiveExternalTools = ActiveExternalTools;
+            Metrics.PeakExternalTools = Math::Max(Metrics.PeakExternalTools, ActiveExternalTools);
+            Metrics.ActiveWorkers = ActiveWorkers;
             Metrics.PeakWorkers = Math::Max(Metrics.PeakWorkers, ActiveWorkers);
+            Metrics.PeakProcessorConcurrency = Math::Max(Metrics.PeakProcessorConcurrency, processorConcurrency);
             job->Status.store(AssetBuildJobStatus::Building, std::memory_order_release);
             job->Result.Status = AssetBuildJobStatus::Building;
             WriteLogLocked(job, AssetBuildJobStatus::Building);
@@ -578,6 +589,9 @@ void AssetBuildService::Impl::Worker()
             ActiveMemory -= job->Request.MemoryBytes;
             ActiveExternalTools -= job->Request.ExternalToolSlots;
             ActiveWorkers--;
+            Metrics.ActiveMemoryBytes = ActiveMemory;
+            Metrics.ActiveExternalTools = ActiveExternalTools;
+            Metrics.ActiveWorkers = ActiveWorkers;
             const std::string processor = ProcessorKey(job->Request.ProcessorClass);
             const auto active = ActiveProcessorClasses.find(processor);
             ASSERT(active != ActiveProcessorClasses.end() && active->second > 0);
@@ -691,6 +705,7 @@ void AssetBuildService::Shutdown()
             }
         }
         _impl->Queue.clear();
+        _impl->Metrics.QueuedJobs = 0;
     }
     _impl->Changed.notify_all();
     for (std::thread& worker : _impl->Workers)

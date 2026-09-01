@@ -399,6 +399,148 @@ TEST_CASE("AssetBuildService schedules dependencies and bounds independent fanou
     CHECK(order[1] == 2);
 }
 
+TEST_CASE("AssetBuildService measures a bounded PNG and GLB scheduling cohort")
+{
+    const double measurementStarted = Platform::GetTimeSeconds();
+    const String library = BuildServiceLibrary(TEXT("AssetBuildServiceImporterCohort"));
+    const String root = StringUtils::GetDirectoryName(library);
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    AssetBuildService service;
+    AssetBuildServiceLimits limits;
+    limits.MaximumWorkers = 3;
+    limits.MaximumMemoryBytes = 96;
+    limits.MaximumExternalTools = 1;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+
+    std::atomic<int32> active { 0 };
+    std::atomic<int32> pngActive { 0 };
+    std::atomic<int32> glbActive { 0 };
+    std::atomic<int32> pngPeak { 0 };
+    std::atomic<int32> glbPeak { 0 };
+    std::atomic<bool> release { false };
+    auto updatePeak = [](std::atomic<int32>& peak, int32 current)
+    {
+        int32 observed = peak.load();
+        while (current > observed && !peak.compare_exchange_weak(observed, current))
+        {
+        }
+    };
+
+    const char* keys[] = { "cohort-png-a", "cohort-glb-a", "cohort-png-b", "cohort-glb-b", "cohort-png-c", "cohort-glb-c" };
+    Array<AssetBuildRequestHandle> cohort;
+    for (int32 i = 0; i < ARRAY_COUNT(keys); i++)
+    {
+        const bool png = (i & 1) == 0;
+        AssetBuildJobRequest request = BasicRequest(JobKey(keys[i]), Guid::New());
+        request.ProcessorClass = png ? TEXT("texture-importer") : TEXT("model-importer");
+        request.ProcessorID = png ? TEXT("Flax.Texture") : TEXT("Flax.Model");
+        request.MemoryBytes = png ? 24 : 40;
+        request.ExternalToolSlots = png ? 0 : 1;
+        request.ProcessorConcurrencyLimit = png ? 2 : 1;
+        std::atomic<int32>* familyActive = png ? &pngActive : &glbActive;
+        std::atomic<int32>* familyPeak = png ? &pngPeak : &glbPeak;
+        request.Build = [&, familyActive, familyPeak](const AssetCancellationToken& token, AssetPipelineDiagnostic&)
+        {
+            active++;
+            const int32 currentFamily = ++(*familyActive);
+            updatePeak(*familyPeak, currentFamily);
+            while (!release.load() && !token.IsCancellationRequested())
+                Platform::Sleep(1);
+            (*familyActive)--;
+            active--;
+            return false;
+        };
+        cohort.Add(service.Request(request));
+    }
+
+    REQUIRE(WaitUntil([&]() { return active.load() == 3; }));
+    CHECK(pngActive.load() == 2);
+    CHECK(glbActive.load() == 1);
+    const AssetBuildMetrics saturated = service.GetMetrics();
+    CHECK(saturated.ActiveWorkers == 3);
+    CHECK(saturated.ActiveMemoryBytes == 88);
+    CHECK(saturated.ActiveExternalTools == 1);
+    CHECK(saturated.QueuedJobs <= ARRAY_COUNT(keys));
+
+    std::atomic<int32> cancelledExecutions { 0 };
+    AssetBuildJobRequest cancelled = BasicRequest(JobKey("cohort-cancelled-glb"), Guid::New());
+    cancelled.ProcessorClass = TEXT("model-importer");
+    cancelled.ProcessorID = TEXT("Flax.Model");
+    cancelled.MemoryBytes = 40;
+    cancelled.ExternalToolSlots = 1;
+    cancelled.ProcessorConcurrencyLimit = 1;
+    cancelled.Build = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    {
+        cancelledExecutions++;
+        return false;
+    };
+    const AssetBuildRequestHandle cancelledHandle = service.Request(cancelled);
+    service.CancelRequester(cancelledHandle);
+
+    std::mutex selectionMutex;
+    Array<int32> selectionOrder;
+    const double selectionQueuedAt = Platform::GetTimeSeconds();
+    std::atomic<uint64> selectionLatencyMilliseconds { MAX_uint64 };
+    AssetBuildJobRequest background = BasicRequest(JobKey("cohort-background-png"), Guid::New());
+    background.ProcessorClass = TEXT("texture-importer");
+    background.ProcessorID = TEXT("Flax.Texture");
+    background.MemoryBytes = 24;
+    background.ProcessorConcurrencyLimit = 1;
+    background.Priority = AssetBuildJobPriority::Background;
+    background.Build = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    {
+        std::lock_guard<std::mutex> lock(selectionMutex);
+        selectionOrder.Add(1);
+        return false;
+    };
+    const AssetBuildRequestHandle backgroundHandle = service.Request(background);
+    AssetBuildJobRequest selected = BasicRequest(JobKey("cohort-selected-png"), Guid::New());
+    selected.ProcessorClass = TEXT("texture-importer");
+    selected.ProcessorID = TEXT("Flax.Texture");
+    selected.MemoryBytes = 24;
+    selected.ProcessorConcurrencyLimit = 1;
+    selected.Priority = AssetBuildJobPriority::Foreground;
+    selected.Build = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    {
+        selectionLatencyMilliseconds.store(static_cast<uint64>((Platform::GetTimeSeconds() - selectionQueuedAt) * 1000.0));
+        std::lock_guard<std::mutex> lock(selectionMutex);
+        selectionOrder.Add(2);
+        return false;
+    };
+    const AssetBuildRequestHandle selectedHandle = service.Request(selected);
+
+    release.store(true);
+    for (const AssetBuildRequestHandle& handle : cohort)
+        REQUIRE(handle.Wait(5000));
+    REQUIRE(cancelledHandle.Wait(5000));
+    REQUIRE(selectedHandle.Wait(5000));
+    REQUIRE(backgroundHandle.Wait(5000));
+    CHECK(cancelledHandle.GetStatus() == AssetBuildJobStatus::Cancelled);
+    CHECK(cancelledExecutions.load() == 0);
+    REQUIRE(selectionOrder.Count() == 2);
+    CHECK(selectionOrder[0] == 2);
+    CHECK(selectionOrder[1] == 1);
+    CHECK(selectionLatencyMilliseconds.load() < 5000);
+
+    const AssetBuildMetrics measured = service.GetMetrics();
+    CHECK(measured.PeakWorkers == 3);
+    CHECK(measured.PeakProcessorConcurrency == 2);
+    CHECK(pngPeak.load() == 2);
+    CHECK(glbPeak.load() == 1);
+    CHECK(measured.PeakMemoryBytes == 88);
+    CHECK(measured.PeakExternalTools == 1);
+    CHECK(measured.PeakQueuedJobs <= ARRAY_COUNT(keys) + 3);
+    CHECK(measured.MaximumQueueWaitMilliseconds < 5000);
+    CHECK(measured.ActiveWorkers == 0);
+    CHECK(measured.ActiveMemoryBytes == 0);
+    // External-tool slots model child importer processes and must be fully reclaimed.
+    CHECK(measured.ActiveExternalTools == 0);
+    CHECK(measured.QueuedJobs == 0);
+    CHECK(measured.Cancelled == 1);
+    CHECK(Platform::GetTimeSeconds() - measurementStarted < 5.0 * 60.0);
+}
+
 TEST_CASE("AssetBuildService cancels abandoned requests and closes publication before shutdown")
 {
     const String library = BuildServiceLibrary(TEXT("AssetBuildServiceCancellation"));

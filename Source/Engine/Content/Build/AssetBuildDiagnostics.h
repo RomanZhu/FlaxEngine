@@ -33,10 +33,18 @@ struct FLAXENGINE_API AssetBuildMetrics
     uint64 Failed = 0;
     uint64 Cancelled = 0;
     uint64 QueueWaitMilliseconds = 0;
+    uint64 MaximumQueueWaitMilliseconds = 0;
     uint64 BuildMilliseconds = 0;
     uint64 PublicationMilliseconds = 0;
+    uint64 ActiveMemoryBytes = 0;
     uint64 PeakMemoryBytes = 0;
+    int32 QueuedJobs = 0;
+    int32 PeakQueuedJobs = 0;
+    int32 ActiveExternalTools = 0;
+    int32 PeakExternalTools = 0;
+    int32 ActiveWorkers = 0;
     int32 PeakWorkers = 0;
+    int32 PeakProcessorConcurrency = 0;
 };
 
 struct FLAXENGINE_API AssetBuildJobSummary
