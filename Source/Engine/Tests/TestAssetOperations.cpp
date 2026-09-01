@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/AssetDatabase/AssetOperations.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseScanner.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
@@ -140,6 +141,51 @@ namespace
         }
     };
 
+    class ScanningOperationDatabase : public IAssetOperationDatabaseCallbacks
+    {
+    public:
+        String ProjectRoot;
+        String ContentRoot;
+        String LibraryRoot;
+        AssetDatabase Database;
+
+        ScanningOperationDatabase(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot)
+            : ProjectRoot(projectRoot)
+            , ContentRoot(contentRoot)
+            , LibraryRoot(libraryRoot)
+        {
+        }
+
+        bool ClearCopiedState(const Guid&, const Guid&, AssetPipelineDiagnostic& diagnostic) override
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+
+        bool ValidateImporterSettingsRevision(const AssetOperationTarget&, const AssetImporterSettingsRevision&,
+            AssetPipelineDiagnostic& diagnostic) override
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+
+        bool RefreshCommitted(const Array<AssetOperationCommit>&, AssetPipelineDiagnostic& diagnostic) override
+        {
+            AssetDatabaseScanOptions options;
+            options.StrictMetadata = true;
+            AssetDatabaseScanResult scan;
+            if (AssetDatabaseScanner::Scan(ProjectRoot, ContentRoot, LibraryRoot, options, Database, scan))
+                return true;
+            if (scan.HasBlockingDiagnostics())
+            {
+                diagnostic = scan.Diagnostics[0];
+                return true;
+            }
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+    };
+
     uint64 GetOperationMetaSemanticHash(const AssetMeta& meta)
     {
         StringAnsi canonical;
@@ -266,6 +312,87 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     Array<AssetPipelineDiagnostic> recoveryDiagnostics;
     CHECK_FALSE(operations.RecoverIncompleteTransactions(recoveryDiagnostics));
     CHECK(recoveryDiagnostics.IsEmpty());
+}
+
+TEST_CASE("Asset operations enforce persistent GUID lifecycle through scanner publication")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetGuidLifecycle-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    OperationProcessor processor;
+    ScanningOperationDatabase database(root, content, library);
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    AssetMeta sourceMeta = MakeOperationMeta();
+    sourceMeta.SubAssets[TEXT("mesh:Body")].CollisionSalt = 3;
+    sourceMeta.SubAssets[TEXT("mesh:Body")].PreviousKeys.Add(TEXT("mesh:OldBody"));
+    const Guid sourceSubAssetGuid = sourceMeta.SubAssets[TEXT("mesh:Body")].ID;
+    const String source = content / TEXT("Robot.gltf");
+    const byte sourceBytes[] = { 1, 2, 3, 4, 5 };
+    REQUIRE_FALSE(operations.CreateAsset(source, Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)),
+        sourceMeta, diagnostic));
+    AssetRecord record;
+    REQUIRE(database.Database.TryGetRecord(sourceMeta.ID, record));
+    REQUIRE(database.Database.TryGetRecord(sourceSubAssetGuid, record));
+    REQUIRE(FileSystem::FileExists(source));
+    REQUIRE(FileSystem::FileExists(source + TEXT(".meta")));
+
+    AssetOperationTarget target;
+    target.SourcePath = source;
+    target.ExpectedGuid = sourceMeta.ID;
+    const String moved = content / TEXT("Robot Moved.gltf");
+    REQUIRE_FALSE(operations.MoveAsset(target, moved, diagnostic));
+    AssetMeta movedMeta;
+    REQUIRE_FALSE(AssetMeta::Load(moved + TEXT(".meta"), movedMeta, diagnostic));
+    CHECK(movedMeta.ID == sourceMeta.ID);
+    REQUIRE(movedMeta.SubAssets.ContainsKey(TEXT("mesh:Body")));
+    CHECK(movedMeta.SubAssets[TEXT("mesh:Body")].ID == sourceSubAssetGuid);
+    REQUIRE(database.Database.TryGetRecord(sourceMeta.ID, record));
+    CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), moved));
+    REQUIRE(database.Database.TryGetRecord(sourceSubAssetGuid, record));
+    CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), moved));
+
+    target.SourcePath = moved;
+    const String copied = content / TEXT("Robot Copy.gltf");
+    Guid copiedGuid;
+    REQUIRE_FALSE(operations.CopyAsset(target, copied, copiedGuid, diagnostic));
+    AssetMeta copiedMeta;
+    REQUIRE_FALSE(AssetMeta::Load(copied + TEXT(".meta"), copiedMeta, diagnostic));
+    REQUIRE(copiedMeta.SubAssets.ContainsKey(TEXT("mesh:Body")));
+    const SubAssetMeta& copiedSubAsset = copiedMeta.SubAssets[TEXT("mesh:Body")];
+    CHECK(copiedMeta.ID == copiedGuid);
+    CHECK(copiedGuid != sourceMeta.ID);
+    CHECK(copiedSubAsset.ID != sourceSubAssetGuid);
+    CHECK(copiedSubAsset.LocalId == movedMeta.SubAssets[TEXT("mesh:Body")].LocalId);
+    CHECK(copiedSubAsset.CollisionSalt == movedMeta.SubAssets[TEXT("mesh:Body")].CollisionSalt);
+    CHECK(copiedSubAsset.PreviousKeys == movedMeta.SubAssets[TEXT("mesh:Body")].PreviousKeys);
+    REQUIRE(database.Database.TryGetRecord(copiedGuid, record));
+    REQUIRE(database.Database.TryGetRecord(copiedSubAsset.ID, record));
+
+    AssetTrashRecord trash;
+    REQUIRE_FALSE(operations.DeleteAsset(target, trash, diagnostic));
+    CHECK_FALSE(database.Database.TryGetRecord(sourceMeta.ID, record));
+    CHECK_FALSE(database.Database.TryGetRecord(sourceSubAssetGuid, record));
+    REQUIRE(database.Database.TryGetRecord(copiedGuid, record));
+    REQUIRE(database.Database.TryGetRecord(copiedSubAsset.ID, record));
+
+    const AssetMeta recreatedMeta = MakeOperationMeta();
+    CHECK(recreatedMeta.ID != sourceMeta.ID);
+    CHECK(recreatedMeta.ID != copiedGuid);
+    CHECK(recreatedMeta.SubAssets[TEXT("mesh:Body")].ID != sourceSubAssetGuid);
+    CHECK(recreatedMeta.SubAssets[TEXT("mesh:Body")].ID != copiedSubAsset.ID);
+    REQUIRE_FALSE(operations.CreateAsset(moved,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), recreatedMeta, diagnostic));
+    REQUIRE(database.Database.TryGetRecord(recreatedMeta.ID, record));
+    REQUIRE(database.Database.TryGetRecord(recreatedMeta.SubAssets[TEXT("mesh:Body")].ID, record));
+    CHECK_FALSE(database.Database.TryGetRecord(sourceMeta.ID, record));
+    CHECK_FALSE(database.Database.TryGetRecord(sourceSubAssetGuid, record));
+    REQUIRE(database.Database.TryGetRecord(copiedGuid, record));
+    REQUIRE(database.Database.TryGetRecord(copiedSubAsset.ID, record));
 }
 
 TEST_CASE("Asset operations publish canonical copy batches once")
