@@ -39,11 +39,6 @@ AssetDatabaseTransaction::AssetDatabaseTransaction(SourceAssetDatabase* owner, S
 {
 }
 
-AssetDatabaseTransaction::~AssetDatabaseTransaction()
-{
-    Rollback();
-}
-
 uint64 AssetDatabaseTransaction::GetBaseRevision() const
 {
     return _baseRevision;

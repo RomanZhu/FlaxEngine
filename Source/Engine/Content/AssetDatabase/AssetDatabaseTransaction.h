@@ -56,7 +56,10 @@ private:
 
 public:
     AssetDatabaseTransaction() = default;
-    ~AssetDatabaseTransaction();
+    ~AssetDatabaseTransaction()
+    {
+        Rollback();
+    }
 
     uint64 GetBaseRevision() const;
     const SourceAssetDatabaseState& GetState() const;
