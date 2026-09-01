@@ -277,18 +277,31 @@ String NormalizedAssetDatabaseStore::GetWalPath(const StringView& directory)
 }
 
 bool NormalizedAssetDatabaseStore::LoadCheckpoint(const StringView& directory, const Guid& projectId,
-    SourceAssetDatabaseState& state, uint64& generation, AssetPipelineDiagnostic& diagnostic)
+    SourceAssetDatabaseState& state, uint64& generation, AssetPipelineDiagnostic& diagnostic,
+    NormalizedAssetDatabaseLoadFailure& failure)
 {
+    failure = NormalizedAssetDatabaseLoadFailure::RecoverableDerivedState;
     const String manifestPath = GetManifestPath(directory);
     Array<byte> bytes;
     if (File::ReadAllBytes(manifestPath, bytes) || bytes.Count() != sizeof(Manifest))
         return Fail(diagnostic, manifestPath, TEXT("Normalized source database manifest is missing or truncated."));
     Manifest manifest;
     Platform::MemoryCopy(&manifest, bytes.Get(), sizeof(manifest));
-    if (manifest.Magic != ManifestMagic || manifest.Version != ManifestVersion ||
-        manifest.SchemaVersion < 3 || manifest.SchemaVersion > AssetDatabaseSchema::Version || manifest.ProjectId != projectId ||
-        manifest.Generation == 0 || manifest.Crc != HeaderCrc(manifest))
+    if (manifest.Magic != ManifestMagic || manifest.Crc != HeaderCrc(manifest))
         return Fail(diagnostic, manifestPath, TEXT("Normalized source database manifest is invalid."));
+    if (manifest.Version > ManifestVersion || manifest.SchemaVersion > AssetDatabaseSchema::Version)
+    {
+        failure = NormalizedAssetDatabaseLoadFailure::FutureVersion;
+        return Fail(diagnostic, manifestPath, TEXT("Normalized source database uses a newer unsupported format."));
+    }
+    if (manifest.ProjectId != projectId)
+    {
+        failure = NormalizedAssetDatabaseLoadFailure::ForeignProject;
+        return Fail(diagnostic, manifestPath, TEXT("Normalized source database belongs to another project."));
+    }
+    if (manifest.Version != ManifestVersion || manifest.SchemaVersion < AssetDatabaseSchema::Version ||
+        manifest.Generation == 0)
+        return Fail(diagnostic, manifestPath, TEXT("Normalized source database manifest is obsolete or invalid."));
 
     SourceAssetDatabaseState loaded;
     for (uint32 i = 0; i < (uint32)TableId::Count; i++)
@@ -315,6 +328,7 @@ bool NormalizedAssetDatabaseStore::LoadCheckpoint(const StringView& directory, c
         return true;
     state = MoveTemp(loaded);
     generation = manifest.Generation;
+    failure = NormalizedAssetDatabaseLoadFailure::None;
     return false;
 }
 

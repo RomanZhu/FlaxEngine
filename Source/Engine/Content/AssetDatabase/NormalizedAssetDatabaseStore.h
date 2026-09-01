@@ -13,6 +13,14 @@ struct NormalizedAssetDatabaseWalRecord
     AssetChangeSet Changes;
 };
 
+enum class NormalizedAssetDatabaseLoadFailure : byte
+{
+    None,
+    RecoverableDerivedState,
+    FutureVersion,
+    ForeignProject,
+};
+
 /// <summary>
 /// Embedded durable normalized-table store. Checkpoints are generation-addressed table files and
 /// commits are append-only, checksummed WAL frames published at one revision.
@@ -24,7 +32,7 @@ public:
     static String GetWalPath(const StringView& directory);
 
     static bool LoadCheckpoint(const StringView& directory, const Guid& projectId, SourceAssetDatabaseState& state,
-        uint64& generation, AssetPipelineDiagnostic& diagnostic);
+        uint64& generation, AssetPipelineDiagnostic& diagnostic, NormalizedAssetDatabaseLoadFailure& failure);
     static bool SaveCheckpoint(const StringView& directory, const SourceAssetDatabaseState& state,
         uint64& generation, AssetPipelineDiagnostic& diagnostic);
 

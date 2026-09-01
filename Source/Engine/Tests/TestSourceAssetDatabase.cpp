@@ -58,6 +58,13 @@ namespace
         result.IsMain = localFileId == 1;
         return result;
     }
+
+    bool FileBytesEqual(const StringView& path, const Array<byte>& expected)
+    {
+        Array<byte> current;
+        return !File::ReadAllBytes(path, current) && current.Count() == expected.Count() &&
+               (!current.HasItems() || Platform::MemoryCompare(current.Get(), expected.Get(), current.Count()) == 0);
+    }
 }
 
 TEST_CASE("Source asset database schema persists exact composite object identity")
@@ -93,6 +100,74 @@ TEST_CASE("Source asset database schema persists exact composite object identity
     state.Database.SchemaVersion = 4;
     state.Serialize(serialized);
     CHECK(SourceAssetDatabaseState::Deserialize(serialized.Get(), serialized.Count(), loaded, diagnostic));
+}
+
+TEST_CASE("Source asset database preserves foreign and future normalized stores")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseRejectedStore-") + Guid::New().ToString(Guid::FormatType::N));
+    const String library = root / TEXT("Library");
+    const String content = root / TEXT("Content");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const String authoredPath = content / TEXT("Authored.asset");
+    const byte authoredBytes[] = { 1, 2, 3, 4 };
+    REQUIRE_FALSE(File::WriteAllBytes(authoredPath, authoredBytes, ARRAY_COUNT(authoredBytes)));
+
+    const Guid projectId = Guid::New();
+    const Guid assetId = Guid::New();
+    AssetPipelineDiagnostic diagnostic;
+    SourceAssetDatabase database;
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    std::unique_ptr<AssetDatabaseTransaction> transaction = database.BeginTransaction();
+    REQUIRE(transaction);
+    transaction->UpsertSource(MakeSource(assetId, TEXT("Content/Authored.asset")));
+    REQUIRE_FALSE(transaction->Commit(diagnostic));
+    REQUIRE_FALSE(database.Close(&diagnostic));
+
+    const String databaseDirectory = library / TEXT("AssetDatabase");
+    const String manifestPath = databaseDirectory / TEXT("normalized-store.manifest");
+    Array<byte> originalManifest;
+    REQUIRE_FALSE(File::ReadAllBytes(manifestPath, originalManifest));
+    Array<String> tablePaths;
+    REQUIRE_FALSE(FileSystem::DirectoryGetFiles(tablePaths, databaseDirectory, TEXT("*.table")));
+    REQUIRE(tablePaths.HasItems());
+    Array<Array<byte>> originalTables;
+    originalTables.Resize(tablePaths.Count());
+    for (int32 i = 0; i < tablePaths.Count(); i++)
+        REQUIRE_FALSE(File::ReadAllBytes(tablePaths[i], originalTables[i]));
+
+    CHECK(database.Open(library, Guid::New(), diagnostic));
+    CHECK(diagnostic.Message.Contains(TEXT("another project")));
+    CHECK(FileBytesEqual(manifestPath, originalManifest));
+    for (int32 i = 0; i < tablePaths.Count(); i++)
+        CHECK(FileBytesEqual(tablePaths[i], originalTables[i]));
+    CHECK(FileSystem::FileExists(authoredPath));
+
+    REQUIRE(originalManifest.Count() == sizeof(TestNormalizedManifest));
+    TestNormalizedManifest futureManifest;
+    Platform::MemoryCopy(&futureManifest, originalManifest.Get(), sizeof(futureManifest));
+    futureManifest.SchemaVersion = AssetDatabaseSchema::Version + 1;
+    futureManifest.Crc = Crc::MemCrc32(&futureManifest, sizeof(futureManifest) - sizeof(futureManifest.Crc));
+    Array<byte> futureBytes;
+    futureBytes.Resize(sizeof(futureManifest), false);
+    Platform::MemoryCopy(futureBytes.Get(), &futureManifest, sizeof(futureManifest));
+    REQUIRE_FALSE(File::WriteAllBytes(manifestPath, futureBytes.Get(), futureBytes.Count()));
+
+    CHECK(database.Open(library, projectId, diagnostic));
+    CHECK(diagnostic.Message.Contains(TEXT("newer unsupported format")));
+    CHECK(FileBytesEqual(manifestPath, futureBytes));
+    for (int32 i = 0; i < tablePaths.Count(); i++)
+        CHECK(FileBytesEqual(tablePaths[i], originalTables[i]));
+    CHECK(FileSystem::FileExists(authoredPath));
+
+    REQUIRE_FALSE(File::WriteAllBytes(manifestPath, originalManifest.Get(), originalManifest.Count()));
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    SourceAssetRow source;
+    CHECK(database.Read().TryGetSource(assetId, source));
+    CHECK(source.AssetGuid == assetId);
+    REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
 TEST_CASE("Source asset database rebuilds an incompatible normalized cache")

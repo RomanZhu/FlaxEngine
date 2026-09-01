@@ -159,8 +159,12 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
     bool rebuiltIncompatibleStore = false;
     if (FileSystem::FileExists(_manifestPath))
     {
-        if (NormalizedAssetDatabaseStore::LoadCheckpoint(_directory, projectId, state, _checkpointGeneration, diagnostic))
+        NormalizedAssetDatabaseLoadFailure loadFailure;
+        if (NormalizedAssetDatabaseStore::LoadCheckpoint(_directory, projectId, state, _checkpointGeneration,
+            diagnostic, loadFailure))
         {
+            if (loadFailure != NormalizedAssetDatabaseLoadFailure::RecoverableDerivedState)
+                return true;
             // Library/AssetDatabase is a derived cache. Publish a fresh generation instead of
             // failing project startup when an older schema or corrupt checkpoint cannot be read.
             state = SourceAssetDatabaseState();
