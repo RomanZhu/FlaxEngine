@@ -368,8 +368,8 @@ namespace FlaxEditor.Modules
         {
             if (Find(assetId) is AssetItem item)
             {
-                if (item.ReferencesCount > 0)
-                    Editor.Thumbnails.RequestPreview(item);
+                if (item.HasThumbnailReference)
+                    Editor.Thumbnails.RequestPreview(item, false, true);
             }
             else
                 Editor.Thumbnails.DeletePreview(assetId);

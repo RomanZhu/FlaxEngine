@@ -171,6 +171,11 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
     CHECK(plans.load() == 0);
     CHECK(builds.load() == 0);
 
+    request.RequiredCompatibility.Clear();
+    REQUIRE_FALSE(resolver.Resolve(request, artifact, diagnostic));
+    CHECK(artifact.IsLastGood);
+    request.RequiredCompatibility = "runtime-v1";
+
     request.Policy = ArtifactResolvePolicy::NoBuild;
     CHECK(resolver.Resolve(request, artifact, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactRebuildRequired);

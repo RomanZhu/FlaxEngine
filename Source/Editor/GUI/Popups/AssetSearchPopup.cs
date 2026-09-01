@@ -36,7 +36,7 @@ namespace FlaxEditor.GUI
             public ContentItemView(ContentItem item)
             {
                 ContentItem = item;
-                ContentItem.AddReference(this);
+                ContentItem.AddReference(this, false);
 
                 OnItemRenamed(item);
                 TooltipText = item.Path;
@@ -54,6 +54,7 @@ namespace FlaxEditor.GUI
             /// <inheritdoc />
             public override void Draw()
             {
+                ContentItem.RequestThumbnail(this);
                 base.Draw();
 
                 // Draw icon

@@ -301,7 +301,7 @@ namespace FlaxEditor.Content.GUI
                 if (item.Visible && !_items.Contains(item))
                 {
                     item.Parent = this;
-                    item.AddReference(this);
+                    item.AddReference(this, false);
                     _items.Add(item);
                 }
             }

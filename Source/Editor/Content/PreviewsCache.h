@@ -101,10 +101,18 @@ public:
     API_FUNCTION() void Flush();
 
     /// <summary>
+    /// Determines whether this previews cache contains changes that have not been persisted yet.
+    /// </summary>
+    API_PROPERTY() FORCE_INLINE bool IsDirty() const
+    {
+        return _isDirty;
+    }
+
+    /// <summary>
     /// Determines whether this instance is flushing.
     /// </summary>
     /// <returns>True if this previews cache is flushing, otherwise false.</returns>
-    FORCE_INLINE bool IsFlushing() const
+    API_PROPERTY() FORCE_INLINE bool IsFlushing() const
     {
         return _flushTask != nullptr;
     }

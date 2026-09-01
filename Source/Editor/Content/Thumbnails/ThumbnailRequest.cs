@@ -78,6 +78,13 @@ namespace FlaxEditor.Content.Thumbnails
         public Guid CacheVersion;
 
         private DateTime _nextThumbnailLoadAttemptUtc;
+        private string _artifactOutputKind;
+        private bool _proxyPrepared;
+
+        /// <summary>
+        /// Gets the failure reported by the artifact pipeline.
+        /// </summary>
+        public string FailureMessage { get; private set; }
 
         /// <summary>
         /// Determines whether thumbnail can be drawn for the item.
@@ -101,16 +108,33 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
             {
-                Asset = AssetDatabaseFacade.LoadTextureThumbnail(Item.ID);
+                Asset = _artifactOutputKind == "thumbnail"
+                    ? AssetDatabaseFacade.LoadTextureThumbnail(Item.ID)
+                    : AssetDatabaseFacade.LoadAssetPreview(Item.ID);
                 if (Asset)
                 {
-                    CacheVersion = AssetDatabaseFacade.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
+                    CacheVersion = AssetDatabaseFacade.GetPublishedArtifactCacheID(Item.ID, _artifactOutputKind);
                     Proxy.OnThumbnailDrawPrepare(this);
+                    _proxyPrepared = true;
                     State = States.Prepared;
                 }
                 else
                 {
-                    _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
+                    var status = AssetDatabaseFacade.GetArtifactBuildStatus(Item.ID, _artifactOutputKind);
+                    if (status == "Failed" || status == "Cancelled" || status == "Invalid" || status == "Succeeded")
+                    {
+                        var diagnostic = AssetDatabaseFacade.GetArtifactBuildDiagnostic(Item.ID, _artifactOutputKind);
+                        FailureMessage = !string.IsNullOrEmpty(diagnostic.Message)
+                            ? diagnostic.Message
+                            : status == "Succeeded"
+                                ? "Artifact build succeeded but the published asset could not be loaded."
+                                : $"Artifact build ended with status {status}.";
+                        State = States.Failed;
+                    }
+                    else
+                    {
+                        _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
+                    }
                 }
                 return;
             }
@@ -132,8 +156,7 @@ namespace FlaxEditor.Content.Thumbnails
                 Asset = AssetDatabaseFacade.LoadTextureThumbnail(Item.ID);
                 if (!Asset)
                 {
-                    _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
-                    State = States.Waiting;
+                    BeginArtifactBuild("thumbnail");
                     return;
                 }
                 CacheVersion = AssetDatabaseFacade.GetPublishedArtifactCacheID(Item.ID, "thumbnail");
@@ -143,7 +166,7 @@ namespace FlaxEditor.Content.Thumbnails
                 Asset = AssetDatabaseFacade.LoadAssetPreview(Item.ID);
                 if (!Asset)
                 {
-                    State = States.Failed;
+                    BeginArtifactBuild("runtime");
                     return;
                 }
             }
@@ -152,7 +175,25 @@ namespace FlaxEditor.Content.Thumbnails
                 Asset = FlaxEngine.Content.LoadAsync<Asset>(Item.ID);
             }
             Proxy.OnThumbnailDrawPrepare(this);
+            _proxyPrepared = true;
             State = States.Prepared;
+        }
+
+        private void BeginArtifactBuild(string outputKind)
+        {
+            _artifactOutputKind = outputKind;
+            if (AssetDatabaseFacade.RequestArtifactBuild(Item.ID, outputKind))
+            {
+                var diagnostic = AssetDatabaseFacade.GetArtifactBuildDiagnostic(Item.ID, outputKind);
+                FailureMessage = !string.IsNullOrEmpty(diagnostic.Message)
+                    ? diagnostic.Message
+                    : "Artifact build request was rejected.";
+                State = States.Failed;
+                return;
+            }
+
+            _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
+            State = States.Waiting;
         }
 
         /// <summary>
@@ -175,7 +216,7 @@ namespace FlaxEditor.Content.Thumbnails
             if (State == States.Disposed)
                 throw new InvalidOperationException();
 
-            if (State != States.Created && State != States.Waiting)
+            if (_proxyPrepared)
             {
                 // Cleanup
                 Proxy.OnThumbnailDrawCleanup(this);

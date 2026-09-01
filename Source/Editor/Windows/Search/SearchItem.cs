@@ -149,7 +149,7 @@ namespace FlaxEditor.Windows.Search
         : base(name, type, item, finder, width, height)
         {
             _asset = item;
-            _asset.AddReference(this);
+            _asset.AddReference(this, false);
             _accentColor = Editor.Instance.ContentDatabase.GetProxy(item).AccentColor;
         }
 
@@ -224,6 +224,8 @@ namespace FlaxEditor.Windows.Search
         /// <inheritdoc />
         public override void Draw()
         {
+            _asset.RequestThumbnail(this);
+
             // Draw context menu hint
             if (_cm != null && _cm.Visible)
                 Render2D.FillRectangle(new Rectangle(Float2.Zero, Size), Color.Gray);

@@ -196,6 +196,7 @@ SpriteHandle PreviewsCache::OccupySlotVersioned(GPUTexture* source, const Guid& 
 {
     if (WaitForLoaded())
         return SpriteHandle::Invalid;
+    ScopeLock lock(Locker);
 
     // Find this asset slot or use the first empty
     int32 index = _assets.Find(id);
@@ -242,6 +243,7 @@ bool PreviewsCache::ReleaseSlot(const Guid& id)
     {
         _assets[index] = Guid::Empty;
         _versions[index] = Guid::Empty;
+        _isDirty = true;
         result = true;
     }
     return result;
