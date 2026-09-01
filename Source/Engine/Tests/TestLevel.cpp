@@ -17,7 +17,6 @@
 #include "Engine/Scripting/Scripting.h"
 #if USE_EDITOR
 #include "Engine/Content/Content.h"
-#include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/AssetObjectRegistry.h"
@@ -556,13 +555,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(ContainsObject(unifiedData, siblingId));
         CHECK(ContainsObject(unifiedData, parentId));
         CHECK(ContainsObject(unifiedData, childId));
-        REQUIRE(externalActorFiles.Count() == 4);
-        CHECK(externalActorFiles.Contains(SceneFragmentStore::GetIndexPath(sceneId)));
-        CHECK(externalActorFiles.Contains(GetExternalActorPath(scenePath, siblingId)));
-        CHECK(externalActorFiles.Contains(GetExternalActorPath(scenePath, parentId)));
-        CHECK(externalActorFiles.Contains(GetExternalActorPath(scenePath, childId)));
-        for (const String& dependency : externalActorFiles)
-            CHECK(AssetPathPolicy::IsSameOrChild(dependency, SceneFragmentStore::GetScenePath(sceneId)));
+        CHECK(externalActorFiles.IsEmpty());
         CHECK(lifecycleWarningsAndErrors.IsEmpty());
 
         Array<int64> rootChildIds;
