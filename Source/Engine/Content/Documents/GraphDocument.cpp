@@ -751,13 +751,9 @@ namespace
         }
         case VariantType::Asset:
         {
-            const Guid runtimeId = (Guid)value;
-            AssetObjectId objectId = Content::ResolveRuntimeObjectId(runtimeId);
-            if (objectId.IsNull() && runtimeId.IsValid())
-                objectId = AssetObjectId::Main(AssetGuid(runtimeId));
+            const Guid objectId = value.AsAsset ? value.AsAsset->GetPersistentObjectId() : Guid::Empty;
             AddString(object, "$type", "AssetReference", allocator);
-            AddString(object, "guid", GuidToken(objectId.Asset.Value), allocator);
-            object.AddMember("fileId", static_cast<int64>(objectId.LocalId), allocator);
+            AddString(object, "guid", GuidToken(objectId), allocator);
             if (value.Type.TypeName)
                 AddString(object, "typeName", StringAnsiView(value.Type.TypeName), allocator);
             break;

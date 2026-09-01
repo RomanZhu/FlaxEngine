@@ -73,6 +73,7 @@ Asset* BinaryAssetFactoryBase::New(const AssetLoadLocation& location)
 
     // Create asset object
     auto result = Create(info);
+    result->_internalObjectId = location.Artifact.ObjectID;
     result->SetResolvedArtifact(location.Artifact);
 
     // Perform fast init, we assume that given AssetInfo is valid 

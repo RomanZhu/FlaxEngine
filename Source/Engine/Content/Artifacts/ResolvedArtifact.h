@@ -3,6 +3,7 @@
 #pragma once
 
 #include "ArtifactKey.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetInfo.h"
 

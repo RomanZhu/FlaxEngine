@@ -330,7 +330,7 @@ bool ModelBase::LoadHeader(ReadStream& stream, byte& headerVersion)
     for (auto& slot : MaterialSlots)
     {
         stream.Read(materialId);
-        slot.Material = Content::ResolveRuntimeObjectId(materialId);
+        slot.Material = materialId;
         slot.ShadowsMode = (ShadowsCastingMode)stream.ReadByte();
         stream.Read(slot.Name, 11);
     }

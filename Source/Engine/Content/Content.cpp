@@ -2151,7 +2151,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
 
     if (hasDirectPackageLocation)
     {
-        if (assetInfo.ObjectID != objectId.Asset.Value)
+        if (assetInfo.ObjectID != persistentObjectId)
         {
             LOG(Error, "Resolved asset object identity changed from {0} to {1}.", objectId, assetInfo.ObjectID);
             LOAD_FAILED();
