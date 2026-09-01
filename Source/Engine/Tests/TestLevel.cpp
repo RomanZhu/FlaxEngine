@@ -1338,6 +1338,128 @@ TEST_CASE("LegacyContentAssetFileOperations")
 TEST_CASE("ExternalActorsSceneStorage Lifecycle")
 {
 
+    SECTION("Create update duplicate and delete preserve persistent identities")
+    {
+        const Guid sceneId = ParseGuid("45454545454545454545454545454511");
+        const Guid actorId = ParseGuid("45454545454545454545454545454512");
+        const String scenePath = GetTestScenePath(TEXT("ActorLifecycle"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+
+        AssetReference<Model> model = Content::LoadAsync<Model>(Globals::EngineContentFolder / TEXT("Editor/Primitives/Cube.flax"));
+        REQUIRE(model);
+        REQUIRE(!model->WaitForLoaded());
+        const Guid modelId = model.GetID();
+        REQUIRE(modelId.IsValid());
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        SCOPE_EXIT
+        {
+            if (scene)
+                scene->DeleteObject();
+        };
+        scene->UseExternalActors = true;
+
+        StaticModel* actor = StaticModel::Spawn(ScriptingObject::SpawnParams(actorId, StaticModel::TypeInitializer));
+        REQUIRE(actor);
+        actor->SetName(TEXT("Original"));
+        actor->Model = model.Get();
+        actor->SetParent(scene);
+        const int64 actorLocalId = actor->GetLocalFileId();
+
+        REQUIRE(!Level::SaveScene(scene));
+        SceneFragmentIndex createdIndex;
+        Array<Array<byte>> createdFragments;
+        String error;
+        REQUIRE(!SceneFragmentStore::Load(sceneId, createdIndex, createdFragments, error));
+        REQUIRE(createdIndex.Fragments.Count() == 1);
+        REQUIRE(createdFragments.Count() == 1);
+        CHECK(createdIndex.Fragments[0].RootActorLocalId == actorLocalId);
+        CHECK(actor->GetGlobalObjectId().SourceAsset == sceneId);
+        CHECK(actor->GetGlobalObjectId().LocalFileId == actorLocalId);
+
+        actor->SetName(TEXT("Updated"));
+        actor->SetPosition(Vector3(10.0f, 20.0f, 30.0f));
+        REQUIRE(!Level::SaveScene(scene));
+        SceneFragmentIndex updatedIndex;
+        Array<Array<byte>> updatedFragments;
+        REQUIRE(!SceneFragmentStore::Load(sceneId, updatedIndex, updatedFragments, error));
+        REQUIRE(updatedFragments.Count() == 1);
+        CHECK(updatedIndex.IndexRevision == createdIndex.IndexRevision + 1);
+        CHECK(updatedIndex.Fragments[0].Content != createdIndex.Fragments[0].Content);
+        CHECK(updatedIndex.Fragments[0].RootActorLocalId == actorLocalId);
+
+        Actor* duplicateBase = actor->Clone();
+        REQUIRE(duplicateBase);
+        StaticModel* duplicate = dynamic_cast<StaticModel*>(duplicateBase);
+        REQUIRE(duplicate);
+        duplicate->SetName(TEXT("Duplicate"));
+        duplicate->SetParent(scene);
+        const Guid duplicateRuntimeId = duplicate->GetID();
+        const int64 duplicateLocalId = duplicate->GetLocalFileId();
+        CHECK(duplicateRuntimeId != actorId);
+        CHECK(duplicateLocalId != actorLocalId);
+        CHECK(duplicate->Model.GetID() == modelId);
+
+        REQUIRE(!Level::SaveScene(scene));
+        SceneFragmentIndex duplicatedIndex;
+        Array<Array<byte>> duplicatedFragments;
+        REQUIRE(!SceneFragmentStore::Load(sceneId, duplicatedIndex, duplicatedFragments, error));
+        REQUIRE(duplicatedIndex.Fragments.Count() == 2);
+        CHECK(duplicatedIndex.IndexRevision == updatedIndex.IndexRevision + 1);
+        CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+        CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, duplicateRuntimeId)));
+
+        BytesContainer duplicateBeforeDelete;
+        ReadFileBytes(GetExternalActorPath(scenePath, duplicateRuntimeId), duplicateBeforeDelete);
+        actor->DeleteObject();
+        ObjectsRemovalService::Flush();
+        actor = nullptr;
+        REQUIRE(!Level::SaveScene(scene));
+
+        SceneFragmentIndex deletedIndex;
+        Array<Array<byte>> deletedFragments;
+        REQUIRE(!SceneFragmentStore::Load(sceneId, deletedIndex, deletedFragments, error));
+        REQUIRE(deletedIndex.Fragments.Count() == 1);
+        CHECK(deletedIndex.IndexRevision == duplicatedIndex.IndexRevision + 1);
+        CHECK(deletedIndex.Fragments[0].RootActorLocalId == duplicateLocalId);
+        CHECK(!FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+        CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, duplicateRuntimeId)));
+        BytesContainer duplicateAfterDelete;
+        ReadFileBytes(GetExternalActorPath(scenePath, duplicateRuntimeId), duplicateAfterDelete);
+        CHECK(AreBytesEqual(duplicateBeforeDelete, duplicateAfterDelete));
+
+        RefreshTestScene(scenePath);
+        SceneAsset* sceneAsset = Content::Load<SceneAsset>(scenePath);
+        REQUIRE(sceneAsset);
+        rapidjson_flax::StringBuffer reopenedBytes;
+        REQUIRE(!Level::SaveSceneAssetToBytes(sceneAsset, reopenedBytes, nullptr, false));
+        Content::UnloadAsset(sceneAsset);
+
+        scene->DeleteObject();
+        ObjectsRemovalService::Flush();
+        scene = nullptr;
+        BytesContainer bytes(reinterpret_cast<const byte*>(reopenedBytes.GetString()), static_cast<int32>(reopenedBytes.GetSize()));
+        Scene* reopened = Level::LoadSceneFromBytes(bytes);
+        REQUIRE(reopened);
+        SCOPE_EXIT
+        {
+            Level::UnloadScene(reopened);
+        };
+        StaticModel* reopenedDuplicate = reopened->FindActor<StaticModel>(TEXT("Duplicate"));
+        REQUIRE(reopenedDuplicate);
+        CHECK(reopenedDuplicate->GetLocalFileId() == duplicateLocalId);
+        CHECK(reopenedDuplicate->GetGlobalObjectId().SourceAsset == sceneId);
+        CHECK(reopenedDuplicate->GetGlobalObjectId().LocalFileId == duplicateLocalId);
+        CHECK(reopenedDuplicate->Model.GetID() == modelId);
+        CHECK(reopened->FindActor(TEXT("Updated")) == nullptr);
+    }
+
     SECTION("Cross-scene actor move publishes both fragment sets in one save")
     {
         const Guid sceneAId = ParseGuid("45454545454545454545454545454501");

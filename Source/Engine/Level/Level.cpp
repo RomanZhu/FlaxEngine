@@ -2252,7 +2252,10 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
 
         HashSet<SceneObject*> serializableObjects;
         for (SceneObject* object : allObjects)
+        {
+            object->SetPersistentDocumentIdentity(AssetGuid(sceneId), object->GetLocalFileId());
             serializableObjects.Add(object);
+        }
 
         Array<SceneFragmentWrite> fragments;
         Array<Actor*> actors;
