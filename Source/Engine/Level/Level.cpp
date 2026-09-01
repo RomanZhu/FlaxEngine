@@ -9,6 +9,7 @@
 #include "Scene/Scene.h"
 #include "ScenePrefabDocument.h"
 #include "ScenePartitionDocument.h"
+#include "SceneFragments/SceneFragmentStore.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Deprecated.h"
 #include "Engine/Content/JsonAsset.h"
@@ -50,7 +51,6 @@
 #if USE_EDITOR
 #include "Editor/Editor.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
-#include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Platform/MessageBox.h"
 #include "Engine/Engine/CommandLine.h"
 #include "Engine/Serialization/JsonSerializer.h"
@@ -116,7 +116,6 @@ enum class SceneResult
 
 namespace
 {
-    constexpr const Char* ExternalActorExtension = TEXT(".scenechunk");
     constexpr const char* ExternalActorsKey = "ExternalActors";
     constexpr const char* DataKey = "Data";
     constexpr const char* IDKey = "ID";
@@ -133,16 +132,11 @@ namespace
     struct ExternalActorFileInfo
     {
         String File;
+        Array<byte> Bytes;
         int64 ActorId = 0;
         int64 ParentId = 0;
         ExternalSiblingOrderKey SiblingOrderKey;
         bool IsValid = false;
-    };
-
-    struct ExternalActorPartition
-    {
-        AssetObjectId Object;
-        int64 RootFileId = 0;
     };
 
     rapidjson_flax::Value JsonKey(const char* key, rapidjson_flax::Value::AllocatorType& allocator)
@@ -187,66 +181,6 @@ namespace
         if (orderCompare != 0)
             return orderCompare < 0;
         return CompareFileIds(a.ActorId, b.ActorId) < 0;
-    }
-
-    String GetSceneActorsFolder(const StringView& scenePath)
-    {
-        return String(scenePath) + TEXT("-data");
-    }
-
-    String GetExternalActorsFolder(const StringView& scenePath)
-    {
-        return GetSceneActorsFolder(scenePath);
-    }
-
-    String GetExternalActorFilePath(const String& actorsFolder, int64 actorId)
-    {
-        const String actorIdText = String::Format(TEXT("{0}"), actorId);
-        const String shard = actorIdText.Length() >= 2 ? actorIdText.Substring(0, 2) : TEXT("00");
-        return actorsFolder / shard / actorIdText + ExternalActorExtension;
-    }
-
-    bool WriteAllBytesIfChanged(const StringView& path, const void* data, int32 length)
-    {
-        BytesContainer existingData;
-        if (!File::ReadAllBytes(path, existingData) &&
-            existingData.Length() == length &&
-            Platform::MemoryCompare(existingData.Get(), data, length) == 0)
-        {
-            return false;
-        }
-        return File::WriteAllBytes(path, data, length);
-    }
-
-    bool EnsureAuthoredFolder(const StringView& path)
-    {
-        if (!FileSystem::DirectoryExists(path) && FileSystem::CreateDirectory(path))
-            return true;
-        const String metaPath = String(path) + TEXT(".meta");
-        if (FileSystem::FileExists(metaPath))
-        {
-            AssetMeta existing;
-            AssetPipelineDiagnostic diagnostic;
-            if (AssetMeta::Load(metaPath, existing, diagnostic) || !existing.FolderAsset)
-            {
-                LOG(Error, "Invalid scene partition folder metadata '{0}': {1}", metaPath, diagnostic.Message);
-                return true;
-            }
-            return false;
-        }
-        AssetMeta metadata;
-        metadata.ID = Guid::New();
-        metadata.FolderAsset = true;
-        metadata.AssetType = TEXT("FlaxEngine.Folder");
-        metadata.SourceKind = AssetSourceKind::Folder;
-        metadata.Processor.ID = TEXT("Flax.Folder");
-        AssetPipelineDiagnostic diagnostic;
-        if (AssetMeta::SaveAtomic(metaPath, metadata, diagnostic))
-        {
-            LOG(Error, "Cannot create scene partition folder metadata '{0}': {1}", metaPath, diagnostic.Message);
-            return true;
-        }
-        return false;
     }
 
     bool ReadExternalActorData(const void* data, int32 length, rapidjson_flax::Document& document, const rapidjson_flax::Value*& actorData)
@@ -502,13 +436,8 @@ namespace
         writer.EndObject();
     }
 
-    bool SaveExternalActorFile(const String& actorsFolder, Actor* actor, const HashSet<SceneObject*>& serializableObjects,
-        HashSet<String>& writtenFiles, Array<ExternalActorPartition>& partitions)
+    bool BuildExternalActorFragment(Actor* actor, const HashSet<SceneObject*>& serializableObjects, SceneFragmentWrite& fragment)
     {
-        const String path = GetExternalActorFilePath(actorsFolder, actor->GetLocalFileId());
-        if (EnsureAuthoredFolder(actorsFolder) || EnsureAuthoredFolder(StringUtils::GetDirectoryName(path)))
-            return true;
-
         rapidjson_flax::StringBuffer runtimeBuffer;
         PrettyJsonWriter writer(runtimeBuffer);
         writer.StartObject();
@@ -540,36 +469,20 @@ namespace
         if (runtime.HasParseError() || data == runtime.MemberEnd() ||
             ScenePrefabDocument::ToSourceObjects(data->value, objects, allocator, false, conversionError))
         {
-            LOG(Error, "Cannot create authored scene partition '{0}': {1}", path, conversionError);
+            LOG(Error, "Cannot create private scene fragment for actor '{0}': {1}", actor->GetName(), conversionError);
             return true;
         }
-        source.AddMember("objects", objects.Move(), allocator);
-        rapidjson_flax::StringBuffer sourceBuffer;
-        PrettyJsonWriter sourceWriter(sourceBuffer);
-        source.Accept(sourceWriter.GetWriter());
-
-        writtenFiles.Add(path);
-        if (WriteExternalActorBytesIfChanged(path, sourceBuffer.GetString(), static_cast<int32>(sourceBuffer.GetSize())))
-            return true;
-        const Guid partitionGuid = AuthoredAssetDocumentService::CreateMetadata(path);
-        if (!partitionGuid.IsValid())
-            return true;
-        ExternalActorPartition partition;
-        partition.Object = AssetObjectId::Main(AssetGuid(partitionGuid));
-        partition.RootFileId = actor->GetLocalFileId();
-        partitions.Add(partition);
-        return false;
-    }
-
-    bool IsWrittenExternalActorFile(const HashSet<String>& writtenFiles, const String& path)
-    {
-        if (writtenFiles.Contains(path))
-            return true;
-        for (const auto& file : writtenFiles)
+        rapidjson_flax::StringBuffer payload;
+        PrettyJsonWriter payloadWriter(payload);
+        objects.Accept(payloadWriter.GetWriter());
+        fragment.RootActorLocalId = actor->GetLocalFileId();
+        fragment.ContainedLocalIds.Add(fragment.RootActorLocalId);
+        for (Script* script : actor->Scripts)
         {
-            if (FileSystem::AreFilePathsEquivalent(file.Item, path))
-                return true;
+            if (serializableObjects.Contains(script))
+                fragment.ContainedLocalIds.Add(script->GetLocalFileId());
         }
+        fragment.Payload.Set(reinterpret_cast<const byte*>(payload.GetString()), static_cast<int32>(payload.GetSize()));
         return false;
     }
 
@@ -586,25 +499,20 @@ namespace
         return true;
     }
 
-    bool ReadExternalActorDocument(const String& actorFile, rapidjson_flax::Document& actorDocument, const rapidjson_flax::Value*& actorData)
+    bool ReadExternalActorDocument(const String& actorFile, const Array<byte>& fileData,
+        rapidjson_flax::Document& actorDocument, const rapidjson_flax::Value*& actorData)
     {
-        BytesContainer fileData;
-        if (File::ReadAllBytes(actorFile, fileData))
-            return true;
-
-        actorDocument.Parse(fileData.Get<char>(), fileData.Length());
+        actorDocument.Parse(reinterpret_cast<const char*>(fileData.Get()), fileData.Count());
         if (actorDocument.HasParseError())
         {
             Log::JsonParseException(actorDocument.GetParseError(), actorDocument.GetErrorOffset(), actorFile);
             return true;
         }
 
-        auto data = actorDocument.FindMember(DataKey);
-        if (data == actorDocument.MemberEnd())
-            data = actorDocument.FindMember(SourceObjectsKey);
+        auto data = actorDocument.FindMember("payload");
         if (data == actorDocument.MemberEnd() || !data->value.IsArray())
         {
-            LOG(Error, "Missing scene chunk objects member in '{0}'.", actorFile);
+            LOG(Error, "Missing private scene fragment payload in '{0}'.", actorFile);
             return true;
         }
 
@@ -612,11 +520,11 @@ namespace
         return false;
     }
 
-    bool ReadExternalActorFileInfo(const String& actorFile, ExternalActorFileInfo& info)
+    bool ReadExternalActorFileInfo(const String& actorFile, Array<byte>& bytes, ExternalActorFileInfo& info)
     {
         rapidjson_flax::Document actorDocument;
         const rapidjson_flax::Value* actorData = nullptr;
-        if (ReadExternalActorDocument(actorFile, actorDocument, actorData))
+        if (ReadExternalActorDocument(actorFile, bytes, actorDocument, actorData))
             return true;
         if (actorData->Empty() || !(*actorData)[0].IsObject())
         {
@@ -625,6 +533,7 @@ namespace
         }
 
         info.File = actorFile;
+        info.Bytes = MoveTemp(bytes);
         auto actorId = (*actorData)[0].FindMember(FileIdKey);
         if (actorId == (*actorData)[0].MemberEnd())
             actorId = (*actorData)[0].FindMember(SourceFileIdKey);
@@ -642,7 +551,8 @@ namespace
         if (!sceneAsset || !sceneAsset->Data || !sceneAsset->Document.IsObject())
             return true;
 
-        const String actorsFolder = GetExternalActorsFolder(sceneAsset->GetPath());
+        const Guid sceneGuid = sceneAsset->GetID();
+        const String actorsFolder = SceneFragmentStore::GetScenePath(sceneGuid);
         auto& allocator = document.GetAllocator();
         document.SetObject();
         CopyDocumentMember(document, sceneAsset->Document, IDKey);
@@ -663,24 +573,27 @@ namespace
             data.PushBack(value, allocator);
         }
 
-        Array<String> actorFiles;
-        if (externalActorFiles)
-            externalActorFiles->Add(actorsFolder);
-        if (FileSystem::DirectoryExists(actorsFolder) &&
-            FileSystem::DirectoryGetFiles(actorFiles, actorsFolder, TEXT("*.scenechunk"), DirectorySearchOption::AllDirectories))
+        SceneFragmentIndex fragmentIndex;
+        Array<Array<byte>> fragmentBytes;
+        String fragmentError;
+        if (SceneFragmentStore::Load(sceneGuid, fragmentIndex, fragmentBytes, fragmentError))
         {
+            LOG(Error, "Cannot load private scene fragments for scene '{0}': {1}", sceneGuid, fragmentError);
             return true;
         }
+        if (externalActorFiles)
+            externalActorFiles->Add(SceneFragmentStore::GetIndexPath(sceneGuid));
 
         Array<ExternalActorFileInfo> actorInfos;
         HashSet<int64> actorIds;
-        for (const String& actorFile : actorFiles)
+        for (int32 fragmentIndexPosition = 0; fragmentIndexPosition < fragmentIndex.Fragments.Count(); fragmentIndexPosition++)
         {
+            const String actorFile = actorsFolder / fragmentIndex.Fragments[fragmentIndexPosition].RelativePhysicalPath;
             if (externalActorFiles)
                 externalActorFiles->Add(actorFile);
 
             ExternalActorFileInfo info;
-            if (ReadExternalActorFileInfo(actorFile, info))
+            if (ReadExternalActorFileInfo(actorFile, fragmentBytes[fragmentIndexPosition], info))
                 return true;
             if (info.ActorId == 0)
             {
@@ -744,7 +657,7 @@ namespace
 
             rapidjson_flax::Document actorDocument;
             const rapidjson_flax::Value* actorData = nullptr;
-            if (ReadExternalActorDocument(info.File, actorDocument, actorData))
+            if (ReadExternalActorDocument(info.File, info.Bytes, actorDocument, actorData))
                 return true;
 
             rapidjson_flax::Value runtimeObjects;
@@ -2281,10 +2194,6 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
 
     if (useExternalActorsStorage && scene->UseExternalActors)
     {
-        const String actorsFolder = GetExternalActorsFolder(scene->GetPath());
-        if (EnsureAuthoredFolder(actorsFolder))
-            return true;
-
         Array<SceneObject*> allObjects;
         SceneQuery::GetAllSerializableSceneObjects(scene, allObjects);
 
@@ -2292,28 +2201,23 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
         for (SceneObject* object : allObjects)
             serializableObjects.Add(object);
 
-        HashSet<String> writtenFiles;
-        Array<ExternalActorPartition> partitions;
+        Array<SceneFragmentWrite> fragments;
         Array<Actor*> actors;
         SceneQuery::GetAllActors(scene, actors);
         for (Actor* actor : actors)
         {
             if (!serializableObjects.Contains(actor))
                 continue;
-            if (SaveExternalActorFile(actorsFolder, actor, serializableObjects, writtenFiles, partitions))
+            SceneFragmentWrite fragment;
+            if (BuildExternalActorFragment(actor, serializableObjects, fragment))
                 return true;
+            fragments.Add(MoveTemp(fragment));
         }
-
-        Array<String> existingActorFiles;
-        if (FileSystem::DirectoryGetFiles(existingActorFiles, actorsFolder, TEXT("*.scenechunk"), DirectorySearchOption::AllDirectories))
-            return true;
-        for (const String& file : existingActorFiles)
+        String fragmentError;
+        if (SceneFragmentStore::Save(sceneId, fragments, fragmentError))
         {
-            if (!IsWrittenExternalActorFile(writtenFiles, file))
-            {
-                if (FileSystem::DeleteFile(file) || (FileSystem::FileExists(file + TEXT(".meta")) && FileSystem::DeleteFile(file + TEXT(".meta"))))
-                    return true;
-            }
+            LOG(Error, "Cannot save private scene fragments for scene '{0}': {1}", sceneId, fragmentError);
+            return true;
         }
 
         writer.StartObject();
@@ -2329,21 +2233,6 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
             writer.Int(FLAXENGINE_VERSION_BUILD);
             writer.JKEY("ExternalActors");
             writer.Bool(true);
-            writer.JKEY("Partitions");
-            writer.StartArray();
-            for (const ExternalActorPartition& partition : partitions)
-            {
-                writer.StartObject();
-                writer.JKEY("guid");
-                writer.String(partition.Object.Asset.Value.ToString(Guid::FormatType::N).ToLower());
-                writer.JKEY("fileId");
-                writer.Int64(partition.Object.LocalId);
-                writer.JKEY("rootFileId");
-                writer.Int64(partition.RootFileId);
-                writer.EndObject();
-            }
-            writer.EndArray(partitions.Count());
-
             // Json resource data
             writer.JKEY("Data");
             writer.StartArray();
@@ -2717,15 +2606,10 @@ bool Level::ConvertSceneToInternalActors(Scene* scene)
             return true;
         }
 
-        const String actorsFolder = GetSceneActorsFolder(path);
-        if (FileSystem::DirectoryExists(actorsFolder) && FileSystem::DeleteDirectory(actorsFolder))
+        String fragmentError;
+        if (SceneFragmentStore::Delete(scene->GetID(), fragmentError))
         {
-            LOG(Error, "Cannot delete scene actors folder '{0}'.", actorsFolder);
-            return true;
-        }
-        if (FileSystem::FileExists(actorsFolder + TEXT(".meta")) && FileSystem::DeleteFile(actorsFolder + TEXT(".meta")))
-        {
-            LOG(Error, "Cannot delete scene partition folder metadata '{0}.meta'.", actorsFolder);
+            LOG(Error, "Cannot delete private scene fragments for scene '{0}': {1}", scene->GetID(), fragmentError);
             return true;
         }
     }

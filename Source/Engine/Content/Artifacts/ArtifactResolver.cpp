@@ -102,6 +102,8 @@ namespace
         result.Artifact.StoragePath = outputPath;
         result.Artifact.OutputKind = String(selected->Kind);
         result.Artifact.Key = String(selected->Key.ToString());
+        result.Artifact.Content = selected->Content;
+        result.Artifact.Size = selected->Size;
         result.Artifact.StorageKind = ArtifactStorageKind::Generated;
         return false;
     }

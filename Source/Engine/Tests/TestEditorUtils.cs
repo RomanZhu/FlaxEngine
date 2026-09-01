@@ -887,22 +887,22 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
-        public void TestContentTransactionSidecarFailureRollsBackMainPath()
+        public void TestContentTransactionFragmentFailureRollsBackMainPath()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
             var journalRoot = Path.Combine(root, "Journal");
             var source = Path.Combine(root, "Scene.scene");
             var destination = Path.Combine(root, "Moved.scene");
-            var sourceSidecar = Path.Combine(root, "SceneActors", "Scene");
-            var destinationSidecar = Path.Combine(root, "SceneActors", "Moved");
+            var sourceSidecar = Path.Combine(root, "ExternalActors", Guid.NewGuid().ToString("N"));
+            var destinationSidecar = Path.Combine(root, "Trash", "ExternalActors", Path.GetFileName(sourceSidecar));
             Directory.CreateDirectory(sourceSidecar);
             File.WriteAllText(source, "scene");
-            File.WriteAllText(Path.Combine(sourceSidecar, "Actor.actor"), "actor");
+            File.WriteAllText(Path.Combine(sourceSidecar, "Actor.sceneactor"), "actor");
             try
             {
                 var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
                 plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
-                plan.Entries.Add(new ContentMutationEntry(sourceSidecar, destinationSidecar, ContentMutationPathRole.ExternalActorSidecar, true));
+                plan.Entries.Add(new ContentMutationEntry(sourceSidecar, destinationSidecar, ContentMutationPathRole.SceneFragments, true));
                 var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
                 {
                     new ContentMutationStep("main", new[] { 0 }, () =>
@@ -914,7 +914,7 @@ namespace FlaxEngine.Tests
                         if (File.Exists(destination) && !File.Exists(source)) File.Move(destination, source);
                         return File.Exists(source) && !File.Exists(destination);
                     }),
-                    new ContentMutationStep("sidecar", new[] { 1 },
+                    new ContentMutationStep("fragments", new[] { 1 },
                         () => ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, sourceSidecar, destinationSidecar, "Injected sidecar failure."),
                         () => Directory.Exists(sourceSidecar) && !Directory.Exists(destinationSidecar))
                 });
@@ -923,7 +923,7 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(result.RequiresRecovery);
                 Assert.IsTrue(File.Exists(source));
                 Assert.IsFalse(File.Exists(destination));
-                Assert.IsTrue(File.Exists(Path.Combine(sourceSidecar, "Actor.actor")));
+                Assert.IsTrue(File.Exists(Path.Combine(sourceSidecar, "Actor.sceneactor")));
                 Assert.IsFalse(Directory.Exists(destinationSidecar));
             }
             finally
@@ -1111,19 +1111,14 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
-        public void TestSceneActorsSidecarPathForStagedContentDelete()
+        public void TestSceneFragmentsPathForStagedContentDelete()
         {
-            var scenePath = Path.Combine(Globals.ProjectContentFolder, "Scenes", "Main.scene");
-            var folderPath = Path.Combine(Globals.ProjectContentFolder, "Scenes");
-            var filePath = Path.Combine(Globals.ProjectContentFolder, "Scenes", "Notes.txt");
+            var sceneId = Guid.NewGuid();
 
             Assert.AreEqual(
-                StringUtils.NormalizePath(Path.Combine(Globals.ProjectFolder, "SceneActors", "Scenes", "Main")),
-                StringUtils.NormalizePath(ContentItemFilesystemAction.GetSceneActorsFolderPath(scenePath, false)));
-            Assert.AreEqual(
-                StringUtils.NormalizePath(Path.Combine(Globals.ProjectFolder, "SceneActors", "Scenes")),
-                StringUtils.NormalizePath(ContentItemFilesystemAction.GetSceneActorsFolderPath(folderPath, true)));
-            Assert.IsNull(ContentItemFilesystemAction.GetSceneActorsFolderPath(filePath, false));
+                StringUtils.NormalizePath(Path.Combine(Globals.ProjectFolder, "ExternalActors", sceneId.ToString("N").ToLowerInvariant())),
+                StringUtils.NormalizePath(ContentItemFilesystemAction.GetSceneFragmentsFolderPath(sceneId)));
+            Assert.IsNull(ContentItemFilesystemAction.GetSceneFragmentsFolderPath(Guid.Empty));
         }
 
         [Test]
@@ -1159,18 +1154,6 @@ namespace FlaxEngine.Tests
             Assert.IsTrue(new FileProxy().IsProxyFor(item));
         }
 
-        [Test]
-        public void TestExternalActorPathMapsToScenePath()
-        {
-            var actorId = Guid.NewGuid().ToString("N");
-            var actorPath = Path.Combine(Globals.ProjectFolder, "SceneActors", "Scenes", "Main", "ExternalActors", actorId.Substring(0, 2), actorId + ".actor");
-
-            Assert.IsTrue(SceneModule.TryGetScenePathFromExternalActorPath(actorPath, out var scenePath));
-            Assert.AreEqual(
-                StringUtils.NormalizePath(Path.Combine(Globals.ProjectContentFolder, "Scenes", "Main.scene")),
-                StringUtils.NormalizePath(scenePath));
-            Assert.IsFalse(SceneModule.TryGetScenePathFromExternalActorPath(Path.Combine(Globals.ProjectContentFolder, "Scenes", "Main.actor"), out _));
-        }
     }
 }
 #endif

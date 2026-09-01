@@ -9,10 +9,9 @@
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/AssetDatabase/Identity/GlobalAssetObjectId.h"
-#include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Level/ScenePartitionDocument.h"
 #include "Engine/Level/ScenePrefabDocument.h"
+#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
@@ -307,54 +306,43 @@ bool JsonAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pr
     uint64 partitionBytes = 0;
     if (record.TypeName == TEXT("FlaxEngine.SceneAsset"))
     {
-        Array<ScenePartitionReference> partitions;
-        String partitionError;
-        if (ScenePartitionDocument::ReadSceneReferences(json, partitions, partitionError))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
-                record.ID, record.SourcePath.Get(), partitionError);
         const auto external = json.FindMember("externalActors");
+        if (external != json.MemberEnd() && !external->value.IsBool())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                record.ID, record.SourcePath.Get(), TEXT("externalActors must be a boolean."));
         payload->SceneUsesPartitions = external != json.MemberEnd() && external->value.GetBool();
-        const String partitionRoot = String(record.SourcePath.Get()) + TEXT("-data");
-        for (const ScenePartitionReference& partition : partitions)
+        if (payload->SceneUsesPartitions)
         {
-            AssetRecord partitionRecord;
-            if (!AssetDatabase::Get().TryGetRecord(partition.Object.Asset.Value, partitionRecord) ||
-                !partitionRecord.IsMainAsset() || partitionRecord.ProcessorID != TEXT("Flax.SceneChunk") ||
-                partitionRecord.Status != AssetRecordStatus::Ready ||
-                !AssetPathPolicy::IsSameOrChild(partitionRecord.SourcePath.Get(), partitionRoot))
+            SceneFragmentIndex fragmentIndex;
+            Array<Array<byte>> fragmentBytes;
+            String fragmentError;
+            if (SceneFragmentStore::Load(record.SourceAssetID, fragmentIndex, fragmentBytes, fragmentError))
             {
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
-                    record.ID, record.SourcePath.Get(), TEXT("Scene partition reference does not resolve to a ready .scenechunk source inside the companion scene-data directory."));
+                    record.ID, record.SourcePath.Get(), fragmentError);
             }
-            Array<byte> partitionSource;
-            ContentHash partitionHash;
-            AssetDependencyOrigin partitionOrigin;
-            partitionOrigin.Path = partitionRecord.SourcePath.Get();
-            if (context.ReadSourceFile(partitionRecord.SourcePath.Get(), partitionSource, partitionHash, partitionOrigin, diagnostic))
-                return true;
-            JsonDocument chunk;
-            chunk.Parse(reinterpret_cast<const char*>(partitionSource.Get()), partitionSource.Count());
-            int64 chunkRoot;
-            const JsonValue* chunkObjects;
-            if (chunk.HasParseError() || ScenePartitionDocument::ReadChunk(chunk, chunkRoot, chunkObjects, partitionError) ||
-                chunkRoot != partition.RootFileId)
+            for (int32 i = 0; i < fragmentIndex.Fragments.Count(); i++)
             {
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
-                    record.ID, partitionRecord.SourcePath.Get(), TEXT("Scene partition source is malformed or its rootFileId does not match the owner scene."));
+                const SceneFragmentIndexEntry& indexEntry = fragmentIndex.Fragments[i];
+                const Array<byte>& fragmentSource = fragmentBytes[i];
+                JsonDocument fragment;
+                fragment.Parse(reinterpret_cast<const char*>(fragmentSource.Get()), fragmentSource.Count());
+                int64 fragmentRoot;
+                const JsonValue* fragmentObjects;
+                String fragmentDocumentError;
+                if (fragment.HasParseError() || ScenePartitionDocument::ReadChunk(fragment, fragmentRoot, fragmentObjects, fragmentDocumentError) ||
+                    fragmentRoot != indexEntry.RootActorLocalId)
+                {
+                    return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                        record.ID, record.SourcePath.Get(), TEXT("Private scene fragment is malformed or its rootActorLocalId does not match the owner index."));
+                }
+                JsonAssetPreparedPartition preparedFragment;
+                preparedFragment.RootFileId = indexEntry.RootActorLocalId;
+                preparedFragment.SourceHash = indexEntry.Content;
+                preparedFragment.SourceJson.Set(reinterpret_cast<const char*>(fragmentSource.Get()), fragmentSource.Count());
+                partitionBytes += fragmentSource.Count();
+                payload->ScenePartitions.Add(MoveTemp(preparedFragment));
             }
-            AssetSemanticInterface semantic;
-            semantic.Version = 1;
-            semantic.Hash = partitionHash;
-            if (context.DeclareBuildInput(TEXT("scene-partition:") + partition.Object.ToString(), partition.Object,
-                ArtifactKey(), semantic, partitionOrigin, diagnostic))
-                return true;
-            JsonAssetPreparedPartition preparedPartition;
-            preparedPartition.Object = partition.Object;
-            preparedPartition.RootFileId = partition.RootFileId;
-            preparedPartition.SourceHash = partitionHash;
-            preparedPartition.SourceJson.Set(reinterpret_cast<const char*>(partitionSource.Get()), partitionSource.Count());
-            partitionBytes += partitionSource.Count();
-            payload->ScenePartitions.Add(MoveTemp(preparedPartition));
         }
     }
 
@@ -381,6 +369,11 @@ bool JsonAssetProcessor::BuildOutputKey(const PreparedAsset& prepared, const Art
     builder.AddGuid(StringAnsiView("effective-asset"), prepared.AssetID);
     builder.AddString(StringAnsiView("output-type"), prepared.OutputType);
     builder.AddHash(StringAnsiView("source"), payload->SourceHash);
+    for (int32 i = 0; i < payload->ScenePartitions.Count(); i++)
+    {
+        builder.AddUInt64(StringAnsi::Format("scene-fragment-root-{0}", i), payload->ScenePartitions[i].RootFileId);
+        builder.AddHash(StringAnsi::Format("scene-fragment-content-{0}", i), payload->ScenePartitions[i].SourceHash);
+    }
     for (int32 i = 0; i < prepared.Dependencies.Count(); i++)
     {
         if (prepared.Dependencies[i].AffectsBuildKey())

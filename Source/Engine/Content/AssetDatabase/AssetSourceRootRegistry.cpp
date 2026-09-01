@@ -97,7 +97,7 @@ bool AssetSourceRootRegistry::RegisterProjectRoots(const StringView& contentRoot
     fragments.RootId = SceneFragmentsRootId;
     fragments.Name = TEXT("project-external-actors");
     fragments.OwnerPath = _projectRoot;
-    fragments.PhysicalPath = _libraryRoot / TEXT("ExternalActors");
+    fragments.PhysicalPath = _projectRoot / TEXT("ExternalActors");
     fragments.Kind = AssetSourceRootKind::SceneFragments;
     fragments.Visibility = AssetSourceRootVisibility::Private;
     fragments.Permissions = Permissions(true, false, false);

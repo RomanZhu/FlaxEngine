@@ -25,7 +25,7 @@ TEST_CASE("Asset source root registry owns permissions visibility and logical pa
     const String root = Globals::TemporaryFolder / (TEXT("AssetSourceRoots-") + Guid::New().ToString(Guid::FormatType::N));
     const String content = root / TEXT("Content");
     const String library = root / TEXT("Library");
-    const String externalActors = library / TEXT("ExternalActors");
+    const String externalActors = root / TEXT("ExternalActors");
     const String engineOwner = root / TEXT("EngineInstallation");
     const String engine = engineOwner / TEXT("Source/Editor/Assets");
     const String plugin = root / TEXT("PluginContent");
@@ -85,7 +85,7 @@ TEST_CASE("Asset source root registry owns permissions visibility and logical pa
     ResolvedAssetSourcePath resolved;
     REQUIRE_FALSE(registry.Resolve(externalActors / TEXT("scene/actor.sceneactor"), resolved, diagnostic));
     CHECK(resolved.Root.Kind == AssetSourceRootKind::SceneFragments);
-    CHECK(registry.Resolve(TEXT("Library/ExternalActors/scene/actor.sceneactor"), resolved, diagnostic));
+    CHECK(registry.Resolve(TEXT("ExternalActors/scene/actor.sceneactor"), resolved, diagnostic));
     CHECK(registry.ResolveForGenericMutation(externalActors / TEXT("scene/actor.sceneactor"), writable, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
     CHECK(registry.ResolveForScan(externalActors / TEXT("scene/actor.sceneactor"), resolved, diagnostic));
@@ -114,7 +114,7 @@ TEST_CASE("Asset database scanner rejects the private ExternalActors root")
     const String root = Globals::TemporaryFolder / (TEXT("AssetSourceScannerRoots-") + Guid::New().ToString(Guid::FormatType::N));
     const String content = root / TEXT("Content");
     const String library = root / TEXT("Library");
-    const String externalActors = library / TEXT("ExternalActors");
+    const String externalActors = root / TEXT("ExternalActors");
     REQUIRE_FALSE(FileSystem::CreateDirectory(content));
     REQUIRE_FALSE(FileSystem::CreateDirectory(externalActors));
     REQUIRE_FALSE(FileSystem::CreateDirectory(library));

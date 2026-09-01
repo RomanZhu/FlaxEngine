@@ -71,20 +71,20 @@ bool ScenePartitionDocument::ReadChunk(const rapidjson_flax::Value& chunk, int64
     error.Clear();
     if (!chunk.IsObject())
         return Fail(error, TEXT("Scene chunk source must be a JSON object."));
-    const auto version = chunk.FindMember("sceneChunkVersion");
-    const auto root = chunk.FindMember("rootFileId");
-    const auto objectTable = chunk.FindMember("objects");
+    const auto version = chunk.FindMember("formatVersion");
+    const auto root = chunk.FindMember("rootActorLocalId");
+    const auto objectTable = chunk.FindMember("payload");
     if (version == chunk.MemberEnd() || !version->value.IsUint() || version->value.GetUint() != 1 ||
         root == chunk.MemberEnd() || !root->value.IsInt64() || root->value.GetInt64() <= 1 ||
         objectTable == chunk.MemberEnd() || !objectTable->value.IsArray())
     {
-        return Fail(error, TEXT("Scene chunk must contain sceneChunkVersion 1, a positive rootFileId, and an objects array."));
+        return Fail(error, TEXT("Scene fragment must contain formatVersion 1, a positive rootActorLocalId, and a payload array."));
     }
     if (ScenePrefabDocument::ValidateObjects(objectTable->value, false, error))
         return true;
     const auto firstId = objectTable->value[0].FindMember("fileId");
     if (firstId == objectTable->value[0].MemberEnd() || !firstId->value.IsInt64() || firstId->value.GetInt64() != root->value.GetInt64())
-        return Fail(error, TEXT("The first scene chunk object must match rootFileId."));
+        return Fail(error, TEXT("The first scene fragment object must match rootActorLocalId."));
     rootFileId = root->value.GetInt64();
     objects = &objectTable->value;
     return false;

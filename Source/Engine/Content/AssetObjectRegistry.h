@@ -65,6 +65,13 @@ public:
     void GetAllRuntimeIds(Array<Guid, HeapAllocation>& result) const;
     void GetAllRuntimeIdsByTypeName(const StringView& typeName, Array<Guid, HeapAllocation>& result) const;
 
+#if !USE_EDITOR
+    const RuntimeAssetCatalog& GetRuntimeCatalog() const
+    {
+        return _runtimeCatalog;
+    }
+#endif
+
 #if USE_EDITOR
     /// <summary>Registers every object stored in an editor-private package.</summary>
     void RegisterTransientPackage(FlaxStorage* storage);

@@ -19,6 +19,7 @@ namespace
     {
         AssetObjectLoadLocation result;
         result.Object = object;
+        result.InstanceID = object.ToRuntimeObjectGuid();
         result.StorageKind = AssetObjectStorageKind::EditorArtifact;
         result.TypeName = "FlaxEngine.Texture";
         result.StorageName = "artifact/object.bin";
@@ -107,7 +108,7 @@ namespace
     public:
         std::atomic<int32> Creates{0};
         std::atomic<int32> Destroys{0};
-        StringAnsi LastStorage;
+        String LastStorage;
 
         bool CreateObject(const AssetObjectLoadLocation& location, void*& instance,
             AssetPipelineDiagnostic& diagnostic) override
@@ -240,8 +241,28 @@ TEST_CASE("Cooked object loader resolves composite entries through runtime catal
     CHECK(result.Object == object);
     CHECK(result.Revision == 19);
     CHECK(result.State == LoadedAssetState::Loaded);
-    CHECK(factory.LastStorage == "base/objects.pak");
+    CHECK(factory.LastStorage == TEXT("base/objects.pak"));
     CHECK(editorResolver.Calls.load() == 0);
+}
+
+TEST_CASE("Object loader rematerializes an unloaded registry instance")
+{
+    const AssetObjectId object(AssetGuid(Guid(106, 0, 0, 0)), 4);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    resolver.Set(TestLocation(object, 1));
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetObjectLoadResult first;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(loader.Load(object, first, diagnostic));
+    REQUIRE_FALSE(registry.Remove(object, first.Instance));
+    CHECK(registry.Count() == 0);
+
+    AssetObjectLoadResult second;
+    REQUIRE_FALSE(loader.Load(object, second, diagnostic));
+    CHECK(second.Instance != first.Instance);
+    CHECK(factory.Creates.load() == 2);
 }
 
 TEST_CASE("Hot reload publishes atomically and notifies dependencies first")

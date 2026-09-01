@@ -22,9 +22,11 @@ enum class AssetObjectStorageKind : byte
 struct FLAXENGINE_API AssetObjectLoadLocation
 {
     AssetObjectId Object;
+    Guid InstanceID = Guid::Empty;
     AssetObjectStorageKind StorageKind = AssetObjectStorageKind::EditorArtifact;
     StringAnsi TypeName;
-    StringAnsi StorageName;
+    String SourceName;
+    String StorageName;
     uint64 Offset = 0;
     uint64 Size = 0;
     byte Compression = 0;
@@ -51,6 +53,16 @@ public:
     virtual bool ResolveCatalogObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
         AssetPipelineDiagnostic& diagnostic) = 0;
 };
+
+#if USE_EDITOR
+/// <summary>Production editor resolver backed by exact, build-on-demand artifact publication.</summary>
+class FLAXENGINE_API EditorArtifactAssetObjectResolver : public IEditorAssetObjectResolver
+{
+public:
+    bool ResolveArtifactObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+        AssetPipelineDiagnostic& diagnostic) override;
+};
+#endif
 
 /// <summary>Factory bridge that materializes resolved object bytes without constraining the concrete Asset type.</summary>
 class FLAXENGINE_API IAssetObjectFactory

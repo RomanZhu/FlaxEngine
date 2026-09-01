@@ -37,7 +37,7 @@ AssetSourceRootRegistry AssetSourceRoots::CreateScannerRegistry(const StringView
     String normalizedSource(sourceRoot);
     FileSystem::NormalizePath(normalizedProject);
     FileSystem::NormalizePath(normalizedSource);
-    const String externalActors = String(libraryRoot) / TEXT("ExternalActors");
+    const String externalActors = normalizedProject / TEXT("ExternalActors");
     const String defaultContent = normalizedProject / TEXT("Content");
     if (AssetPathPolicy::IsSameOrChild(normalizedSource, externalActors))
     {

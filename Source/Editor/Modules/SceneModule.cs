@@ -61,9 +61,6 @@ namespace FlaxEditor.Modules
 
         private const double SceneDiskChangePromptDelaySeconds = 0.5;
         private const double SceneDiskChangeIgnoreAfterSaveSeconds = 2.0;
-        private const string SceneActorsFolderName = "SceneActors";
-        private const string ExternalActorsFolderName = "ExternalActors";
-        private const string ExternalActorExtension = ".actor";
         private readonly object _sceneDiskChangesLock = new object();
         private readonly Dictionary<string, DateTime> _pendingSceneDiskChanges = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, DateTime> _ignoredSceneDiskChanges = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
@@ -73,10 +70,6 @@ namespace FlaxEditor.Modules
         private readonly HashSet<Guid> _capturedSceneEdits = new HashSet<Guid>();
         private int _sceneEditCaptureDepth;
         private Guid _activeSceneId;
-        private FileSystemWatcher _sceneActorsWatcher;
-        private DateTime _nextSceneActorsWatcherRetry;
-        private bool _sceneActorsWatcherError;
-        private bool _sceneActorsFolderWasMissing;
 
         /// <summary>
         /// Occurs when actor gets removed. Editor and all submodules should remove references to that actor.
@@ -487,12 +480,6 @@ namespace FlaxEditor.Modules
                 QueueSceneDiskChange(scenePath);
         }
 
-        private void QueueExternalActorDiskChange(string path)
-        {
-            if (TryGetScenePathFromExternalActorPath(path, out var scenePath))
-                QueueSceneDiskChange(scenePath);
-        }
-
         private void QueueSceneDiskChange(string scenePath)
         {
             if (string.IsNullOrEmpty(scenePath))
@@ -524,43 +511,9 @@ namespace FlaxEditor.Modules
             return true;
         }
 
-        internal static bool TryGetScenePathFromExternalActorPath(string path, out string scenePath)
-        {
-            scenePath = null;
-            if (!string.Equals(Path.GetExtension(path), ExternalActorExtension, StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            path = NormalizeAbsolutePath(path);
-            var sceneActorsFolder = GetSceneActorsRootPath();
-            if (path.Length <= sceneActorsFolder.Length ||
-                !path.StartsWith(sceneActorsFolder, StringComparison.OrdinalIgnoreCase) ||
-                (path[sceneActorsFolder.Length] != '/' && path[sceneActorsFolder.Length] != '\\'))
-            {
-                return false;
-            }
-
-            var relativePath = path.Substring(sceneActorsFolder.Length + 1);
-            var marker = "/" + ExternalActorsFolderName + "/";
-            var markerIndex = relativePath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (markerIndex <= 0)
-                return false;
-
-            var sceneNamePath = relativePath.Substring(0, markerIndex);
-            if (string.IsNullOrEmpty(sceneNamePath))
-                return false;
-
-            scenePath = StringUtils.NormalizePath(StringUtils.CombinePaths(Globals.ProjectContentFolder, sceneNamePath + ".scene"));
-            return true;
-        }
-
         private static string NormalizeAbsolutePath(string path)
         {
             return StringUtils.NormalizePath(Path.GetFullPath(path));
-        }
-
-        private static string GetSceneActorsRootPath()
-        {
-            return NormalizeAbsolutePath(StringUtils.CombinePaths(Globals.ProjectFolder, SceneActorsFolderName)).TrimEnd('/', '\\');
         }
 
         /// <summary>
@@ -755,87 +708,6 @@ namespace FlaxEditor.Modules
             Profiler.EndEvent();
         }
 
-        private void EnsureSceneActorsWatcher()
-        {
-            var now = DateTime.UtcNow;
-            if (_sceneActorsWatcher != null)
-            {
-                if (now >= _nextSceneActorsWatcherRetry)
-                {
-                    _nextSceneActorsWatcherRetry = now.AddSeconds(1.0);
-                    if (!Directory.Exists(GetSceneActorsRootPath()))
-                    {
-                        DisposeSceneActorsWatcher();
-                        _sceneActorsFolderWasMissing = true;
-                    }
-                }
-                return;
-            }
-
-            if (now < _nextSceneActorsWatcherRetry)
-                return;
-            _nextSceneActorsWatcherRetry = now.AddSeconds(1.0);
-
-            var sceneActorsFolder = GetSceneActorsRootPath();
-            if (!Directory.Exists(sceneActorsFolder))
-            {
-                _sceneActorsFolderWasMissing = true;
-                return;
-            }
-
-            _sceneActorsWatcher = new FileSystemWatcher(sceneActorsFolder)
-            {
-                IncludeSubdirectories = true,
-                InternalBufferSize = 64 * 1024,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
-            };
-            _sceneActorsWatcher.Changed += OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Created += OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Deleted += OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Renamed += OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Error += OnSceneActorsWatcherError;
-            _sceneActorsWatcher.EnableRaisingEvents = true;
-
-            if (_sceneActorsFolderWasMissing && Level.IsAnySceneLoaded)
-            {
-                lock (_sceneDiskChangesLock)
-                {
-                    QueueLoadedExternalActorsScenes(DateTime.UtcNow);
-                }
-            }
-            _sceneActorsFolderWasMissing = false;
-        }
-
-        private void DisposeSceneActorsWatcher()
-        {
-            if (_sceneActorsWatcher == null)
-                return;
-
-            _sceneActorsWatcher.EnableRaisingEvents = false;
-            _sceneActorsWatcher.Changed -= OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Created -= OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Deleted -= OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Renamed -= OnSceneActorsDiskChanged;
-            _sceneActorsWatcher.Error -= OnSceneActorsWatcherError;
-            _sceneActorsWatcher.Dispose();
-            _sceneActorsWatcher = null;
-        }
-
-        private void OnSceneActorsDiskChanged(object sender, FileSystemEventArgs e)
-        {
-            QueueExternalActorDiskChange(e.FullPath);
-            if (e is RenamedEventArgs renamed)
-                QueueExternalActorDiskChange(renamed.OldFullPath);
-        }
-
-        private void OnSceneActorsWatcherError(object sender, ErrorEventArgs e)
-        {
-            lock (_sceneDiskChangesLock)
-            {
-                _sceneActorsWatcherError = true;
-            }
-        }
-
         private void IgnoreSceneDiskChangesFromSave(Scene scene)
         {
             if (scene == null)
@@ -876,12 +748,6 @@ namespace FlaxEditor.Modules
             var readyScenePaths = new List<string>();
             lock (_sceneDiskChangesLock)
             {
-                if (_sceneActorsWatcherError)
-                {
-                    _sceneActorsWatcherError = false;
-                    QueueLoadedExternalActorsScenes(now);
-                }
-
                 if (_pendingSceneDiskChanges.Count == 0)
                     return;
 
@@ -918,16 +784,6 @@ namespace FlaxEditor.Modules
                                             );
                 if (result == DialogResult.Yes || result == DialogResult.OK)
                     ReloadSceneFromDisk(scene);
-            }
-        }
-
-        private void QueueLoadedExternalActorsScenes(DateTime now)
-        {
-            for (int i = 0; i < Level.ScenesCount; i++)
-            {
-                var scene = Level.GetScene(i);
-                if (scene && scene.UseExternalActors && !string.IsNullOrEmpty(scene.Path))
-                    _pendingSceneDiskChanges[NormalizeAbsolutePath(scene.Path)] = now.AddSeconds(-SceneDiskChangePromptDelaySeconds);
             }
         }
 
@@ -992,7 +848,6 @@ namespace FlaxEditor.Modules
         private void OnSceneSaved(Scene scene, Guid sceneId)
         {
             IgnoreSceneDiskChangesFromSave(scene);
-            EnsureSceneActorsWatcher();
             OnSaveEnd(RootControl.GameRoot);
 
             if (TryTakePendingSave(sceneId, out var saved))
@@ -1024,8 +879,6 @@ namespace FlaxEditor.Modules
 
         private void OnSceneLoaded(Scene scene, Guid sceneId)
         {
-            EnsureSceneActorsWatcher();
-
             _activeSceneId = sceneId;
             if (!_sceneDirtyGenerations.ContainsKey(sceneId))
                 _sceneDirtyGenerations.Add(sceneId, 0);
@@ -1296,7 +1149,6 @@ namespace FlaxEditor.Modules
         /// <inheritdoc />
         public override void OnUpdate()
         {
-            EnsureSceneActorsWatcher();
             ProcessPendingSceneDiskChanges();
         }
 
@@ -1304,7 +1156,6 @@ namespace FlaxEditor.Modules
         public override void OnInit()
         {
             Root = new ScenesRootNode();
-            EnsureSceneActorsWatcher();
 
             // Bind events
             Level.SceneSaving += OnSceneSaving;
@@ -1337,8 +1188,6 @@ namespace FlaxEditor.Modules
             Level.ActorNameChanged -= OnActorNameChanged;
             Level.ActorActiveChanged -= OnActorActiveChanged;
             Level.ActorDestroyChildren -= OnActorDestroyChildren;
-
-            DisposeSceneActorsWatcher();
 
             // Cleanup graph
             Root.Dispose();

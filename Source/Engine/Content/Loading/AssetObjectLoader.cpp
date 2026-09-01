@@ -2,6 +2,10 @@
 
 #include "AssetObjectLoader.h"
 #include "Engine/Core/Collections/HashSet.h"
+#if USE_EDITOR
+#include "Engine/Content/Artifacts/ArtifactResolver.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#endif
 
 namespace
 {
@@ -25,6 +29,52 @@ namespace
     }
 }
 
+#if USE_EDITOR
+bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectId& object,
+    AssetObjectLoadLocation& location, AssetPipelineDiagnostic& diagnostic)
+{
+    location = AssetObjectLoadLocation();
+    location.Object = object;
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(object, record))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, object,
+            TEXT("Asset database has no exact record for the requested asset object."));
+    if (!ArtifactResolver::Get().IsConfigured())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, object,
+            TEXT("Editor artifact resolver is not configured."));
+
+    ArtifactRequest request;
+    request.AssetID = record.ID;
+    request.Target = ArtifactResolver::Get().GetDefaultTarget();
+    request.OutputKind = "runtime";
+    request.Policy = ArtifactResolvePolicy::Exact;
+    AssetLoadLocation resolved;
+    if (ArtifactResolver::Get().ResolveLoadLocation(request, resolved, diagnostic))
+        return true;
+    if (resolved.Info.ObjectID != object || !resolved.Artifact.IsExact || resolved.Artifact.IsLastGood ||
+        resolved.Artifact.StorageKind != ArtifactStorageKind::Generated)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
+            TEXT("Editor artifact resolution did not return the exact requested object publication."));
+
+    ArtifactKey artifact;
+    if (ArtifactKey::Parse(resolved.Artifact.Key, artifact))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
+            TEXT("Editor artifact resolution returned an invalid output key."));
+    location.StorageKind = AssetObjectStorageKind::EditorArtifact;
+    location.InstanceID = record.ID;
+    location.TypeName = StringAnsi(record.TypeName);
+    location.SourceName = record.CanonicalPath.Get();
+    location.StorageName = resolved.Artifact.StoragePath.Get();
+    location.Size = resolved.Artifact.Size;
+    location.Content = resolved.Artifact.Content;
+    location.Artifact = artifact;
+    location.Revision = record.DatabaseRevision;
+    location.Dependencies = record.RuntimeReferences;
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+#endif
+
 bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
     AssetPipelineDiagnostic& diagnostic)
 {
@@ -35,8 +85,10 @@ bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, object,
             TEXT("Runtime catalog has no exact entry for the requested asset object."));
     location.StorageKind = AssetObjectStorageKind::RuntimePackage;
+    location.InstanceID = object.ToRuntimeObjectGuid();
     location.TypeName = entry.TypeName;
-    location.StorageName = entry.PackageName;
+    location.StorageName = String(entry.PackageName);
+    location.SourceName = location.StorageName;
     location.Offset = entry.Offset;
     location.Size = entry.Size;
     location.Compression = static_cast<byte>(entry.Compression);
@@ -63,7 +115,7 @@ bool AssetObjectLoader::Resolve(const AssetObjectId& object, AssetObjectLoadLoca
     const bool storageInvalid = _mode == AssetObjectLoadMode::Cooked
         ? location.StorageKind != AssetObjectStorageKind::RuntimePackage
         : location.StorageKind != AssetObjectStorageKind::EditorArtifact || location.Artifact.IsZero();
-    if (location.Object != object || location.Revision == 0 || location.TypeName.IsEmpty() || location.StorageName.IsEmpty() ||
+    if (location.Object != object || !location.InstanceID.IsValid() || location.Revision == 0 || location.TypeName.IsEmpty() || location.StorageName.IsEmpty() ||
         location.Size == 0 || location.Content.IsZero() || storageInvalid)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
             TEXT("Resolved object location has mismatched identity or incomplete immutable storage data."));

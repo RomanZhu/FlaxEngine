@@ -10,7 +10,6 @@
 /// <summary>One validated scene partition captured during controlled preparation.</summary>
 struct JsonAssetPreparedPartition
 {
-    AssetObjectId Object;
     int64 RootFileId = 0;
     ContentHash SourceHash;
     StringAnsi SourceJson;

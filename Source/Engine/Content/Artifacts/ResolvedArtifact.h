@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "ArtifactKey.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetInfo.h"
 
@@ -27,6 +28,8 @@ struct FLAXENGINE_API ResolvedArtifact
     ArtifactStoragePath StoragePath;
     String OutputKind;
     String Key;
+    ContentHash Content;
+    uint64 Size = 0;
     ArtifactStorageKind StorageKind = ArtifactStorageKind::Package;
     bool IsExact = true;
     bool IsLastGood = false;

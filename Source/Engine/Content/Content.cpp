@@ -16,6 +16,7 @@
 #include "AssetDatabase/AssetMeta.h"
 #include "Loading/LoadingThread.h"
 #include "Loading/ContentLoadTask.h"
+#include "Loading/AssetObjectLoader.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/LogContext.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -40,6 +41,7 @@
 #include "Engine/Engine/Time.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Level/Types.h"
+#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Scripting/ManagedCLR/MClass.h"
@@ -84,6 +86,70 @@ namespace
 
     // Editor-private transient objects or the immutable cooked runtime catalog.
     AssetObjectRegistry ObjectRegistry;
+
+    class ContentAssetObjectFactory final : public IAssetObjectFactory
+    {
+    public:
+        bool CreateObject(const AssetObjectLoadLocation& location, void*& instance,
+            AssetPipelineDiagnostic& diagnostic) override
+        {
+            String storagePath = location.StorageName;
+            if (location.StorageKind == AssetObjectStorageKind::RuntimePackage && FileSystem::IsRelative(storagePath))
+                storagePath = Globals::ProjectContentFolder / storagePath;
+            const String sourcePath = location.StorageKind == AssetObjectStorageKind::RuntimePackage || !location.SourceName.HasChars()
+                ? storagePath
+                : location.SourceName;
+            AssetInfo info(location.InstanceID, location.Object, String(location.TypeName), sourcePath, location.Revision);
+            AssetLoadLocation contentLocation;
+            contentLocation.Info = info;
+            contentLocation.Artifact.AssetID = info.ID;
+            contentLocation.Artifact.TypeName = info.TypeName;
+            contentLocation.Artifact.StoragePath = ArtifactStoragePath(storagePath);
+            contentLocation.Artifact.OutputKind = location.StorageKind == AssetObjectStorageKind::RuntimePackage
+                ? TEXT("package")
+                : TEXT("runtime");
+            contentLocation.Artifact.Key = String(location.Artifact.ToString());
+            contentLocation.Artifact.Content = location.Content;
+            contentLocation.Artifact.Size = location.Size;
+            contentLocation.Artifact.StorageKind = location.StorageKind == AssetObjectStorageKind::RuntimePackage
+                ? ArtifactStorageKind::Package
+                : ArtifactStorageKind::Generated;
+
+            IAssetFactory* factory = Content::GetAssetFactory(info);
+            Asset* asset = factory ? factory->New(contentLocation) : nullptr;
+            if (!asset)
+            {
+                diagnostic = AssetPipelineDiagnostic();
+                diagnostic.Code = factory ? AssetPipelineDiagnosticCode::ArtifactInvalid : AssetPipelineDiagnosticCode::ProcessorMissing;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+                diagnostic.AssetGuid = location.Object.Asset.Value;
+                diagnostic.SourcePath = storagePath;
+                diagnostic.Message = factory
+                    ? TEXT("Asset factory could not materialize the resolved object artifact.")
+                    : TEXT("No asset factory is registered for the resolved object type.");
+                instance = nullptr;
+                return true;
+            }
+            instance = asset;
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+
+        void DestroyObject(void* instance) override
+        {
+            static_cast<Asset*>(instance)->DeleteObject();
+        }
+    };
+
+    LoadedAssetRegistry LoadedObjects;
+    ContentAssetObjectFactory ObjectFactory;
+#if USE_EDITOR
+    EditorArtifactAssetObjectResolver ObjectResolver;
+    AssetObjectLoader ObjectLoader(LoadedObjects, static_cast<IEditorAssetObjectResolver&>(ObjectResolver), ObjectFactory);
+#else
+    RuntimeCatalogAssetObjectResolver ObjectResolver(ObjectRegistry.GetRuntimeCatalog(), 1);
+    AssetObjectLoader ObjectLoader(LoadedObjects, static_cast<IRuntimeAssetObjectResolver&>(ObjectResolver), ObjectFactory);
+#endif
 
     // Loading assets
     THREADLOCAL LoadingThread* ThisLoadThread = nullptr;
@@ -240,35 +306,9 @@ namespace
 #if USE_EDITOR
     Dictionary<Guid, HashSet<BinaryAsset*>> PendingDependencies;
 
-    String GetSceneActorsFolderForContentFolder(const StringView& contentFolder)
-    {
-        // Companion scene-data directories are children of Content and move with their parent folder.
-        (void)contentFolder;
-        return String::Empty;
-    }
-
     bool IsSceneAssetPath(const StringView& path)
     {
         return FileSystem::GetExtension(path).ToLower() == TEXT("scene");
-    }
-
-    bool IsProjectContentPath(const StringView& path)
-    {
-        const StringView contentRoot = Globals::ProjectContentFolder;
-        if (path.Length() <= contentRoot.Length() || !path.StartsWith(contentRoot, StringSearchCase::IgnoreCase))
-            return false;
-        const Char separator = path[contentRoot.Length()];
-        return separator == '/' || separator == '\\';
-    }
-
-    String GetSceneActorsFolderPath(const StringView& scenePath)
-    {
-        return String(scenePath) + TEXT("-data");
-    }
-
-    String GetExternalActorsFolderPath(const StringView& scenePath)
-    {
-        return GetSceneActorsFolderPath(scenePath);
     }
 
     bool ReadJsonDocument(const StringView& path, rapidjson_flax::Document& document)
@@ -303,177 +343,96 @@ namespace
         return externalActors != document.MemberEnd() && externalActors->value.IsBool() && externalActors->value.GetBool();
     }
 
-    bool RemoveEmptySceneActorsFile(const StringView& path)
+    bool TryGetSceneGuid(const StringView& scenePath, Guid& sceneGuid)
     {
-        if (!FileSystem::FileExists(path))
-            return false;
-        if (FileSystem::GetFileSize(path) != 0)
-            return true;
-        if (FileSystem::DeleteFile(path))
+        AssetMeta meta;
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetMeta::Load(String(scenePath) + TEXT(".meta"), meta, diagnostic) || !meta.ID.IsValid())
         {
-            LOG(Error, "Cannot remove empty scene actors placeholder file '{0}'.", path);
+            LOG(Error, "Cannot resolve scene identity for private fragments at '{0}': {1}", scenePath, diagnostic.Message);
             return true;
         }
+        sceneGuid = meta.ID;
         return false;
     }
 
-    bool CopyExternalActorsSceneData(const StringView& dstPath, const StringView& srcPath, const Guid&, rapidjson_flax::Document& sceneDocument)
+    bool CopyExternalActorsSceneData(const StringView& dstPath, const StringView& srcPath, const Guid& dstId, rapidjson_flax::Document& sceneDocument)
     {
-        const String srcActorsFolder = GetExternalActorsFolderPath(srcPath);
-        const String dstSceneActorsFolder = GetSceneActorsFolderPath(dstPath);
-        const String dstActorsFolder = dstSceneActorsFolder;
-        if (FileSystem::DirectoryExists(dstActorsFolder) || FileSystem::FileExists(dstActorsFolder) || FileSystem::FileExists(dstActorsFolder + TEXT(".meta")))
+        Guid srcId;
+        if (TryGetSceneGuid(srcPath, srcId))
+            return true;
+        if (FileSystem::DirectoryExists(SceneFragmentStore::GetScenePath(dstId)))
         {
-            LOG(Error, "Cannot copy external actors scene data because destination already exists: '{0}'.", dstActorsFolder);
+            LOG(Error, "Cannot copy private scene fragments because destination scene identity already exists: '{0}'.", dstId);
             return true;
         }
-
-        const bool hadDstFile = FileSystem::FileExists(dstPath);
-        const bool hadDstActorsFolder = FileSystem::DirectoryExists(dstActorsFolder);
-        bool succeeded = false;
-        SCOPE_EXIT
+        SceneFragmentIndex sourceIndex;
+        Array<Array<byte>> sourceFragments;
+        String fragmentError;
+        if (SceneFragmentStore::Load(srcId, sourceIndex, sourceFragments, fragmentError))
         {
-            if (!succeeded)
-            {
-                if (!hadDstFile)
-                    FileSystem::DeleteFile(dstPath);
-                if (!hadDstActorsFolder)
-                    FileSystem::DeleteDirectory(dstActorsFolder);
-                FileSystem::DeleteFile(dstActorsFolder + TEXT(".meta"));
-            }
-        };
-
-        if (!FileSystem::DirectoryExists(srcActorsFolder))
-        {
-            LOG(Error, "External-actors scene is missing its authored scene-data directory: '{0}'.", srcActorsFolder);
+            LOG(Error, "Cannot load private scene fragments for clone '{0}': {1}", srcPath, fragmentError);
             return true;
         }
         Dictionary<Guid, Guid> remap;
-        Array<String> sourceFiles;
-        if (FileSystem::DirectoryGetFiles(sourceFiles, srcActorsFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
-            return true;
-        sourceFiles.Add(srcActorsFolder + TEXT(".meta"));
-        for (const String& sourceFile : sourceFiles)
+        remap.Add(srcId, dstId);
+        Array<SceneFragmentWrite> writes;
+        for (int32 i = 0; i < sourceIndex.Fragments.Count(); i++)
         {
-            if (!FileSystem::FileExists(sourceFile))
+            rapidjson_flax::Document fragment;
+            fragment.Parse(reinterpret_cast<const char*>(sourceFragments[i].Get()), sourceFragments[i].Count());
+            const auto payload = fragment.FindMember("payload");
+            const auto contained = fragment.FindMember("containedLocalIds");
+            if (fragment.HasParseError() || payload == fragment.MemberEnd() || !payload->value.IsArray() ||
+                contained == fragment.MemberEnd() || !contained->value.IsArray())
+                return true;
+            rapidjson_flax::Document payloadDocument;
+            payloadDocument.CopyFrom(payload->value, payloadDocument.GetAllocator());
+            JsonTools::ChangeIds(payloadDocument, remap);
+            rapidjson_flax::StringBuffer payloadBytes;
+            PrettyJsonWriter writer(payloadBytes);
+            payloadDocument.Accept(writer.GetWriter());
+            SceneFragmentWrite write;
+            write.RootActorLocalId = sourceIndex.Fragments[i].RootActorLocalId;
+            write.SerializerVersion = sourceIndex.Fragments[i].SerializerVersion;
+            for (const rapidjson_flax::Value& localId : contained->value.GetArray())
             {
-                LOG(Error, "Scene partition source is missing tracked metadata: '{0}'.", sourceFile);
-                return true;
-            }
-            const bool isMeta = sourceFile.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
-            const bool isRootMeta = FileSystem::AreFilePathsEquivalent(sourceFile, srcActorsFolder + TEXT(".meta"));
-            String relativePath = isRootMeta ? String::Empty : FileSystem::ConvertAbsolutePathToRelative(srcActorsFolder, sourceFile);
-            FileSystem::NormalizePath(relativePath);
-            const String destinationFile = isRootMeta ? dstActorsFolder + TEXT(".meta") : dstActorsFolder / relativePath;
-            if (FileSystem::CreateDirectory(StringUtils::GetDirectoryName(destinationFile)))
-                return true;
-            if (isMeta)
-            {
-                AssetMeta sourceMeta;
-                AssetPipelineDiagnostic diagnostic;
-                if (AssetMeta::Load(sourceFile, sourceMeta, diagnostic))
-                {
-                    LOG(Error, "Cannot read scene partition metadata '{0}': {1}", sourceFile, diagnostic.Message);
+                if (!localId.IsInt64())
                     return true;
-                }
-                AssetMeta destinationMeta = sourceMeta.CloneWithNewIdentities();
-                remap[sourceMeta.ID] = destinationMeta.ID;
-                if (AssetMeta::SaveAtomic(destinationFile, destinationMeta, diagnostic))
-                {
-                    LOG(Error, "Cannot clone scene partition metadata '{0}': {1}", destinationFile, diagnostic.Message);
-                    return true;
-                }
+                write.ContainedLocalIds.Add(localId.GetInt64());
             }
-            else if (FileSystem::CopyFile(destinationFile, sourceFile))
-                return true;
+            write.Payload.Set(reinterpret_cast<const byte*>(payloadBytes.GetString()), static_cast<int32>(payloadBytes.GetSize()));
+            writes.Add(MoveTemp(write));
         }
 
         JsonTools::ChangeIds(sceneDocument, remap);
         if (WriteJsonDocument(dstPath, sceneDocument))
             return true;
-
-        succeeded = true;
+        if (SceneFragmentStore::Save(dstId, writes, fragmentError))
+        {
+            FileSystem::DeleteFile(dstPath);
+            LOG(Error, "Cannot publish cloned private scene fragments for '{0}': {1}", dstPath, fragmentError);
+            return true;
+        }
         return false;
     }
 
-    bool MoveSceneActorsFolder(const StringView& oldScenePath, const StringView& newScenePath)
-    {
-        const String srcSceneActorsFolder = GetSceneActorsFolderPath(oldScenePath);
-        if (!FileSystem::DirectoryExists(srcSceneActorsFolder))
-            return false;
-
-        const String dstSceneActorsFolder = GetSceneActorsFolderPath(newScenePath);
-        if (FileSystem::AreFilePathsEquivalent(srcSceneActorsFolder, dstSceneActorsFolder))
-            return false;
-        if (RemoveEmptySceneActorsFile(dstSceneActorsFolder))
-        {
-            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
-            return true;
-        }
-        if (FileSystem::DirectoryExists(dstSceneActorsFolder) || FileSystem::FileExists(dstSceneActorsFolder) || FileSystem::FileExists(dstSceneActorsFolder + TEXT(".meta")))
-        {
-            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
-            return true;
-        }
-        Array<String> sceneActorFiles;
-        if (FileSystem::DirectoryGetFiles(sceneActorFiles, srcSceneActorsFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
-        {
-            LOG(Error, "Cannot list scene actors folder '{0}'.", srcSceneActorsFolder);
-            return true;
-        }
-        if (FileSystem::CreateDirectory(dstSceneActorsFolder) && !FileSystem::DirectoryExists(dstSceneActorsFolder))
-        {
-            LOG(Error, "Cannot create scene actors destination folder '{0}'.", dstSceneActorsFolder);
-            return true;
-        }
-        for (const String& srcFile : sceneActorFiles)
-        {
-            String relativePath = FileSystem::ConvertAbsolutePathToRelative(srcSceneActorsFolder, srcFile);
-            FileSystem::NormalizePath(relativePath);
-            const String dstFile = dstSceneActorsFolder / relativePath;
-            const String dstFileDirectory = StringUtils::GetDirectoryName(dstFile);
-            if (FileSystem::CreateDirectory(dstFileDirectory) && !FileSystem::DirectoryExists(dstFileDirectory))
-            {
-                LOG(Error, "Cannot create scene actors destination folder '{0}'.", dstFileDirectory);
-                return true;
-            }
-            if (FileSystem::CopyFile(dstFile, srcFile))
-            {
-                LOG(Error, "Cannot copy scene actors file from '{0}' to '{1}'.", srcFile, dstFile);
-                return true;
-            }
-        }
-        const String srcFolderMeta = srcSceneActorsFolder + TEXT(".meta");
-        const String dstFolderMeta = dstSceneActorsFolder + TEXT(".meta");
-        if (FileSystem::FileExists(srcFolderMeta) && FileSystem::CopyFile(dstFolderMeta, srcFolderMeta))
-        {
-            LOG(Error, "Cannot copy scene-data folder metadata from '{0}' to '{1}'.", srcFolderMeta, dstFolderMeta);
-            return true;
-        }
-        if (FileSystem::DeleteDirectory(srcSceneActorsFolder))
-            LOG(Warning, "Cannot remove old scene actors folder '{0}'.", srcSceneActorsFolder);
-        if (FileSystem::FileExists(srcFolderMeta) && FileSystem::DeleteFile(srcFolderMeta))
-            LOG(Warning, "Cannot remove old scene-data folder metadata '{0}'.", srcFolderMeta);
-        return false;
-    }
-
-    void DeleteSceneActorsFolder(const StringView& scenePath)
+    void DeleteSceneFragments(const StringView& scenePath, const Guid* knownSceneGuid)
     {
         if (!IsSceneAssetPath(scenePath))
             return;
-        const String sceneActorsFolder = GetSceneActorsFolderPath(scenePath);
-        if (!FileSystem::DirectoryExists(sceneActorsFolder) && !FileSystem::FileExists(sceneActorsFolder + TEXT(".meta")))
+        Guid sceneGuid = knownSceneGuid ? *knownSceneGuid : Guid::Empty;
+        if (!sceneGuid.IsValid() && TryGetSceneGuid(scenePath, sceneGuid))
+            return;
+        const String fragmentsPath = SceneFragmentStore::GetScenePath(sceneGuid);
+        if (!FileSystem::DirectoryExists(fragmentsPath))
             return;
 #if PLATFORM_WINDOWS || PLATFORM_LINUX
-        if (FileSystem::DirectoryExists(sceneActorsFolder) && FileSystem::MoveFileToRecycleBin(sceneActorsFolder))
-            LOG(Warning, "Failed to move scene actors folder to Recycle Bin. Path: '{0}'", sceneActorsFolder);
-        if (FileSystem::FileExists(sceneActorsFolder + TEXT(".meta")) && FileSystem::MoveFileToRecycleBin(sceneActorsFolder + TEXT(".meta")))
-            LOG(Warning, "Failed to move scene-data folder metadata to Recycle Bin. Path: '{0}.meta'", sceneActorsFolder);
+        if (FileSystem::MoveFileToRecycleBin(fragmentsPath))
+            LOG(Warning, "Failed to move private scene fragments to Recycle Bin for scene '{0}'.", sceneGuid);
 #else
-        if (FileSystem::DirectoryExists(sceneActorsFolder) && FileSystem::DeleteDirectory(sceneActorsFolder))
-            LOG(Warning, "Failed to delete scene actors folder. Path: '{0}'", sceneActorsFolder);
-        if (FileSystem::FileExists(sceneActorsFolder + TEXT(".meta")) && FileSystem::DeleteFile(sceneActorsFolder + TEXT(".meta")))
-            LOG(Warning, "Failed to delete scene-data folder metadata. Path: '{0}.meta'", sceneActorsFolder);
+        if (FileSystem::DeleteDirectory(fragmentsPath))
+            LOG(Warning, "Failed to delete private scene fragments for scene '{0}'.", sceneGuid);
 #endif
     }
 #endif
@@ -1366,7 +1325,7 @@ void Content::deleteFileSafety(const StringView& path, const Guid* id)
 
 #if USE_EDITOR
     if (!removeFileFailed)
-        DeleteSceneActorsFolder(path);
+        DeleteSceneFragments(path, id);
 #endif
 }
 
@@ -1411,8 +1370,6 @@ bool Content::RenameAsset(const StringView& oldPathInput, const StringView& newP
     // Cache data
     Asset* oldAsset = GetAsset(oldPath);
     Asset* newAsset = GetAsset(newPath);
-    const bool isSceneAsset = IsSceneAssetPath(oldPath);
-    bool moveSceneActorsFolder = false;
 
     // Validate the filesystem destination. A failed move from an older Editor can leave a
     // transient, zero-byte asset file behind. Remove only that provably empty artifact; invalid
@@ -1486,26 +1443,6 @@ bool Content::RenameAsset(const StringView& oldPathInput, const StringView& newP
         newAsset = nullptr;
     }
 
-    if (isSceneAsset)
-    {
-        const String srcSceneActorsFolder = GetSceneActorsFolderPath(oldPath);
-        const String dstSceneActorsFolder = GetSceneActorsFolderPath(newPath);
-        moveSceneActorsFolder = IsProjectContentPath(oldPath) && IsProjectContentPath(newPath) &&
-                                FileSystem::DirectoryExists(srcSceneActorsFolder) &&
-                                !FileSystem::AreFilePathsEquivalent(srcSceneActorsFolder, dstSceneActorsFolder);
-        if (moveSceneActorsFolder && RemoveEmptySceneActorsFile(dstSceneActorsFolder))
-        {
-            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
-            return true;
-        }
-        if (moveSceneActorsFolder && (FileSystem::DirectoryExists(dstSceneActorsFolder) || FileSystem::FileExists(dstSceneActorsFolder) ||
-            FileSystem::FileExists(dstSceneActorsFolder + TEXT(".meta"))))
-        {
-            LOG(Error, "Cannot move scene actors because destination already exists: '{0}'.", dstSceneActorsFolder);
-            return true;
-        }
-    }
-
     // Ensure asset is ready for renaming
     if (oldAsset)
     {
@@ -1542,14 +1479,9 @@ bool Content::RenameAsset(const StringView& oldPathInput, const StringView& newP
             lockedStorage->UnlockFileAccess();
     };
 
-    if (moveSceneActorsFolder && MoveSceneActorsFolder(oldPath, newPath))
-        return true;
-
     // Move file
     if (MoveAssetFileSafely(newPath, oldPath))
     {
-        if (moveSceneActorsFolder)
-            MoveSceneActorsFolder(newPath, oldPath);
         LOG(Error, "Cannot move file '{0}' to '{1}'", oldPath, newPath);
         return true;
     }
@@ -1596,31 +1528,6 @@ bool Content::RenameAssetFolder(const StringView& oldPathInput, const StringView
         LOG(Error, "Cannot move folder '{0}' to '{1}'. Source is missing or destination already exists.", oldPath, newPath);
         return true;
     }
-
-    const String oldSceneActorsFolder = GetSceneActorsFolderForContentFolder(oldPath);
-    const String newSceneActorsFolder = GetSceneActorsFolderForContentFolder(newPath);
-    const bool moveSceneActorsFolder = oldSceneActorsFolder.HasChars() &&
-                                       newSceneActorsFolder.HasChars() &&
-                                       FileSystem::DirectoryExists(oldSceneActorsFolder) &&
-                                       !FileSystem::AreFilePathsEquivalent(oldSceneActorsFolder, newSceneActorsFolder);
-    if (moveSceneActorsFolder && (FileSystem::DirectoryExists(newSceneActorsFolder) || FileSystem::FileExists(newSceneActorsFolder)))
-    {
-        LOG(Error, "Cannot move content folder because the external actors destination already exists: '{0}'.", newSceneActorsFolder);
-        return true;
-    }
-    const String newSceneActorsParent = moveSceneActorsFolder ? StringUtils::GetDirectoryName(newSceneActorsFolder) : String::Empty;
-    const bool createdSceneActorsParent = moveSceneActorsFolder && !FileSystem::DirectoryExists(newSceneActorsParent);
-    if (createdSceneActorsParent && FileSystem::CreateDirectory(newSceneActorsParent))
-    {
-        LOG(Error, "Cannot create external actors destination parent folder '{0}'.", newSceneActorsParent);
-        return true;
-    }
-    bool folderMoveSucceeded = false;
-    SCOPE_EXIT
-    {
-        if (createdSceneActorsParent && !folderMoveSucceeded)
-            FileSystem::DeleteDirectory(newSceneActorsParent, false);
-    };
 
     struct LoadedAssetRename
     {
@@ -1670,23 +1577,10 @@ bool Content::RenameAssetFolder(const StringView& oldPathInput, const StringView
         LOG(Error, "Cannot move folder '{0}' to '{1}'.", oldPath, newPath);
         return true;
     }
-    if (moveSceneActorsFolder && MovePathWithRetry(newSceneActorsFolder, oldSceneActorsFolder))
-    {
-        LOG(Error, "Cannot move external actors folder '{0}' to '{1}'.", oldSceneActorsFolder, newSceneActorsFolder);
-        if (!MoveFolderPathSafely(oldPath, newPath))
-            return true;
-
-        // The content directory is already at the destination and could not be rolled back.
-        // Keep the database consistent with the filesystem and preserve the old actors folder
-        // for manual recovery instead of reporting a failure against stale managed paths.
-        LOG(Error, "Failed to roll back content folder move from '{0}' to '{1}'. External actors remain at '{2}'.", newPath, oldPath, oldSceneActorsFolder);
-    }
-
     ObjectRegistry.RenameTransientFolder(oldPath, newPath);
     ContentStorageManager::OnRenamedFolder(oldPath, newPath);
     for (auto& rename : loadedAssets)
         rename.Instance->onRename(rename.NewPath);
-    folderMoveSucceeded = true;
     return false;
 }
 
@@ -1769,7 +1663,7 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
                     return true;
                 if (IsExternalActorsSceneDocument(sourceDocument))
                 {
-                    DeleteSceneActorsFolder(dstPath);
+                    DeleteSceneFragments(dstPath, &dstId);
                     return CopyExternalActorsSceneData(dstPath, srcPath, dstId, sourceDocument);
                 }
             }
@@ -2247,6 +2141,7 @@ void Content::onAssetLoaded(Asset* asset)
 void Content::onAssetUnload(Asset* asset)
 {
     // This is called by the asset on unloading
+    LoadedObjects.Remove(asset->GetPersistentObjectId(), asset);
     ScopeLock locker(AssetsLocker);
     Assets.Remove(asset->GetPersistentObjectId());
     const AssetObjectId* indexedObject = RuntimeAssetIndex.TryGet(asset->GetID());
@@ -2420,73 +2315,72 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
 
     AssetsLocker.Unlock();
 
-    // Get canonical asset info from the explicit new-pipeline record or the legacy registry.
+    // Explicit locations are isolated tests/previews. Built-ins and editor-private transient
+    // packages retain their dedicated immutable roots. Every canonical project object uses
+    // the exact artifact/catalog object loader with no source or package fallback.
     AssetInfo assetInfo;
     AssetLoadLocation loadLocation;
-    bool hasExplicitLocation;
+    bool hasLegacyLocation;
     {
         ScopeLock lock(AssetsLocker);
-        hasExplicitLocation = ExplicitLoadLocations.TryGet(objectId, loadLocation);
+        hasLegacyLocation = ExplicitLoadLocations.TryGet(objectId, loadLocation);
     }
-    if (hasExplicitLocation)
-    {
+    if (hasLegacyLocation)
         assetInfo = loadLocation.Info;
-    }
-    else if (ArtifactResolver::Get().IsConfigured())
+#if USE_EDITOR
+    if (!hasLegacyLocation && BuiltinAssetCatalog::Get().TryGet(objectId, assetInfo))
     {
-        AssetRecord pipelineRecord;
-        if (AssetDatabase::Get().TryGetRecord(objectId, pipelineRecord))
-        {
-            ArtifactRequest request;
-            request.AssetID = pipelineRecord.ID;
-            request.Target = ArtifactResolver::Get().GetDefaultTarget();
-            request.OutputKind = "runtime";
-            request.Policy = passiveLoad ? ArtifactResolvePolicy::PublishedOnly : ArtifactResolvePolicy::Interactive;
-            AssetPipelineDiagnostic diagnostic;
-            if (ArtifactResolver::Get().ResolveLoadLocation(request, loadLocation, diagnostic))
-            {
-                if (!passiveLoad)
-                    LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, objectId, diagnostic.SourcePath);
-                LOAD_FAILED();
-            }
-            assetInfo = loadLocation.Info;
-            hasExplicitLocation = true;
-        }
-    }
-    if (!hasExplicitLocation && !GetAssetInfo(objectId, assetInfo))
-    {
-        LOG(Warning, "Invalid or missing asset ({0}, {1}).", objectId, type.ToString());
-        LogContext::Print(LogType::Warning);
-        LOAD_FAILED();
-    }
-    if (assetInfo.ObjectID != objectId)
-    {
-        LOG(Error, "Resolved asset object identity changed from {0} to {1}.", objectId, assetInfo.ObjectID);
-        LOAD_FAILED();
-    }
-    if (!hasExplicitLocation)
         loadLocation = AssetLoadLocation::Package(assetInfo);
-#if ASSETS_LOADING_EXTRA_VERIFICATION
-    if (!FileSystem::FileExists(loadLocation.Artifact.StoragePath.Get()))
+        hasLegacyLocation = true;
+    }
+    AssetRecord canonicalRecord;
+    const bool isCanonicalProjectObject = AssetDatabase::Get().TryGetRecord(objectId, canonicalRecord);
+    if (!hasLegacyLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId, assetInfo))
     {
-        LOG(Error, "Cannot find asset storage '{0}' for canonical asset '{1}'", loadLocation.Artifact.StoragePath.Get(), assetInfo.Path);
-        LOAD_FAILED();
+        loadLocation = AssetLoadLocation::Package(assetInfo);
+        hasLegacyLocation = true;
     }
 #endif
 
-    // Find asset factory based in its type
-    auto factory = GetAssetFactory(assetInfo);
-    if (factory == nullptr)
+    if (hasLegacyLocation)
     {
-        LOG(Error, "Cannot find asset factory. Info: {0}", assetInfo.ToString());
-        LOAD_FAILED();
-    }
+        if (assetInfo.ObjectID != objectId)
+        {
+            LOG(Error, "Resolved asset object identity changed from {0} to {1}.", objectId, assetInfo.ObjectID);
+            LOAD_FAILED();
+        }
+#if ASSETS_LOADING_EXTRA_VERIFICATION
+        if (!FileSystem::FileExists(loadLocation.Artifact.StoragePath.Get()))
+        {
+            LOG(Error, "Cannot find asset storage '{0}' for asset '{1}'", loadLocation.Artifact.StoragePath.Get(), assetInfo.Path);
+            LOAD_FAILED();
+        }
+#endif
 
-    // Create asset object
-    PROFILE_MEM_BEGIN(ContentAssets);
-    result = factory->New(loadLocation);
-    PROFILE_MEM_END();
-    if (result == nullptr)
+        IAssetFactory* factory = GetAssetFactory(assetInfo);
+        if (!factory)
+        {
+            LOG(Error, "Cannot find asset factory. Info: {0}", assetInfo.ToString());
+            LOAD_FAILED();
+        }
+        PROFILE_MEM_BEGIN(ContentAssets);
+        result = factory->New(loadLocation);
+        PROFILE_MEM_END();
+    }
+    else
+    {
+        AssetObjectLoadResult objectResult;
+        AssetPipelineDiagnostic diagnostic;
+        if (ObjectLoader.Load(objectId, objectResult, diagnostic))
+        {
+            if (!passiveLoad)
+                LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, objectId, diagnostic.SourcePath);
+            LOAD_FAILED();
+        }
+        result = static_cast<Asset*>(objectResult.Instance);
+        assetInfo = AssetInfo(result->GetID(), objectId, result->GetTypeName(), result->GetPath(), objectResult.Revision);
+    }
+    if (!result)
     {
         LOG(Error, "Cannot create asset object. Info: {0}", assetInfo.ToString());
         LOAD_FAILED();

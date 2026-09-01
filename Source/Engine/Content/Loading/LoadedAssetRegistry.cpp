@@ -128,6 +128,17 @@ bool LoadedAssetRegistry::TryGet(const AssetObjectId& object, LoadedAssetRecord&
     return entry != nullptr;
 }
 
+bool LoadedAssetRegistry::Remove(const AssetObjectId& object, void* instance)
+{
+    ScopeLock lock(_locker);
+    Entry** entry = _entries.TryGet(object);
+    if (!entry || (*entry)->Record.State == LoadedAssetState::Loading || (*entry)->Record.Instance != instance)
+        return true;
+    Delete(*entry);
+    _entries.Remove(object);
+    return false;
+}
+
 bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& replacements, Array<LoadedAssetSwap>& swaps,
     AssetPipelineDiagnostic& diagnostic)
 {

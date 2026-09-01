@@ -179,7 +179,7 @@ public:
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
     /// </summary>
-    /// <param name="id">Asset unique ID</param>
+    /// <param name="runtimeId">Runtime object ID.</param>
     /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
     /// <returns>Loaded asset or null if cannot</returns>
     API_FUNCTION() static Asset* LoadRuntimeObjectAsync(const Guid& runtimeId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
@@ -187,7 +187,7 @@ public:
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
     /// </summary>
-    /// <param name="id">Asset unique ID</param>
+    /// <param name="runtimeId">Runtime object ID.</param>
     /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
     /// <returns>Loaded asset or null if cannot</returns>
     static Asset* LoadRuntimeObjectAsync(const Guid& runtimeId, const ScriptingTypeHandle& type);
@@ -224,7 +224,7 @@ public:
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
     /// </summary>
-    /// <param name="id">Asset unique ID</param>
+    /// <param name="runtimeId">Runtime object ID.</param>
     /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
     /// <returns>Loaded asset or null if cannot</returns>
     template<typename T>

@@ -88,6 +88,10 @@ public:
     /// <summary>Gets registry state while preserving unresolved object identity.</summary>
     bool TryGet(const AssetObjectId& object, LoadedAssetRecord& record) const;
 
+    /// <summary>Forgets an unloaded instance so a future request materializes it again.</summary>
+    /// <returns>True if the object was missing or referred to a different instance.</returns>
+    bool Remove(const AssetObjectId& object, void* instance);
+
     /// <summary>Atomically validates and applies a complete replacement batch.</summary>
     /// <returns>True on missing objects, duplicate objects, or stale revisions.</returns>
     bool ReplaceBatch(const Array<LoadedAssetReplacement>& replacements, Array<LoadedAssetSwap>& swaps,

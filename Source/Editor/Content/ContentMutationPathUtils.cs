@@ -192,18 +192,5 @@ namespace FlaxEditor.Content
             throw new IOException($"Cannot reserve a temporary sibling for '{path}'.");
         }
 
-        public static string GetExternalActorsSidecarPath(string contentPath, bool isFolder, bool isScene)
-        {
-            if ((!isFolder && !isScene) || string.IsNullOrWhiteSpace(contentPath))
-                return null;
-            var path = Normalize(contentPath);
-            var contentRoot = Normalize(Globals.ProjectContentFolder);
-            if (!IsWithinRoot(path, contentRoot))
-                return null;
-            var relativePath = Path.GetRelativePath(contentRoot, isFolder ? path : Path.ChangeExtension(path, null));
-            if (relativePath == ".")
-                return null;
-            return Normalize(Path.Combine(Globals.ProjectFolder, "SceneActors", relativePath));
-        }
     }
 }

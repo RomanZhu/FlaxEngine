@@ -22,7 +22,7 @@ namespace FlaxEditor.Content
     {
         Main,
         Descendant,
-        ExternalActorSidecar,
+        SceneFragments,
         MetadataSidecar,
         Temporary,
         UndoTrash,

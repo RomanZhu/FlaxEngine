@@ -1015,12 +1015,8 @@ namespace FlaxEditor.Modules
                 }
                 if (metadataPath != null && File.Exists(metadataPath))
                     File.Delete(metadataPath);
-                var sidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(path, false, string.Equals(Path.GetExtension(path), ".scene", StringComparison.OrdinalIgnoreCase));
-                if (sidecar != null && Directory.Exists(sidecar))
-                    Directory.Delete(sidecar, true);
                 return !ContentMutationPathUtils.Exists(path) &&
-                       (metadataPath == null || !File.Exists(metadataPath)) &&
-                       (sidecar == null || !Directory.Exists(sidecar));
+                       (metadataPath == null || !File.Exists(metadataPath));
             }
             catch (Exception ex)
             {
@@ -1200,36 +1196,22 @@ namespace FlaxEditor.Modules
             if (ContentMutationPathUtils.IsCaseOnlyRename(sourcePath, destinationPath))
             {
                 var temporaryPath = ContentMutationPathUtils.CreateTemporarySibling(sourcePath, "flax-case-rename");
-                var sidecarPath = ContentMutationPathUtils.GetExternalActorsSidecarPath(sourcePath, item.IsFolder, item.ItemType == ContentItemType.Scene);
-                var hasSidecar = sidecarPath != null && Directory.Exists(sidecarPath);
-                var firstIndices = AddMovePlanEntries(plan, item, sourcePath, temporaryPath, false, false, hasSidecar);
-                var secondIndices = AddMovePlanEntries(plan, item, temporaryPath, destinationPath, true, true, hasSidecar);
+                var firstIndices = AddMovePlanEntries(plan, item, sourcePath, temporaryPath, false, false);
+                var secondIndices = AddMovePlanEntries(plan, item, temporaryPath, destinationPath, true, true);
                 steps.Add(CreateMoveStep(item, "case-rename-stage", firstIndices, sourcePath, temporaryPath, plan));
                 steps.Add(CreateMoveStep(item, "case-rename-commit", secondIndices, temporaryPath, destinationPath, plan));
             }
             else
             {
-                var sidecarPath = ContentMutationPathUtils.GetExternalActorsSidecarPath(sourcePath, item.IsFolder, item.ItemType == ContentItemType.Scene);
-                var indices = AddMovePlanEntries(plan, item, sourcePath, destinationPath, false, false, sidecarPath != null && Directory.Exists(sidecarPath));
+                var indices = AddMovePlanEntries(plan, item, sourcePath, destinationPath, false, false);
                 steps.Add(CreateMoveStep(item, "move", indices, sourcePath, destinationPath, plan));
             }
         }
 
-        private static int[] AddMovePlanEntries(ContentMutationPlan plan, ContentItem item, string sourcePath, string destinationPath, bool sourceProduced, bool destinationReleased, bool includeSidecar)
+        private static int[] AddMovePlanEntries(ContentMutationPlan plan, ContentItem item, string sourcePath, string destinationPath, bool sourceProduced, bool destinationReleased)
         {
             int first = plan.Entries.Count;
             AddMoveTreeEntries(plan, item, sourcePath, destinationPath, false, sourceProduced, destinationReleased);
-            var sourceSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(sourcePath, item.IsFolder, item.ItemType == ContentItemType.Scene);
-            if (includeSidecar && sourceSidecar != null)
-            {
-                var destinationSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(destinationPath, item.IsFolder, item.ItemType == ContentItemType.Scene);
-                plan.Entries.Add(new ContentMutationEntry(sourceSidecar, destinationSidecar, ContentMutationPathRole.ExternalActorSidecar, true)
-                {
-                    SourceProducedByTransaction = sourceProduced,
-                    DestinationReleasedByTransaction = destinationReleased,
-                    DestinationParentProducedByTransaction = true,
-                });
-            }
             return Enumerable.Range(first, plan.Entries.Count - first).ToArray();
         }
 
@@ -1461,15 +1443,6 @@ namespace FlaxEditor.Modules
             targetPath = ContentMutationPathUtils.Normalize(targetPath);
             AddCopyPlanEntries(plan, item, targetPath, false);
 
-            var sourceSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(item.Path, item.IsFolder, item.ItemType == ContentItemType.Scene);
-            if (sourceSidecar != null && Directory.Exists(sourceSidecar))
-            {
-                var targetSidecar = ContentMutationPathUtils.GetExternalActorsSidecarPath(targetPath, item.IsFolder, item.ItemType == ContentItemType.Scene);
-                plan.Entries.Add(new ContentMutationEntry(sourceSidecar, targetSidecar, ContentMutationPathRole.ExternalActorSidecar, true)
-                {
-                    DestinationParentProducedByTransaction = true,
-                });
-            }
             return plan;
         }
 
