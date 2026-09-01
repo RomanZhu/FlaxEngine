@@ -95,7 +95,9 @@ namespace FlaxEditor.SceneGraph.Actors
 
         private void OnSelect()
         {
-            Editor.Instance.Windows.ContentWin.Select(Editor.Instance.ContentDatabase.Find(Scene.Path));
+            var item = Editor.Instance.ContentDatabase.Find(Scene.Path);
+            if (item != null)
+                Editor.Instance.Windows.ContentWin.Select(item);
         }
 
         private void OnSave()
