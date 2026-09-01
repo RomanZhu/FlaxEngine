@@ -195,7 +195,9 @@ public:
     API_FUNCTION() static bool Shutdown();
     API_FUNCTION() static bool LoadOrScan(bool strictMetadata = false);
     API_FUNCTION() static bool Scan(bool strictMetadata = false);
-    API_FUNCTION() static bool RefreshSources(const Array<String>& paths);
+    API_FUNCTION() static bool RefreshSources(const Array<String>& paths, bool ensureDefaultMetadata = true);
+    static bool RefreshSources(const Array<String>& paths, bool ensureDefaultMetadata,
+        AssetPipelineDiagnostic& failureDiagnostic);
     API_FUNCTION() static bool ImportAsset(const StringView& path, ImportAssetOptions options = ImportAssetOptions::Default);
     API_FUNCTION() static bool Refresh(ImportAssetOptions options = ImportAssetOptions::Default);
     API_FUNCTION() static bool BuildAsset(const Guid& assetID, bool force = false, bool synchronous = false);
@@ -237,7 +239,10 @@ public:
     /// <summary>Imports one external source through a journaled source-plus-meta transaction.</summary>
     API_FUNCTION() static bool ImportAsset(const StringView& externalSource, const StringView& destination);
     API_FUNCTION() static Array<Guid> StageDefaultMetadataBatch(const Array<String>& sourcePaths, const Array<String>& stagingPaths);
+    API_FUNCTION() static bool PublishDefaultMetadataBatch(const Array<AssetDefaultMetadataBatchEntry>& entries);
     API_FUNCTION() static bool PublishDefaultMetadataBatch(const Array<Guid>& assetIDs, const Array<String>& sourcePaths);
+    static bool PublishDefaultMetadataBatch(const Array<AssetDefaultMetadataBatchEntry>& entries,
+        AssetDefaultMetadataBatchFailurePoint failurePoint);
 #endif
 };
 

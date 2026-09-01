@@ -49,6 +49,24 @@ struct FLAXENGINE_API AssetOperationSelfWrite
     ContentHash Content;
 };
 
+/// <summary>One staged metadata sidecar owned by a native canonical-registration batch.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetDefaultMetadataBatchEntry
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDefaultMetadataBatchEntry);
+
+    API_FIELD() Guid AssetID = Guid::Empty;
+    API_FIELD() String SourcePath;
+    API_FIELD() String StagingPath;
+    API_FIELD() bool ReplaceExistingMetadata = false;
+};
+
+enum class AssetDefaultMetadataBatchFailurePoint : byte
+{
+    None,
+    AfterFirstMetadata,
+    AfterFirstMetadataWithoutRollback,
+};
+
 /// <summary>Recoverable trash location returned by delete/trash operations.</summary>
 struct FLAXENGINE_API AssetTrashRecord
 {

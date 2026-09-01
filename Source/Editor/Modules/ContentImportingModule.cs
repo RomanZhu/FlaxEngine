@@ -651,98 +651,19 @@ namespace FlaxEditor.Modules
 
         private bool ExecutePreparedInPlaceRegistrationBatch(List<InPlaceCanonicalImportEntry> entries, string[] stagingPaths, Guid[] assetIds, List<int> validIndices)
         {
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-            var steps = new List<ContentMutationStep>();
-            var backupRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationBackups", plan.Id.ToString("N"));
-            var backupPaths = new Dictionary<int, string>();
-
-            // This runs last during rollback, after metadata paths have been restored. Only the
-            // batch's own sources moved, so reindexing those is enough and avoids a full scan.
-            var rollbackPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
-            steps.Add(new ContentMutationStep(
-                "restore-database-after-batch-rollback",
-                Array.Empty<int>(),
-                () => ContentMutationResult.Success(null, null),
-                () => rollbackPaths.Length == 0 || !AssetPipelineService.RefreshSources(rollbackPaths),
-                () => true));
-
-            for (int position = 0; position < validIndices.Count; position++)
+            var batch = validIndices.Select(index => new AssetDefaultMetadataBatchEntry
             {
-                var index = validIndices[position];
-                var entry = entries[index];
-                var metadataPath = entry.SourceUrl + ".meta";
-                if (entry.ReplaceForeignMetadata)
-                {
-                    Directory.CreateDirectory(backupRoot);
-                    var backupPath = StringUtils.CombinePaths(backupRoot, index + "_" + Path.GetFileName(metadataPath));
-                    backupPaths.Add(index, backupPath);
-                    var backupEntry = plan.Entries.Count;
-                    plan.Entries.Add(new ContentMutationEntry(metadataPath, backupPath, ContentMutationPathRole.ReplacementBackup, false));
-                    steps.Add(new ContentMutationStep(
-                        "backup-foreign-metadata-" + index,
-                        new[] { backupEntry },
-                        () =>
-                        {
-                            File.Move(metadataPath, backupPath);
-                            return ContentMutationResult.Success(metadataPath, backupPath);
-                        },
-                        () =>
-                        {
-                            if (File.Exists(backupPath) && !File.Exists(metadataPath))
-                                File.Move(backupPath, metadataPath);
-                            return File.Exists(metadataPath) && !File.Exists(backupPath);
-                        },
-                        () => !File.Exists(metadataPath) && File.Exists(backupPath)));
-                }
-
-                var stagedPath = stagingPaths[index];
-                var metadataEntry = plan.Entries.Count;
-                plan.Entries.Add(new ContentMutationEntry(stagedPath, metadataPath, ContentMutationPathRole.MetadataSidecar, false)
-                {
-                    DestinationReleasedByTransaction = entry.ReplaceForeignMetadata,
-                    SourceRequired = true,
-                });
-                steps.Add(new ContentMutationStep(
-                    "commit-staged-metadata-" + index,
-                    new[] { metadataEntry },
-                    () =>
-                    {
-                        File.Move(stagedPath, metadataPath);
-                        return ContentMutationResult.Success(stagedPath, metadataPath);
-                    },
-                    () =>
-                    {
-                        if (File.Exists(metadataPath) && !File.Exists(stagedPath))
-                            File.Move(metadataPath, stagedPath);
-                        return File.Exists(stagedPath) && !File.Exists(metadataPath);
-                    },
-                    () => File.Exists(metadataPath) && !File.Exists(stagedPath)));
-            }
-
-            var publishIds = validIndices.Select(index => assetIds[index]).ToArray();
-            var publishPaths = validIndices.Select(index => entries[index].SourceUrl).ToArray();
-            steps.Add(new ContentMutationStep(
-                "publish-canonical-metadata-batch",
-                Array.Empty<int>(),
-                () => AssetOperationService.PublishDefaultMetadataBatch(publishIds, publishPaths)
-                    ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, null, null, "Canonical metadata batch database publication failed.")
-                    : ContentMutationResult.Success(null, null),
-                () => true,
-                () => validIndices.All(index => FlaxEngine.Content.GetAssetInfo(entries[index].SourceUrl, out var info) && info.ID == assetIds[index])));
-
-            var result = new ContentMutationTransaction(plan).Execute(steps);
-            if (!result.Succeeded)
-                Editor.LogWarning($"Canonical metadata batch transaction {plan.Id:N} failed: {result.Failure}: {result.Message}");
-            if (result.Succeeded)
-            {
-                foreach (var backupPath in backupPaths.Values)
-                    DeleteImportPath(backupPath);
-                if (Directory.Exists(backupRoot) && !Directory.EnumerateFileSystemEntries(backupRoot).Any())
-                    Directory.Delete(backupRoot, false);
-            }
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.register-in-place-batch.committed" : "mutation.register-in-place-batch.failed",
-                $"transaction={plan.Id:N}; sources={validIndices.Count}; failure={result.Failure}; recovery={result.RequiresRecovery}");
-            return !result.Succeeded;
+                AssetID = assetIds[index],
+                SourcePath = entries[index].SourceUrl,
+                StagingPath = stagingPaths[index],
+                ReplaceExistingMetadata = entries[index].ReplaceForeignMetadata,
+            }).ToArray();
+            var failed = AssetOperationService.PublishDefaultMetadataBatch(batch);
+            if (failed)
+                Editor.LogWarning("Native canonical metadata batch publication failed.");
+            ContentMutationDiagnostics.Log(failed ? "mutation.register-in-place-batch.failed" : "mutation.register-in-place-batch.committed",
+                $"sources={validIndices.Count}; native=True");
+            return failed;
         }
 
         private void ProcessInPlaceCanonicalBatch(List<InPlaceCanonicalImportEntry> entries, List<PendingCanonicalBuild> pendingBuilds)

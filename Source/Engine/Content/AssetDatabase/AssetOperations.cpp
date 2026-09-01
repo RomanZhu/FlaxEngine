@@ -1,11 +1,13 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetOperations.h"
+#include "AssetDatabaseServices.h"
 #include "DurableAssetFileSystem.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
+#include "Engine/Engine/Globals.h"
 #include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -24,7 +26,11 @@ namespace
     constexpr uint32 JournalVersion = 2;
     constexpr uint32 BatchJournalMagic = 0x42504F41; // AOPB
     constexpr uint32 BatchJournalVersion = 1;
+    constexpr uint32 MetadataBatchJournalMagic = 0x4D504F41; // AOPM
+    constexpr uint32 MetadataBatchJournalVersion = 1;
     constexpr int32 MaximumTrashEntries = 4096;
+    constexpr int32 MaximumMetadataBatchEntries = 4096;
+    CriticalSection MetadataBatchLocker;
 
     enum class JournalPhase : byte
     {
@@ -64,6 +70,23 @@ namespace
         AssetTrashBatch Trash;
         String TrashRoot;
         String DiscardStageRoot;
+    };
+
+    struct MetadataBatchJournalEntry
+    {
+        Guid AssetID;
+        String SourcePath;
+        String MetadataPath;
+        String StagingPath;
+        String BackupPath;
+        bool ReplaceExistingMetadata = false;
+    };
+
+    struct MetadataBatchJournal
+    {
+        Guid TransactionId;
+        JournalPhase Phase = JournalPhase::Prepared;
+        Array<MetadataBatchJournalEntry> Entries;
     };
 
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const StringView& path,
@@ -380,6 +403,83 @@ namespace
         return false;
     }
 
+    String MetadataBatchJournalPath(const StringView& directory)
+    {
+        return String(directory) / TEXT("metadata-batch-journal.bin");
+    }
+
+    bool SaveMetadataBatchJournal(const StringView& directory, const MetadataBatchJournal& journal,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        if (!journal.TransactionId.IsValid() || journal.Entries.IsEmpty() ||
+            journal.Entries.Count() > MaximumMetadataBatchEntries || EnsureDirectory(directory))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
+                TEXT("Cannot create the metadata batch transaction directory."));
+        JournalWriter writer;
+        writer.UInt32(MetadataBatchJournalMagic);
+        writer.UInt32(MetadataBatchJournalVersion);
+        writer.Byte(static_cast<byte>(journal.Phase));
+        writer.GuidValue(journal.TransactionId);
+        writer.UInt32(journal.Entries.Count());
+        for (const MetadataBatchJournalEntry& entry : journal.Entries)
+        {
+            writer.GuidValue(entry.AssetID);
+            writer.Byte(entry.ReplaceExistingMetadata ? 1 : 0);
+            writer.StringValue(entry.SourcePath);
+            writer.StringValue(entry.MetadataPath);
+            writer.StringValue(entry.StagingPath);
+            writer.StringValue(entry.BackupPath);
+        }
+        const String destination = MetadataBatchJournalPath(directory);
+        const String staging = destination + TEXT(".tmp");
+        if (File::WriteAllBytes(staging, writer.Data.Get(), writer.Data.Count()) || FlushFile(staging) ||
+            DurableMove(destination, staging, true))
+        {
+            DurableDeleteFile(staging);
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destination,
+                TEXT("Cannot durably persist the metadata batch journal."));
+        }
+        return false;
+    }
+
+    bool LoadMetadataBatchJournal(const StringView& directory, MetadataBatchJournal& journal,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        const String path = MetadataBatchJournalPath(directory);
+        BytesContainer bytes;
+        if (File::ReadAllBytes(path, bytes) || bytes.Length() > 64 * 1024 * 1024)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Metadata batch journal is missing, unreadable, or oversized."));
+        JournalReader reader(bytes.Get(), static_cast<uint32>(bytes.Length()));
+        uint32 magic;
+        uint32 version;
+        uint32 entryCount;
+        byte phase;
+        if (reader.UInt32(magic) || reader.UInt32(version) || reader.Byte(phase) ||
+            reader.GuidValue(journal.TransactionId) || reader.UInt32(entryCount) ||
+            magic != MetadataBatchJournalMagic || version != MetadataBatchJournalVersion ||
+            !journal.TransactionId.IsValid() || phase > static_cast<byte>(JournalPhase::Committed) ||
+            entryCount == 0 || entryCount > MaximumMetadataBatchEntries)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Metadata batch journal is malformed or unsupported."));
+        journal.Phase = static_cast<JournalPhase>(phase);
+        journal.Entries.Resize(entryCount);
+        for (MetadataBatchJournalEntry& entry : journal.Entries)
+        {
+            byte replace;
+            if (reader.GuidValue(entry.AssetID) || reader.Byte(replace) || replace > 1 ||
+                reader.StringValue(entry.SourcePath) || reader.StringValue(entry.MetadataPath) ||
+                reader.StringValue(entry.StagingPath) || reader.StringValue(entry.BackupPath))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                    TEXT("Metadata batch journal entry is malformed."));
+            entry.ReplaceExistingMetadata = replace != 0;
+        }
+        if (!reader.AtEnd())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Metadata batch journal contains trailing data."));
+        return false;
+    }
+
     bool HashFile(const StringView& path, ContentHash& hash)
     {
         BytesContainer bytes;
@@ -624,7 +724,237 @@ namespace
         return DurableAssetFileSystem::WriteFile(staging, bytes.Get(), bytes.Length()) ||
                DurableAssetFileSystem::Replace(path, staging);
     }
+
+    String NormalizeMetadataBatchPath(const StringView& path)
+    {
+        String result(path);
+        StringUtils::PathRemoveRelativeParts(result);
+        FileSystem::NormalizePath(result);
+        return result;
+    }
+
+    bool ValidateMetadataBatchJournal(const MetadataBatchJournal& journal, const StringView& directory,
+        const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        const String transactionRoot = NormalizeMetadataBatchPath(String(libraryRoot) / TEXT("AssetOperations/Transactions"));
+        const String expectedDirectory = transactionRoot / journal.TransactionId.ToString(Guid::FormatType::N);
+        const String stagingRoot = NormalizeMetadataBatchPath(String(libraryRoot) / TEXT("Temp/MetadataBatches"));
+        if (!FileSystem::AreFilePathsEquivalent(directory, expectedDirectory))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, directory,
+                TEXT("Metadata batch transaction directory does not match its durable identity."));
+
+        AssetSourceRootRegistry roots(projectRoot, libraryRoot);
+        if (roots.RegisterProjectRoots(contentRoot, diagnostic))
+            return true;
+        HashSet<String> paths;
+        for (int32 i = 0; i < journal.Entries.Count(); i++)
+        {
+            const MetadataBatchJournalEntry& entry = journal.Entries[i];
+            ResolvedAssetSourcePath resolved;
+            const String expectedBackup = String(directory) / TEXT("metadata-backups") /
+                String::Format(TEXT("{0}.meta"), i);
+            if (!entry.AssetID.IsValid() || roots.Resolve(entry.SourcePath, resolved, diagnostic) ||
+                resolved.Root.Kind != AssetSourceRootKind::ProjectContent ||
+                !resolved.Root.HasPermission(AssetSourceRootPermission::GenericMutation) ||
+                !FileSystem::AreFilePathsEquivalent(resolved.Path.AbsolutePath, entry.SourcePath) ||
+                !FileSystem::AreFilePathsEquivalent(entry.MetadataPath, entry.SourcePath + TEXT(".meta")) ||
+                !AssetPathPolicy::IsSameOrChild(entry.StagingPath, stagingRoot) ||
+                FileSystem::AreFilePathsEquivalent(entry.StagingPath, stagingRoot) ||
+                !FileSystem::AreFilePathsEquivalent(entry.BackupPath, expectedBackup))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, entry.SourcePath,
+                    TEXT("Metadata batch recovery paths failed canonical root validation."));
+            String sourceKey = NormalizeMetadataBatchPath(entry.SourcePath).ToLower();
+            String stagingKey = NormalizeMetadataBatchPath(entry.StagingPath).ToLower();
+            if (paths.Contains(sourceKey) || paths.Contains(stagingKey))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, entry.SourcePath,
+                    TEXT("Metadata batch contains duplicate source or staging paths."));
+            paths.Add(MoveTemp(sourceKey));
+            paths.Add(MoveTemp(stagingKey));
+        }
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+
+    bool RollbackMetadataBatchJournal(const MetadataBatchJournal& journal)
+    {
+        bool failed = false;
+        for (int32 i = journal.Entries.Count() - 1; i >= 0; i--)
+        {
+            const MetadataBatchJournalEntry& entry = journal.Entries[i];
+            if (FileSystem::FileExists(entry.MetadataPath))
+            {
+                AssetMeta active;
+                AssetPipelineDiagnostic ignored;
+                if (!AssetMeta::Load(entry.MetadataPath, active, ignored) && active.ID == entry.AssetID)
+                    failed |= DurableDeleteFile(entry.MetadataPath);
+                else if (FileSystem::FileExists(entry.BackupPath) || !entry.ReplaceExistingMetadata)
+                    failed = true;
+            }
+            if (FileSystem::FileExists(entry.BackupPath))
+            {
+                if (FileSystem::FileExists(entry.MetadataPath))
+                    failed = true;
+                else
+                    failed |= DurableMove(entry.MetadataPath, entry.BackupPath, false);
+            }
+            if (FileSystem::FileExists(entry.StagingPath))
+                failed |= DurableDeleteFile(entry.StagingPath);
+        }
+        return failed;
+    }
+
+    bool RecoverMetadataBatchJournal(const StringView& directory, const StringView& projectRoot,
+        const StringView& contentRoot, const StringView& libraryRoot, AssetPipelineDiagnostic& diagnostic)
+    {
+        MetadataBatchJournal journal;
+        if (LoadMetadataBatchJournal(directory, journal, diagnostic) ||
+            ValidateMetadataBatchJournal(journal, directory, projectRoot, contentRoot, libraryRoot, diagnostic))
+            return true;
+        if (journal.Phase != JournalPhase::Committed && RollbackMetadataBatchJournal(journal))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, directory,
+                TEXT("Incomplete metadata batch could not be rolled back; recovery data was preserved."));
+        if (DurableDeleteDirectory(directory))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
+                TEXT("Recovered metadata batch transaction directory could not be removed."));
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
 }
+
+#if USE_EDITOR
+bool AssetOperationService::PublishDefaultMetadataBatch(const Array<AssetDefaultMetadataBatchEntry>& entries)
+{
+    return PublishDefaultMetadataBatch(entries, AssetDefaultMetadataBatchFailurePoint::None);
+}
+
+bool AssetOperationService::PublishDefaultMetadataBatch(const Array<AssetDefaultMetadataBatchEntry>& entries,
+    AssetDefaultMetadataBatchFailurePoint failurePoint)
+{
+    if (entries.IsEmpty() || entries.Count() > MaximumMetadataBatchEntries)
+        return true;
+
+    MetadataBatchLocker.Lock();
+    SCOPE_EXIT { MetadataBatchLocker.Unlock(); };
+
+    MetadataBatchJournal journal;
+    journal.TransactionId = Guid::New();
+    const String transactionsRoot = NormalizeMetadataBatchPath(Globals::ProjectLibraryFolder /
+        TEXT("AssetOperations/Transactions"));
+    const String transactionDirectory = transactionsRoot /
+        journal.TransactionId.ToString(Guid::FormatType::N);
+    const String backupRoot = transactionDirectory / TEXT("metadata-backups");
+    journal.Entries.Resize(entries.Count());
+    for (int32 i = 0; i < entries.Count(); i++)
+    {
+        const AssetDefaultMetadataBatchEntry& input = entries[i];
+        MetadataBatchJournalEntry& entry = journal.Entries[i];
+        entry.AssetID = input.AssetID;
+        entry.SourcePath = NormalizeMetadataBatchPath(input.SourcePath);
+        entry.MetadataPath = entry.SourcePath + TEXT(".meta");
+        entry.StagingPath = NormalizeMetadataBatchPath(input.StagingPath);
+        entry.BackupPath = backupRoot / String::Format(TEXT("{0}.meta"), i);
+        entry.ReplaceExistingMetadata = input.ReplaceExistingMetadata;
+    }
+
+    AssetPipelineDiagnostic diagnostic;
+    if (ValidateMetadataBatchJournal(journal, transactionDirectory, Globals::ProjectFolder,
+            Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, diagnostic))
+        return true;
+    for (const MetadataBatchJournalEntry& entry : journal.Entries)
+    {
+        if (!FileSystem::FileExists(entry.SourcePath) || !FileSystem::FileExists(entry.StagingPath) ||
+            IsFileSystemLink(entry.SourcePath) || IsFileSystemLink(entry.MetadataPath) ||
+            IsFileSystemLink(entry.StagingPath) ||
+            FileSystem::FileExists(entry.MetadataPath) != entry.ReplaceExistingMetadata)
+            return true;
+        AssetMeta staged;
+        if (AssetMeta::Load(entry.StagingPath, staged, diagnostic) || staged.ID != entry.AssetID)
+            return true;
+    }
+
+    bool needsBackupRoot = false;
+    for (const MetadataBatchJournalEntry& entry : journal.Entries)
+        needsBackupRoot |= entry.ReplaceExistingMetadata;
+    if (EnsureDirectory(transactionsRoot))
+        return true;
+    if (SaveMetadataBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        DurableDeleteDirectory(transactionDirectory);
+        return true;
+    }
+    if (needsBackupRoot && EnsureDirectory(backupRoot))
+    {
+        RollbackMetadataBatchJournal(journal);
+        DurableDeleteDirectory(transactionDirectory);
+        return true;
+    }
+
+    bool failed = false;
+    for (int32 i = 0; i < journal.Entries.Count(); i++)
+    {
+        const MetadataBatchJournalEntry& entry = journal.Entries[i];
+        if (entry.ReplaceExistingMetadata && DurableMove(entry.BackupPath, entry.MetadataPath, false))
+        {
+            failed = true;
+            break;
+        }
+        if (DurableMove(entry.MetadataPath, entry.StagingPath, false))
+        {
+            failed = true;
+            break;
+        }
+        if (i == 0 && failurePoint == AssetDefaultMetadataBatchFailurePoint::AfterFirstMetadataWithoutRollback)
+            return true;
+        if (i == 0 && failurePoint == AssetDefaultMetadataBatchFailurePoint::AfterFirstMetadata)
+        {
+            failed = true;
+            break;
+        }
+    }
+
+    Array<String> sourcePaths;
+    Array<Guid> assetIDs;
+    sourcePaths.EnsureCapacity(journal.Entries.Count());
+    assetIDs.EnsureCapacity(journal.Entries.Count());
+    for (const MetadataBatchJournalEntry& entry : journal.Entries)
+    {
+        sourcePaths.Add(entry.SourcePath);
+        assetIDs.Add(entry.AssetID);
+    }
+    bool publicationAttempted = false;
+    if (!failed)
+    {
+        journal.Phase = JournalPhase::Applied;
+        failed = SaveMetadataBatchJournal(transactionDirectory, journal, diagnostic);
+        if (!failed)
+        {
+            publicationAttempted = true;
+            failed = AssetOperationService::PublishDefaultMetadataBatch(assetIDs, sourcePaths);
+        }
+    }
+    if (failed)
+    {
+        const bool rollbackFailed = RollbackMetadataBatchJournal(journal);
+        const bool refreshFailed = publicationAttempted && AssetPipelineService::RefreshSources(sourcePaths, false);
+        if (!rollbackFailed && !refreshFailed)
+            DurableDeleteDirectory(transactionDirectory);
+        return true;
+    }
+
+    journal.Phase = JournalPhase::Committed;
+    if (SaveMetadataBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        const bool rollbackFailed = RollbackMetadataBatchJournal(journal);
+        const bool refreshFailed = AssetPipelineService::RefreshSources(sourcePaths, false);
+        if (!rollbackFailed && !refreshFailed)
+            DurableDeleteDirectory(transactionDirectory);
+        return true;
+    }
+    DurableDeleteDirectory(transactionDirectory);
+    return false;
+}
+#endif
 
 AssetOperations::AssetOperations(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
     IAssetModificationProcessor& modificationProcessor, IAssetOperationDatabaseCallbacks& databaseCallbacks)
@@ -2130,6 +2460,13 @@ bool AssetOperations::RecoverIncompleteTransactions(Array<AssetPipelineDiagnosti
     }
     for (const String& directory : directories)
     {
+        if (FileSystem::FileExists(MetadataBatchJournalPath(directory)))
+        {
+            AssetPipelineDiagnostic diagnostic;
+            if (RecoverMetadataBatchJournal(directory, _projectRoot, _contentRoot, _libraryRoot, diagnostic))
+                diagnostics.Add(MoveTemp(diagnostic));
+            continue;
+        }
         if (FileSystem::FileExists(BatchJournalPath(directory)))
         {
             BatchOperationJournal batch;

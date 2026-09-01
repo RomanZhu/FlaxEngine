@@ -1838,29 +1838,68 @@ bool AssetPipelineService::LoadOrScan(bool strictMetadata)
     return Scan(strictMetadata);
 }
 
-bool AssetPipelineService::RefreshSources(const Array<String>& paths)
+bool AssetPipelineService::RefreshSources(const Array<String>& paths, bool ensureDefaultMetadata)
+{
+    AssetPipelineDiagnostic diagnostic;
+    return RefreshSources(paths, ensureDefaultMetadata, diagnostic);
+}
+
+bool AssetPipelineService::RefreshSources(const Array<String>& paths, bool ensureDefaultMetadata,
+    AssetPipelineDiagnostic& failureDiagnostic)
 {
 #if USE_EDITOR
     std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
     EnsureBound();
+    failureDiagnostic = AssetPipelineDiagnostic();
+    const auto setFailureDiagnostic = [&paths, &failureDiagnostic](const Array<AssetPipelineDiagnostic>& candidates,
+        const StringView& fallback)
+    {
+        for (int32 i = candidates.Count() - 1; i >= 0; i--)
+        {
+            for (const String& path : paths)
+            {
+                if (FileSystem::AreFilePathsEquivalent(candidates[i].SourcePath, path))
+                {
+                    failureDiagnostic = candidates[i];
+                    return;
+                }
+            }
+        }
+        if (candidates.HasItems())
+        {
+            failureDiagnostic = candidates.Last();
+            return;
+        }
+        failureDiagnostic.Code = AssetPipelineDiagnosticCode::SnapshotInvalid;
+        failureDiagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+        if (paths.HasItems())
+            failureDiagnostic.SourcePath = paths[0];
+        failureDiagnostic.Message = fallback;
+    };
     if (Initialize())
+    {
+        setFailureDiagnostic(AssetDatabaseQueryService::GetDiagnostics(), TEXT("Asset database initialization failed during source refresh."));
         return true;
+    }
     if (paths.IsEmpty())
         return false;
 
     Array<AssetPipelineDiagnostic> metadataDiagnostics;
-    for (const String& requestedPath : paths)
+    if (ensureDefaultMetadata)
     {
-        String sourcePath = NormalizeAbsolutePath(requestedPath);
-        if (IsMetaPath(sourcePath))
-            sourcePath = sourcePath.Left(sourcePath.Length() - 5);
-        if (IsV3MetadataExcluded(sourcePath) || !AssetPathPolicy::IsSameOrChild(sourcePath, Globals::ProjectContentFolder))
-            continue;
-        if (FileSystem::DirectoryExists(sourcePath))
-            EnsureV3MetadataForRoot(sourcePath, metadataDiagnostics);
-        AssetPipelineDiagnostic diagnostic;
-        if (EnsureDefaultCanonicalMetadata(sourcePath, diagnostic))
-            metadataDiagnostics.Add(MoveTemp(diagnostic));
+        for (const String& requestedPath : paths)
+        {
+            String sourcePath = NormalizeAbsolutePath(requestedPath);
+            if (IsMetaPath(sourcePath))
+                sourcePath = sourcePath.Left(sourcePath.Length() - 5);
+            if (IsV3MetadataExcluded(sourcePath) || !AssetPathPolicy::IsSameOrChild(sourcePath, Globals::ProjectContentFolder))
+                continue;
+            if (FileSystem::DirectoryExists(sourcePath))
+                EnsureV3MetadataForRoot(sourcePath, metadataDiagnostics);
+            AssetPipelineDiagnostic diagnostic;
+            if (EnsureDefaultCanonicalMetadata(sourcePath, diagnostic))
+                metadataDiagnostics.Add(MoveTemp(diagnostic));
+        }
     }
 
     const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
@@ -1936,14 +1975,20 @@ bool AssetPipelineService::RefreshSources(const Array<String>& paths)
     Array<AssetRecord> collected;
     if (projectFiles.Count() && AssetDatabaseScanner::CollectFromFiles(Globals::ProjectFolder, Globals::ProjectContentFolder,
         Globals::ProjectLibraryFolder, projectFiles, options, previous, collected, result))
+    {
+        setFailureDiagnostic(result.Diagnostics, TEXT("Project source collection failed during targeted refresh."));
         return true;
+    }
     if (engineFiles.Count())
     {
         AssetDatabaseScanResult engineResult;
         Array<AssetRecord> engineRecords;
         if (AssetDatabaseScanner::CollectFromFiles(Globals::StartupFolder, engineRoot, Globals::ProjectLibraryFolder,
             engineFiles, options, previous, engineRecords, engineResult))
+        {
+            setFailureDiagnostic(engineResult.Diagnostics, TEXT("Engine source collection failed during targeted refresh."));
             return true;
+        }
         for (AssetRecord& record : engineRecords)
         {
             record.PortabilityKey = String(TEXT("engine/")) + record.PortabilityKey;
@@ -2008,6 +2053,7 @@ bool AssetPipelineService::RefreshSources(const Array<String>& paths)
     AssetPipelineDiagnostic publishDiagnostic;
     if (AssetDatabase::Get().PublishFullSnapshot(merged, diagnostics, nextStates, publishDiagnostic))
     {
+        failureDiagnostic = publishDiagnostic;
         diagnostics.Add(MoveTemp(publishDiagnostic));
         SetDiagnostics(diagnostics);
         return true;
@@ -2018,8 +2064,13 @@ bool AssetPipelineService::RefreshSources(const Array<String>& paths)
     if (AssetRefreshCoordinator* coordinator = AssetImportService::GetRefreshCoordinator())
         coordinator->RequestRefresh(AssetRefreshReason::Filesystem);
 #endif
+    failureDiagnostic = AssetPipelineDiagnostic();
     return false;
 #else
+    failureDiagnostic = AssetPipelineDiagnostic();
+    failureDiagnostic.Code = AssetPipelineDiagnosticCode::SnapshotInvalid;
+    failureDiagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+    failureDiagnostic.Message = TEXT("Targeted source refresh requires editor support.");
     return true;
 #endif
 }
@@ -3345,8 +3396,7 @@ bool AuthoredAssetDocumentService::SaveMaterial(Material* asset, const Guid& can
     }
     BytesContainer surface;
     surface.Link(ToSpan(writeStream));
-    if (AssetDocumentService::SaveGraphSource(record.SourcePath.Get(), surface, StringView::Empty) ||
-        RefreshPath(record.SourcePath.Get()))
+    if (AssetDocumentService::SaveGraphSource(record.SourcePath.Get(), surface, StringView::Empty))
         return true;
     return GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic) ? fail() : false;
 #else

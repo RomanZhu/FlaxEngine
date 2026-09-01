@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/AssetDatabase/AssetOperations.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
@@ -226,6 +227,102 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     Array<AssetPipelineDiagnostic> recoveryDiagnostics;
     CHECK_FALSE(operations.RecoverIncompleteTransactions(recoveryDiagnostics));
     CHECK(recoveryDiagnostics.IsEmpty());
+}
+
+TEST_CASE("Default metadata batches roll back and recover native staged publication")
+{
+    const Guid testId = Guid::New();
+    const String contentRoot = Globals::ProjectContentFolder /
+        (TEXT("__MetadataBatchOperations-") + testId.ToString(Guid::FormatType::N));
+    const String stagingRoot = Globals::ProjectLibraryFolder / TEXT("Temp/MetadataBatches") /
+        testId.ToString(Guid::FormatType::N);
+    const String first = contentRoot / TEXT("First.txt");
+    const String second = contentRoot / TEXT("Second.txt");
+    const String firstMeta = first + TEXT(".meta");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(contentRoot));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(stagingRoot));
+    REQUIRE_FALSE(File::WriteAllText(first, TEXT("first"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(second, TEXT("second"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(firstMeta,
+        TEXT("fileFormatVersion: 2\nguid: 00112233445566778899aabbccddeeff\n"), Encoding::ANSI));
+    BytesContainer foreignMetadata;
+    REQUIRE_FALSE(File::ReadAllBytes(firstMeta, foreignMetadata));
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteDirectory(contentRoot, true);
+        FileSystem::DeleteDirectory(stagingRoot, true);
+        Array<String> refresh;
+        refresh.Add(contentRoot);
+        AssetPipelineService::RefreshSources(refresh);
+    };
+
+    Array<String> sources;
+    sources.Add(first);
+    sources.Add(second);
+    Array<String> staging;
+    staging.Add(stagingRoot / TEXT("0.meta"));
+    staging.Add(stagingRoot / TEXT("1.meta"));
+    auto Stage = [&]()
+    {
+        const Array<Guid> ids = AssetOperationService::StageDefaultMetadataBatch(sources, staging);
+        REQUIRE(ids.Count() == 2);
+        REQUIRE(ids[0].IsValid());
+        REQUIRE(ids[1].IsValid());
+        Array<AssetDefaultMetadataBatchEntry> entries;
+        entries.Resize(2);
+        for (int32 i = 0; i < entries.Count(); i++)
+        {
+            entries[i].AssetID = ids[i];
+            entries[i].SourcePath = sources[i];
+            entries[i].StagingPath = staging[i];
+        }
+        entries[0].ReplaceExistingMetadata = true;
+        return entries;
+    };
+
+    Array<AssetDefaultMetadataBatchEntry> entries = Stage();
+    CHECK(AssetOperationService::PublishDefaultMetadataBatch(entries,
+        AssetDefaultMetadataBatchFailurePoint::AfterFirstMetadata));
+    BytesContainer restoredMetadata;
+    REQUIRE_FALSE(File::ReadAllBytes(firstMeta, restoredMetadata));
+    CHECK(EqualBytes(foreignMetadata, restoredMetadata));
+    CHECK_FALSE(FileSystem::FileExists(second + TEXT(".meta")));
+    CHECK_FALSE(FileSystem::FileExists(staging[0]));
+    CHECK_FALSE(FileSystem::FileExists(staging[1]));
+
+    entries = Stage();
+    CHECK(AssetOperationService::PublishDefaultMetadataBatch(entries,
+        AssetDefaultMetadataBatchFailurePoint::AfterFirstMetadataWithoutRollback));
+    AssetMeta active;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::Load(firstMeta, active, diagnostic));
+    CHECK(active.ID == entries[0].AssetID);
+
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations recovery(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        Globals::ProjectLibraryFolder, processor, database);
+    REQUIRE_FALSE(recovery.Initialize(diagnostic));
+    Array<AssetPipelineDiagnostic> recoveryDiagnostics;
+    REQUIRE_FALSE(recovery.RecoverIncompleteTransactions(recoveryDiagnostics));
+    CHECK(recoveryDiagnostics.IsEmpty());
+    REQUIRE_FALSE(File::ReadAllBytes(firstMeta, restoredMetadata));
+    CHECK(EqualBytes(foreignMetadata, restoredMetadata));
+    CHECK_FALSE(FileSystem::FileExists(second + TEXT(".meta")));
+    CHECK_FALSE(FileSystem::FileExists(staging[0]));
+    CHECK_FALSE(FileSystem::FileExists(staging[1]));
+
+    entries = Stage();
+    REQUIRE_FALSE(AssetOperationService::PublishDefaultMetadataBatch(entries));
+    REQUIRE_FALSE(AssetMeta::Load(firstMeta, active, diagnostic));
+    CHECK(active.ID == entries[0].AssetID);
+    REQUIRE_FALSE(AssetMeta::Load(second + TEXT(".meta"), active, diagnostic));
+    CHECK(active.ID == entries[1].AssetID);
+    AssetRecord record;
+    REQUIRE(AssetDatabase::Get().TryGetRecord(entries[0].AssetID, record));
+    CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), first));
+    REQUIRE(AssetDatabase::Get().TryGetRecord(entries[1].AssetID, record));
+    CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), second));
 }
 
 TEST_CASE("Asset operations batch trash restores folders and private scene fragments atomically")
