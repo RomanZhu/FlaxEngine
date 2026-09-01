@@ -418,10 +418,10 @@ TEST_CASE("Canonical missing source path reaches exact asset object loader diagn
         planRequested = true;
         return true;
     };
+    ArtifactResolver::ScopedConfiguration resolverConfiguration(ArtifactResolver::Get());
     ArtifactResolver::Get().Configure(database, buildService, Globals::ProjectLibraryFolder, target, provider);
     SCOPE_EXIT
     {
-        ArtifactResolver::Get().Reset();
         database.PublishFullSnapshot(savedDatabase.Records, diagnostic);
     };
 

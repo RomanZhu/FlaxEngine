@@ -121,6 +121,25 @@ ArtifactResolver& ArtifactResolver::Get()
     return instance;
 }
 
+ArtifactResolver::ScopedConfiguration::ScopedConfiguration(ArtifactResolver& resolver)
+    : _resolver(&resolver)
+    , _database(resolver._database)
+    , _buildService(resolver._buildService)
+    , _planProvider(resolver._planProvider)
+    , _libraryRoot(resolver._libraryRoot)
+    , _defaultTarget(resolver._defaultTarget)
+{
+}
+
+ArtifactResolver::ScopedConfiguration::~ScopedConfiguration()
+{
+    _resolver->_database = _database;
+    _resolver->_buildService = _buildService;
+    _resolver->_planProvider = MoveTemp(_planProvider);
+    _resolver->_libraryRoot = MoveTemp(_libraryRoot);
+    _resolver->_defaultTarget = MoveTemp(_defaultTarget);
+}
+
 void ArtifactResolver::Configure(AssetDatabase& database, AssetBuildService& buildService, const StringView& libraryRoot,
     const ArtifactTarget& defaultTarget, const ArtifactResolutionPlanProvider& planProvider)
 {

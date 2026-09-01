@@ -525,6 +525,7 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
 {
     AssetDatabase& database = AssetDatabase::Get();
     const AssetDatabaseSnapshot savedDatabase = database.GetSnapshot();
+    ArtifactResolver::ScopedConfiguration resolverConfiguration(ArtifactResolver::Get());
     SyntheticPipelineFixture fixture(database);
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(fixture.Initialize(diagnostic));

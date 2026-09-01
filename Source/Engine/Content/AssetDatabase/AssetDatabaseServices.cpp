@@ -3366,6 +3366,8 @@ Array<Guid> AssetOperationService::StageDefaultMetadataBatch(const Array<String>
 {
     Array<Guid> result;
     result.Resize(sourcePaths.Count());
+    for (Guid& id : result)
+        id = Guid::Empty;
     Array<AssetPipelineDiagnostic> diagnostics;
     if (sourcePaths.Count() != stagingPaths.Count())
     {

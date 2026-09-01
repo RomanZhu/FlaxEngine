@@ -42,10 +42,18 @@ TEST_CASE("Project Library root")
 
 TEST_CASE("Project Library recovery and clean stay contained")
 {
-    const String library = Globals::ProjectLibraryFolder;
+    const String project = Globals::TemporaryFolder / (TEXT("ProjectLibraryClean-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = project / TEXT("Content");
+    const String library = project / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    String normalized;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(ProjectLibrary::EnsureRoot(project, content, library, normalized, diagnostic));
+    REQUIRE_FALSE(ArtifactStore::EnsureLayout(library, diagnostic));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(project, true); };
     const String interrupted = ArtifactStore::GetTemporaryPath(library) / TEXT("Interrupted");
     const String leasedPath = ArtifactStore::GetArtifactsPath(library) / TEXT("leased.bin");
-    const String contentSentinel = Globals::ProjectContentFolder / TEXT("__LibraryCleanMustNotTouch.txt");
+    const String contentSentinel = content / TEXT("__LibraryCleanMustNotTouch.txt");
     const byte value = 7;
     FileSystem::DeleteDirectory(interrupted, true);
     REQUIRE_FALSE(FileSystem::CreateDirectory(interrupted));
@@ -57,7 +65,6 @@ TEST_CASE("Project Library recovery and clean stay contained")
         FileSystem::DeleteDirectory(interrupted, true);
     };
 
-    AssetPipelineDiagnostic diagnostic;
     CHECK_FALSE(ArtifactStore::Recover(library, diagnostic));
     CHECK_FALSE(FileSystem::DirectoryExists(interrupted));
 

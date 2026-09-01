@@ -47,6 +47,25 @@ private:
     ArtifactTarget _defaultTarget;
 
 public:
+    /// <summary>Restores the resolver configuration that was active when this scope was created.</summary>
+    class FLAXENGINE_API ScopedConfiguration
+    {
+    private:
+        ArtifactResolver* _resolver;
+        AssetDatabase* _database;
+        AssetBuildService* _buildService;
+        ArtifactResolutionPlanProvider _planProvider;
+        String _libraryRoot;
+        ArtifactTarget _defaultTarget;
+
+    public:
+        explicit ScopedConfiguration(ArtifactResolver& resolver);
+        ~ScopedConfiguration();
+
+        ScopedConfiguration(const ScopedConfiguration&) = delete;
+        ScopedConfiguration& operator=(const ScopedConfiguration&) = delete;
+    };
+
     static ArtifactResolver& Get();
 
     void Configure(AssetDatabase& database, AssetBuildService& buildService, const StringView& libraryRoot,
