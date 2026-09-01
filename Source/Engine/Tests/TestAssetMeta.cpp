@@ -6,6 +6,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 #if USE_EDITOR
@@ -167,22 +168,31 @@ TEST_CASE("Asset meta atomic write preserves old complete sidecar on failures")
 TEST_CASE("Asset meta strictly rejects unsupported and non-canonical identity formats")
 {
     const String root = Globals::TemporaryFolder / (TEXT("AssetMetaLegacy-") + Guid::New().ToString(Guid::FormatType::N));
-    const String path = root / TEXT("old.meta");
     REQUIRE_FALSE(FileSystem::CreateDirectory(root));
-    const StringAnsi oldJson = "{\"fileFormatVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}";
-    REQUIRE_FALSE(File::WriteAllBytes(path, oldJson.Get(), oldJson.Length()));
     SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
-    BytesContainer before;
-    REQUIRE_FALSE(File::ReadAllBytes(path, before));
     AssetMeta meta;
     AssetPipelineDiagnostic diagnostic;
-    CHECK(AssetMeta::Load(path, meta, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
-    CHECK(diagnostic.Message.Contains(TEXT("offline migrator")));
-    BytesContainer after;
-    REQUIRE_FALSE(File::ReadAllBytes(path, after));
-    REQUIRE(after.Length() == before.Length());
-    CHECK(Platform::MemoryCompare(after.Get(), before.Get(), before.Length()) == 0);
+    const char* unsupported[] =
+    {
+        "{\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[],\"userData\":{}}",
+        "{\"fileFormatVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[],\"userData\":{}}",
+        "{\"fileFormatVersion\":3,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[],\"userData\":{}}",
+        "{\"fileFormatVersion\":2,\"fileFormatVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[],\"userData\":{}}",
+    };
+    for (int32 i = 0; i < ARRAY_COUNT(unsupported); i++)
+    {
+        const String path = root / String::Format(TEXT("unsupported-{0}.meta"), i);
+        const int32 length = StringAnsiView(unsupported[i]).Length();
+        REQUIRE_FALSE(File::WriteAllBytes(path, unsupported[i], length));
+        CHECK(AssetMeta::Load(path, meta, diagnostic));
+        CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
+        BytesContainer after;
+        REQUIRE_FALSE(File::ReadAllBytes(path, after));
+        REQUIRE(after.Length() == length);
+        CHECK(Platform::MemoryCompare(after.Get(), unsupported[i], length) == 0);
+    }
+
+    const String path = root / TEXT("noncanonical.meta");
 
     CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36F15F0C-4B35-4AF8-8BA2-F72F6CB82E22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
     CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));

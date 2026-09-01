@@ -130,7 +130,9 @@ namespace
         const auto serializer = document.FindMember("serializerVersion");
         const auto payload = document.FindMember("payload");
         Guid ownerGuid;
-        if (version == document.MemberEnd() || !version->value.IsUint() ||
+        if (document.HasMember("documentVersion") || document.HasMember("settingsVersion") ||
+            document.HasMember("sceneVersion") || document.HasMember("prefabVersion") ||
+            version == document.MemberEnd() || !version->value.IsUint() ||
             owner == document.MemberEnd() || !owner->value.IsString() ||
             Guid::Parse(StringAnsiView(owner->value.GetString(), owner->value.GetStringLength()), ownerGuid) ||
             root == document.MemberEnd() || !root->value.IsInt64() ||
@@ -248,7 +250,9 @@ bool ReadIndexAt(const Guid& sceneGuid, const StringView& path, SceneFragmentInd
     const auto revision = document.FindMember("indexRevision");
     const auto fragments = document.FindMember("fragments");
     Guid ownerGuid;
-    if (version == document.MemberEnd() || !version->value.IsUint() ||
+    if (document.HasMember("documentVersion") || document.HasMember("settingsVersion") ||
+        document.HasMember("sceneVersion") || document.HasMember("prefabVersion") ||
+        version == document.MemberEnd() || !version->value.IsUint() ||
         owner == document.MemberEnd() || !owner->value.IsString() ||
         Guid::Parse(StringAnsiView(owner->value.GetString(), owner->value.GetStringLength()), ownerGuid) ||
         revision == document.MemberEnd() || !revision->value.IsUint64() || revision->value.GetUint64() == 0 ||

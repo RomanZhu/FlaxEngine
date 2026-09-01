@@ -45,6 +45,7 @@ namespace Flax.Build.Tests
         [TestCase("{\"Name\":\"Test\",\"Version\":{\"Major\":1},\"AssetSystemVersion\":2}")]
         [TestCase("{\"Name\":\"Test\",\"Version\":\"1.0\",\"AssetSystemVersion\":1}")]
         [TestCase("{\"Name\":\"Test\",\"Version\":\"1.0\",\"AssetSystemVersion\":3}")]
+        [TestCase("{\"Name\":\"Test\",\"Version\":\"1.0\",\"AssetSystemVersion\":2,\"AssetSystemVersion\":1}")]
         [TestCase("{\"Name\":\"Test\",\"Version\":\"1.0\",\"AssetSystemVersion\":2,\"ProjectSettingsIndexGuid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"Company\":\"\",\"Copyright\":\"\",\"GameTarget\":\"Game\",\"EditorTarget\":\"Editor\",\"References\":[],\"MinEngineVersion\":\"1.0\",\"DefaultScene\":\"36f15f0c4b354af88ba2f72f6cb82e22\"}")]
         [TestCase("{\"Name\":\"Test\",\"Version\":\"1.0\",\"AssetSystemVersion\":2,\"ProjectSettingsIndexGuid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"Company\":\"\",\"Copyright\":\"\",\"GameTarget\":\"Game\",\"EditorTarget\":\"Editor\",\"References\":[],\"MinEngineVersion\":\"1.0\",\"DefaultSceneSpawn\":{\"Position\":[0,0,0]}}")]
         public void TestRejectsUnsupportedProjectFormatWithoutMutation(string contents)

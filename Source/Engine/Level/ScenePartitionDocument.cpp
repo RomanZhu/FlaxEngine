@@ -25,7 +25,9 @@ bool ScenePartitionDocument::ReadFragment(const rapidjson_flax::Value& fragment,
     const auto version = fragment.FindMember("formatVersion");
     const auto root = fragment.FindMember("rootActorLocalId");
     const auto objectTable = fragment.FindMember("payload");
-    if (version == fragment.MemberEnd() || !version->value.IsUint() || version->value.GetUint() != 1 ||
+    if (fragment.HasMember("documentVersion") || fragment.HasMember("settingsVersion") ||
+        fragment.HasMember("sceneVersion") || fragment.HasMember("prefabVersion") ||
+        version == fragment.MemberEnd() || !version->value.IsUint() || version->value.GetUint() != 1 ||
         root == fragment.MemberEnd() || !root->value.IsInt64() || root->value.GetInt64() <= 1 ||
         objectTable == fragment.MemberEnd() || !objectTable->value.IsArray())
     {

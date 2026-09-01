@@ -6,6 +6,7 @@
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Level/SceneFragments/SceneFragmentStore.h"
+#include "Engine/Level/ScenePartitionDocument.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/Platform.h"
@@ -47,6 +48,61 @@ namespace
             writes.Add(MakeFragmentWrite(fragmentName));
         REQUIRE(!SceneFragmentStore::PrepareSave(sceneGuid, writes, save.FragmentPlan, error));
         save.SourceData.Set(reinterpret_cast<const byte*>(sceneData), StringAnsiView(sceneData).Length());
+    }
+}
+
+TEST_CASE("ExternalActors formats reject unsupported versions without mutation")
+{
+    const Guid sceneGuid = Guid::New();
+    const String directory = SceneFragmentStore::GetScenePath(sceneGuid);
+    const String indexPath = SceneFragmentStore::GetIndexPath(sceneGuid);
+    const String fragmentPath = directory / TEXT("candidate.sceneactor");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(directory));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(directory, true); };
+    const StringAnsi owner(sceneGuid.ToString(Guid::FormatType::N).ToLower());
+
+    const StringAnsi indexes[] =
+    {
+        StringAnsi::Format("{{\"ownerSceneGuid\":\"{0}\",\"indexRevision\":1,\"fragments\":[]}}", owner),
+        StringAnsi::Format("{{\"formatVersion\":0,\"ownerSceneGuid\":\"{0}\",\"indexRevision\":1,\"fragments\":[]}}", owner),
+        StringAnsi::Format("{{\"formatVersion\":2,\"ownerSceneGuid\":\"{0}\",\"indexRevision\":1,\"fragments\":[]}}", owner),
+        StringAnsi::Format("{{\"formatVersion\":1,\"sceneVersion\":4,\"ownerSceneGuid\":\"{0}\",\"indexRevision\":1,\"fragments\":[]}}", owner),
+    };
+    for (const StringAnsi& source : indexes)
+    {
+        REQUIRE_FALSE(File::WriteAllBytes(indexPath, source.Get(), source.Length()));
+        SceneFragmentIndex index;
+        String error;
+        CHECK(SceneFragmentStore::ReadIndex(sceneGuid, index, error));
+        BytesContainer bytes;
+        ReadBytes(indexPath, bytes);
+        REQUIRE(bytes.Length() == source.Length());
+        CHECK(Platform::MemoryCompare(bytes.Get(), source.Get(), source.Length()) == 0);
+    }
+
+    const char* fragments[] =
+    {
+        R"({"rootActorLocalId":2,"payload":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})",
+        R"({"formatVersion":0,"rootActorLocalId":2,"payload":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})",
+        R"({"formatVersion":2,"rootActorLocalId":2,"payload":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})",
+        R"({"formatVersion":1,"prefabVersion":4,"rootActorLocalId":2,"payload":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})",
+    };
+    for (const char* source : fragments)
+    {
+        const int32 length = StringAnsiView(source).Length();
+        REQUIRE_FALSE(File::WriteAllBytes(fragmentPath, source, length));
+        BytesContainer bytes;
+        ReadBytes(fragmentPath, bytes);
+        rapidjson_flax::Document document;
+        document.Parse(bytes.Get<char>(), bytes.Length());
+        REQUIRE_FALSE(document.HasParseError());
+        int64 rootActorLocalId;
+        const rapidjson_flax::Value* objects;
+        String error;
+        CHECK(ScenePartitionDocument::ReadFragment(document, rootActorLocalId, objects, error));
+        BytesContainer after;
+        ReadBytes(fragmentPath, after);
+        CHECK(SameBytes(bytes, after));
     }
 }
 

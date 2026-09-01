@@ -709,6 +709,10 @@ TEST_CASE("Default canonical metadata rejects unsupported authored markers befor
         const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
         REQUIRE(diagnostics.HasItems());
         CHECK(diagnostics[0].Message.Contains(TEXT("offline migrator")));
+        BytesContainer bytes;
+        REQUIRE_FALSE(File::ReadAllBytes(source, bytes));
+        REQUIRE(bytes.Length() == StringAnsiView(invalid[i]).Length());
+        CHECK(Platform::MemoryCompare(bytes.Get(), invalid[i], bytes.Length()) == 0);
     }
 }
 

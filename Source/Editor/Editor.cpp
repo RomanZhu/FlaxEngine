@@ -633,43 +633,24 @@ int32 Editor::LoadProduct()
     Globals::ProjectFolder = projectPath;
     ASSERT(!FileSystem::IsRelative(Globals::ProjectFolder));
 
-    // Check if opening old project (the one with Project.xml file)
-    // [Deprecated: 16.04.2020, expires 16.04.2021]
-    const String projectXmlPath = projectPath / TEXT("Project.xml");
     Project = New<ProjectInfo>();
     ProjectInfo::ProjectsCache.Add(Project);
-    if (FileSystem::FileExists(projectXmlPath))
+    Array<String> projectFiles;
+    FileSystem::DirectoryGetFiles(projectFiles, projectPath, TEXT("*.flaxproj"), DirectorySearchOption::TopDirectoryOnly);
+    if (projectFiles.Count() == 0)
     {
-        // Load project
-        const bool loadResult = Project->LoadOldProject(projectXmlPath);
-        if (loadResult)
-        {
-            Platform::Fatal(TEXT("Cannot load project."));
-            return -2;
-        }
-        EditorImpl::IsOldProjectXmlFormat = true;
+        Platform::Fatal(TEXT("Missing project file (*.flaxproj). Unsupported projects must be converted with the separate offline migrator."));
+        return -2;
     }
-    else
+    if (projectFiles.Count() > 1)
     {
-        // Load project
-        Array<String> projectFiles;
-        FileSystem::DirectoryGetFiles(projectFiles, projectPath, TEXT("*.flaxproj"), DirectorySearchOption::TopDirectoryOnly);
-        if (projectFiles.Count() == 0)
-        {
-            Platform::Fatal(TEXT("Missing project file (*.flaxproj)."));
-            return -2;
-        }
-        if (projectFiles.Count() > 1)
-        {
-            Platform::Fatal(TEXT("Too many project files."));
-            return -2;
-        }
-        const bool loadResult = Project->LoadProject(projectFiles[0]);
-        if (loadResult)
-        {
-            Platform::Fatal(TEXT("Cannot load project."));
-            return -2;
-        }
+        Platform::Fatal(TEXT("Too many project files."));
+        return -2;
+    }
+    if (Project->LoadProject(projectFiles[0]))
+    {
+        Platform::Fatal(TEXT("Cannot load project."));
+        return -2;
     }
 
     HashSet<ProjectInfo*> projects;

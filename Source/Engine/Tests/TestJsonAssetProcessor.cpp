@@ -9,6 +9,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include <cstring>
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -75,6 +76,47 @@ namespace
                 result.Add(dependency.ObjectID);
         }
         return result;
+    }
+}
+
+TEST_CASE("JSON scene and prefab processors reject unsupported versions without mutation")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("JsonFormatRejection-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    struct RejectionCase
+    {
+        const Char* Extension;
+        const Char* TypeName;
+        const char* Json;
+    };
+    const RejectionCase cases[] =
+    {
+        { TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), R"({"objects":[{"fileId":1,"type":"FlaxEngine.Scene"}]})" },
+        { TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), R"({"sceneVersion":3,"objects":[{"fileId":1,"type":"FlaxEngine.Scene"}]})" },
+        { TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), R"({"sceneVersion":5,"objects":[{"fileId":1,"type":"FlaxEngine.Scene"}]})" },
+        { TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), R"({"sceneVersion":4,"prefabVersion":4,"objects":[{"fileId":1,"type":"FlaxEngine.Scene"}]})" },
+        { TEXT(".prefab"), TEXT("FlaxEngine.Prefab"), R"({"objects":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})" },
+        { TEXT(".prefab"), TEXT("FlaxEngine.Prefab"), R"({"prefabVersion":3,"objects":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})" },
+        { TEXT(".prefab"), TEXT("FlaxEngine.Prefab"), R"({"prefabVersion":5,"objects":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})" },
+        { TEXT(".prefab"), TEXT("FlaxEngine.Prefab"), R"({"prefabVersion":4,"documentVersion":1,"objects":[{"fileId":2,"type":"FlaxEngine.EmptyActor"}]})" },
+    };
+    for (const RejectionCase& test : cases)
+    {
+        const Guid id = Guid::New();
+        const String path = content / (id.ToString(Guid::FormatType::N) + test.Extension);
+        PreparedAsset prepared;
+        AssetPipelineDiagnostic diagnostic;
+        CHECK(PrepareDocument(root, content, library, test.Extension, test.TypeName, id, test.Json, prepared, diagnostic));
+        CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
+        BytesContainer bytes;
+        REQUIRE_FALSE(File::ReadAllBytes(path, bytes));
+        REQUIRE(bytes.Length() == static_cast<int32>(std::strlen(test.Json)));
+        CHECK(Platform::MemoryCompare(bytes.Get(), test.Json, bytes.Length()) == 0);
     }
 }
 
