@@ -623,6 +623,11 @@ void AssetBuildService::Impl::Worker()
 
         if (failed || cancelledAfterBuild)
         {
+            if (cancelledAfterBuild)
+            {
+                job->Request.Build.Unbind();
+                job->Request.Publish.Unbind();
+            }
             {
                 std::lock_guard<std::mutex> lock(Mutex);
                 Metrics.BuildMilliseconds += buildElapsed;
@@ -646,11 +651,6 @@ void AssetBuildService::Impl::Worker()
                     }
                     FinishLocked(job, AssetBuildJobStatus::Failed, diagnostic);
                 }
-            }
-            if (cancelledAfterBuild)
-            {
-                job->Request.Build.Unbind();
-                job->Request.Publish.Unbind();
             }
             continue;
         }
