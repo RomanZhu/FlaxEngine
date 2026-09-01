@@ -423,7 +423,7 @@ void SceneObject::Deserialize(DeserializeStream& stream, ISerializeModifier* mod
         _externalSiblingOrderParentId = Guid::Empty;
         const auto parentMember = SERIALIZE_FIND_MEMBER(stream, "ParentFileId");
         if (parentMember != stream.MemberEnd() && parentMember->value.IsInt64() && modifier && modifier->CurrentSourceAssetId.IsValid())
-            _externalSiblingOrderParentId = MakeRuntimeObjectId(modifier->CurrentSourceAssetId, parentMember->value.GetInt64());
+            _externalSiblingOrderParentId = MakeRuntimeObjectId(modifier->CurrentSourceAssetId, parentMember->value.GetInt64(), modifier->CurrentDocumentKind);
     }
 #endif
 

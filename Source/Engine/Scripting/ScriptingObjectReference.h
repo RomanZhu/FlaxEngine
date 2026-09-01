@@ -224,6 +224,11 @@ public:
         OnSetPersistentObjectId(id, ResolveGlobalObject(id, T::GetStaticClass()));
     }
 
+    FORCE_INLINE void SetPersistentObjectId(const GlobalAssetObjectId& id, T* resolvedObject)
+    {
+        OnSetPersistentObjectId(id, resolvedObject);
+    }
+
     /// <summary>
     /// Implicit conversion to the object.
     /// </summary>

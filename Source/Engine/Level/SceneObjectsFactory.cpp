@@ -139,6 +139,7 @@ ISerializeModifier* SceneObjectsFactory::Context::GetModifier()
             modifierThread->CurrentInstance = modifier->CurrentInstance;
             modifierThread->IdsMapping = modifier->IdsMapping;
             modifierThread->CurrentSourceAssetId = modifier->CurrentSourceAssetId;
+            modifierThread->CurrentDocumentKind = modifier->CurrentDocumentKind;
             Locker.Unlock();
         }
         modifier = modifierThread;
@@ -346,10 +347,10 @@ SceneObject* SceneObjectsFactory::SpawnInternal(Context& context, const ISeriali
 
 void SceneObjectsFactory::Deserialize(Context& context, SceneObject* obj, ISerializable::DeserializeStream& stream)
 {
-    DeserializeInternal(context, obj, stream, context.SourceAssetId);
+    DeserializeInternal(context, obj, stream, context.SourceAssetId, context.DocumentKind);
 }
 
-void SceneObjectsFactory::DeserializeInternal(Context& context, SceneObject* obj, ISerializable::DeserializeStream& stream, const Guid& sourceAssetId)
+void SceneObjectsFactory::DeserializeInternal(Context& context, SceneObject* obj, ISerializable::DeserializeStream& stream, const Guid& sourceAssetId, GlobalObjectKind kind)
 {
     CHECK_DEBUG(obj);
     ISerializeModifier* modifier = context.GetModifier();
@@ -396,7 +397,7 @@ void SceneObjectsFactory::DeserializeInternal(Context& context, SceneObject* obj
 #if USE_EDITOR
         bool prevDeprecated = ContentDeprecated::Clear();
 #endif
-        DeserializeInternal(context, obj, *(ISerializable::DeserializeStream*)prefabData, prefabId);
+        DeserializeInternal(context, obj, *(ISerializable::DeserializeStream*)prefabData, prefabId, GlobalObjectKind::PrefabObject);
 #if USE_EDITOR
         if (ContentDeprecated::Clear(prevDeprecated))
         {
@@ -413,9 +414,12 @@ void SceneObjectsFactory::DeserializeInternal(Context& context, SceneObject* obj
 
     // Load data
     const Guid previousSourceAssetId = modifier->CurrentSourceAssetId;
+    const GlobalObjectKind previousDocumentKind = modifier->CurrentDocumentKind;
     modifier->CurrentSourceAssetId = sourceAssetId;
+    modifier->CurrentDocumentKind = kind;
     obj->Deserialize(stream, modifier);
     modifier->CurrentSourceAssetId = previousSourceAssetId;
+    modifier->CurrentDocumentKind = previousDocumentKind;
 }
 
 void SceneObjectsFactory::HandleObjectDeserializationError(const ISerializable::DeserializeStream& value)
@@ -872,7 +876,7 @@ void SceneObjectsFactory::SynchronizePrefabInstances(Context& context, PrefabSyn
 
         // Deserialize object with prefab data
         Scripting::ObjectsLookupIdMapping.Set(&data.Modifier->IdsMapping);
-        DeserializeInternal(context, obj, *(ISerializable::DeserializeStream*)newObj.PrefabData, newObj.Prefab->GetID());
+        DeserializeInternal(context, obj, *(ISerializable::DeserializeStream*)newObj.PrefabData, newObj.Prefab->GetID(), GlobalObjectKind::PrefabObject);
         obj->LinkPrefabObject(newObj.Prefab->GetID(), GetLocalFileId(*newObj.PrefabData, "FileId"));
 
         // Preserve order in parent (values from prefab are used)

@@ -2363,7 +2363,9 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasLegacyLocation = true;
     }
-    if (!hasLegacyLocation && ObjectRegistry.FindObject(objectId, assetInfo))
+    AssetRecord canonicalRecord;
+    const bool isCanonicalProjectObject = AssetDatabase::Get().TryGetRecord(objectId, canonicalRecord);
+    if (!hasLegacyLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasLegacyLocation = true;

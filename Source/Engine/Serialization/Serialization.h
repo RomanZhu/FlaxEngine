@@ -546,18 +546,36 @@ namespace Serialization
     template<typename T>
     inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value, bool>::Type ShouldSerialize(const ScriptingObjectReference<T>& v, const void* otherObj)
     {
-        return !otherObj || v.GetPersistentObjectId() != ((ScriptingObjectReference<T>*)otherObj)->GetPersistentObjectId();
+        return !otherObj || v.GetPersistentObjectId() != static_cast<const ScriptingObjectReference<T>*>(otherObj)->GetPersistentObjectId();
     }
     template<typename T>
     inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const ScriptingObjectReference<T>& v, const void* otherObj)
     {
-        Serialize(stream, v.GetPersistentObjectId(), nullptr);
+        GlobalAssetObjectId id = v.GetPersistentObjectId();
+        if (v.Get() && v.Get()->HasPrefabLink() && (!id.IsValid() || id.Kind != GlobalObjectKind::PrefabObject))
+            id = GetPersistentGlobalObjectId(v.Get());
+        Serialize(stream, id, nullptr);
     }
     template<typename T>
     inline typename TEnableIf<TIsBaseOf<SceneObject, T>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, ScriptingObjectReference<T>& v, ISerializeModifier* modifier)
     {
         GlobalAssetObjectId id;
         Deserialize(stream, id, modifier);
+        if (id.IsValid())
+        {
+            Guid runtimeId = id.ToRuntimeObjectGuid();
+            if (modifier)
+                modifier->IdsMapping.TryGet(runtimeId, runtimeId);
+            if (runtimeId.IsValid())
+            {
+                T* object = static_cast<T*>(::FindObject(runtimeId, T::GetStaticClass()));
+                if (object)
+                {
+                    v.SetPersistentObjectId(id, object);
+                    return;
+                }
+            }
+        }
         v.SetPersistentObjectId(id);
     }
 

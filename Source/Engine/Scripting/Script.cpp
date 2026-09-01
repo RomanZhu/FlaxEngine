@@ -347,7 +347,7 @@ void Script::Deserialize(DeserializeStream& stream, ISerializeModifier* modifier
         const auto member = SERIALIZE_FIND_MEMBER(stream, "ParentFileId");
         if (member != stream.MemberEnd() && member->value.IsInt64() && modifier && modifier->CurrentSourceAssetId.IsValid())
         {
-            Guid parentId = MakeRuntimeObjectId(modifier->CurrentSourceAssetId, member->value.GetInt64());
+            Guid parentId = MakeRuntimeObjectId(modifier->CurrentSourceAssetId, member->value.GetInt64(), modifier->CurrentDocumentKind);
             modifier->IdsMapping.TryGet(parentId, parentId);
             const auto parent = Scripting::FindObject<Actor>(parentId);
             if (_parent != parent)

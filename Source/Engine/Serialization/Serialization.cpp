@@ -32,6 +32,7 @@ ISerializeModifier::ISerializeModifier()
     EngineBuild = FLAXENGINE_VERSION_BUILD;
     CurrentInstance = -1;
     CurrentSourceAssetId = Guid::Empty;
+    CurrentDocumentKind = GlobalObjectKind::SceneObject;
 }
 
 void ISerializable::DeserializeIfExists(DeserializeStream& stream, const char* memberName, ISerializeModifier* modifier)

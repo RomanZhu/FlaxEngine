@@ -11,6 +11,7 @@ void Cache::ISerializeModifierClearCallback(::ISerializeModifier* obj)
     obj->CurrentInstance = -1;
     obj->IdsMapping.Clear();
     obj->CurrentSourceAssetId = Guid::Empty;
+    obj->CurrentDocumentKind = GlobalObjectKind::SceneObject;
 }
 
 void Cache::Release()

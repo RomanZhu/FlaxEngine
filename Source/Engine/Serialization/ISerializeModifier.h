@@ -4,6 +4,7 @@
 
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Core/Types/Guid.h"
+#include "Engine/Content/AssetDatabase/Identity/GlobalAssetObjectId.h"
 
 /// <summary>
 /// Object serialization modification base class. Allows to extend the serialization process by custom effects like object ids mapping.
@@ -29,6 +30,11 @@ public:
     /// Used only to derive ephemeral runtime keys from authored local file IDs.
     /// </summary>
     Guid CurrentSourceAssetId;
+
+    /// <summary>
+    /// Object namespace of the document currently being deserialized.
+    /// </summary>
+    GlobalObjectKind CurrentDocumentKind;
 
     ISerializeModifier();
 };

@@ -152,7 +152,7 @@ public:
 
 private:
     static SceneObject* SpawnInternal(Context& context, const ISerializable::DeserializeStream& stream, const Guid& sourceAssetId, GlobalObjectKind kind, bool* missingPrefabObject);
-    static void DeserializeInternal(Context& context, SceneObject* obj, ISerializable::DeserializeStream& stream, const Guid& sourceAssetId);
+    static void DeserializeInternal(Context& context, SceneObject* obj, ISerializable::DeserializeStream& stream, const Guid& sourceAssetId, GlobalObjectKind kind);
     static void RefreshHierarchyCaches(Actor* actor);
     static void SynchronizeNewPrefabInstances(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& actorPrefabObjectId, const ISerializable::DeserializeStream& stream);
     static void SynchronizeNewPrefabInstance(Context& context, PrefabSyncData& data, Prefab* prefab, Actor* actor, const Guid& prefabObjectId, const Guid& nestedInstanceId);

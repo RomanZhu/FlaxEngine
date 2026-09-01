@@ -77,7 +77,7 @@ namespace
 
 TEST_CASE("Binary asset factory load streaming and reload")
 {
-    const String path = Globals::ProjectContentFolder / TEXT("__BinaryAssetCharacterization.flax");
+    const String path = Globals::ProjectCacheFolder / TEXT("__BinaryAssetCharacterization.flax");
     const Guid id = Guid::New();
     const byte initialBytes[] = { 1, 3, 5, 7 };
     const byte replacementBytes[] = { 2, 4, 6, 8, 10 };

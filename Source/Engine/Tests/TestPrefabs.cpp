@@ -2,6 +2,7 @@
 
 #include "Engine/Content/Content.h"
 #include "Engine/Content/AssetReference.h"
+#include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Level/Actor.h"
@@ -19,6 +20,115 @@
 #include "Engine/Scripting/ScriptingObjectReference.h"
 #include "FlaxEngine.Gen.h"
 #include <ThirdParty/catch2/catch.hpp>
+
+namespace
+{
+    LocalFileId GetTestFileId(const Guid& legacyId)
+    {
+        return SceneObject::MakeLocalFileId(legacyId);
+    }
+
+    Guid GetTestPrefabObjectId(const Guid& prefabId, const Guid& legacyId)
+    {
+        return SceneObject::MakeRuntimeObjectId(prefabId, GetTestFileId(legacyId), GlobalObjectKind::PrefabObject);
+    }
+
+    GlobalAssetObjectId GetTestGlobalObjectId(const rapidjson_flax::Value& node, const char* name)
+    {
+        GlobalAssetObjectId result;
+        const auto member = node.FindMember(name);
+        if (member == node.MemberEnd() || !member->value.IsObject())
+            return result;
+        const auto& value = member->value;
+        const auto kind = value.FindMember("kind");
+        const auto guid = value.FindMember("guid");
+        const auto fileId = value.FindMember("fileId");
+        const auto instanceFileId = value.FindMember("prefabInstanceFileId");
+        if (kind != value.MemberEnd() && kind->value.IsInt() &&
+            guid != value.MemberEnd() && guid->value.IsString() &&
+            fileId != value.MemberEnd() && fileId->value.IsInt64() &&
+            instanceFileId != value.MemberEnd() && instanceFileId->value.IsInt64())
+        {
+            result.Kind = static_cast<GlobalObjectKind>(kind->value.GetInt());
+            result.SourceAsset = AssetGuid(JsonTools::GetGuid(guid->value));
+            result.LocalFileId = fileId->value.GetInt64();
+            result.PrefabInstanceFileId = instanceFileId->value.GetInt64();
+        }
+        return result;
+    }
+
+    void ConvertTestObjectReferences(rapidjson_flax::Value& value, rapidjson_flax::Document& document, const Guid& prefabId, const Dictionary<Guid, LocalFileId>& fileIds)
+    {
+        if (value.IsObject())
+        {
+            for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
+                ConvertTestObjectReferences(i->value, document, prefabId, fileIds);
+        }
+        else if (value.IsArray())
+        {
+            for (rapidjson::SizeType i = 0; i < value.Size(); i++)
+                ConvertTestObjectReferences(value[i], document, prefabId, fileIds);
+        }
+        else if (value.IsString() && value.GetStringLength() == 32)
+        {
+            const Guid legacyId = JsonTools::GetGuid(value);
+            const LocalFileId* fileId = fileIds.TryGet(legacyId);
+            if (!fileId)
+                return;
+            auto& allocator = document.GetAllocator();
+            const StringAnsi source(prefabId.ToString(Guid::FormatType::N));
+            value.SetObject();
+            value.AddMember("kind", static_cast<int32>(GlobalObjectKind::PrefabObject), allocator);
+            value.AddMember("guid", rapidjson_flax::Value(source.Get(), source.Length(), allocator), allocator);
+            value.AddMember("fileId", *fileId, allocator);
+            value.AddMember("prefabInstanceFileId", 0, allocator);
+        }
+    }
+
+    bool InitTestPrefab(Prefab* prefab, const StringAnsiView& legacyJson)
+    {
+        rapidjson_flax::Document document;
+        document.Parse(legacyJson.Get(), legacyJson.Length());
+        if (document.HasParseError() || !document.IsArray())
+            return true;
+
+        Dictionary<Guid, LocalFileId> fileIds;
+        for (rapidjson::SizeType i = 0; i < document.Size(); i++)
+        {
+            const Guid legacyId = JsonTools::GetGuid(document[i], "ID");
+            if (!legacyId.IsValid())
+                return true;
+            fileIds[legacyId] = GetTestFileId(legacyId);
+        }
+
+        auto& allocator = document.GetAllocator();
+        for (rapidjson::SizeType i = 0; i < document.Size(); i++)
+        {
+            auto& object = document[i];
+            const Guid legacyId = JsonTools::GetGuid(object, "ID");
+            const Guid legacyParentId = JsonTools::GetGuid(object, "ParentID");
+            const Guid legacyPrefabObjectId = JsonTools::GetGuid(object, "PrefabObjectID");
+            object.RemoveMember("ID");
+            object.AddMember("FileId", GetTestFileId(legacyId), allocator);
+            if (legacyParentId.IsValid())
+            {
+                object.RemoveMember("ParentID");
+                object.AddMember("ParentFileId", GetTestFileId(legacyParentId), allocator);
+            }
+            if (legacyPrefabObjectId.IsValid())
+            {
+                object.RemoveMember("PrefabObjectID");
+                object.AddMember("PrefabObjectFileId", GetTestFileId(legacyPrefabObjectId), allocator);
+            }
+        }
+        ConvertTestObjectReferences(document, document, prefab->GetID(), fileIds);
+
+        rapidjson_flax::StringBuffer buffer;
+        CompactJsonWriter writer(buffer);
+        document.Accept(writer.GetWriter());
+        return prefab->Init(Prefab::TypeName, StringAnsiView(buffer.GetString(), static_cast<int32>(buffer.GetSize())));
+    }
+}
 
 TEST_CASE("Prefabs")
 {
@@ -39,7 +149,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("665bb01c49a3370f14a023b5395de261", id);
         prefabB->ChangeID(id);
-        auto prefabBInit = prefabB->Init(Prefab::TypeName,
+        auto prefabBInit = InitTestPrefab(prefabB.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"eec6b9644492fbca1a6ab0a7904a557e\","
@@ -67,7 +177,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabA); };
         Guid::Parse("02524a044184af56b6c664a0f98bd761", id);
         prefabA->ChangeID(id);
-        auto prefabAInit = prefabA->Init(Prefab::TypeName,
+        auto prefabAInit = InitTestPrefab(prefabA.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"5aa124754dcd1cdefed80e828831d45b\","
@@ -145,7 +255,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("25dbe4b0416be0777a6ce59e8788b10f", id);
         prefabB->ChangeID(id);
-        auto prefabBInit = prefabB->Init(Prefab::TypeName,
+        auto prefabBInit = InitTestPrefab(prefabB.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"aac6b9644492fbca1a6ab0a7904a557e\","
@@ -161,7 +271,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabA); };
         Guid::Parse("4cb744714f746e31855f41815612d14b", id);
         prefabA->ChangeID(id);
-        auto prefabAInit = prefabA->Init(Prefab::TypeName,
+        auto prefabAInit = InitTestPrefab(prefabA.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"244274a04cc60d56a2f024bfeef5772d\","
@@ -265,7 +375,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("7691e981482f2a486e10cfae149e07d3", id);
         testActorPrefab->ChangeID(id);
-        auto testActorPrefabInit = testActorPrefab->Init(Prefab::TypeName,
+        auto testActorPrefabInit = InitTestPrefab(testActorPrefab.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"5d73990240497afc0c6d36814cc6ebbe\","
@@ -281,7 +391,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(nestedActorPrefab); };
         Guid::Parse("1d521df4465ad849e274748c6d14b703", id);
         nestedActorPrefab->ChangeID(id);
-        auto nestedActorPrefabInit = nestedActorPrefab->Init(Prefab::TypeName,
+        auto nestedActorPrefabInit = InitTestPrefab(nestedActorPrefab.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"75c1587b4caeea27241ba7af00dafd45\","
@@ -350,7 +460,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("2b3334524c696dcfa93cabacd2a4f404", id);
         prefabBase->ChangeID(id);
-        auto prefabBaseInit = prefabBase->Init(Prefab::TypeName,
+        auto prefabBaseInit = InitTestPrefab(prefabBase.Get(),
                                                "["
                                                "{"
                                                "\"ID\": \"82ce814f4d913e58eb35ab8b0b7e2eef\","
@@ -378,7 +488,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabNested); };
         Guid::Parse("a71447e947cbd2deea018a8377636ce6", id);
         prefabNested->ChangeID(id);
-        auto prefabNestedInit = prefabNested->Init(Prefab::TypeName,
+        auto prefabNestedInit = InitTestPrefab(prefabNested.Get(),
                                                    "["
                                                    "{"
                                                    "\"ID\": \"597ab8ea43a5c58b8d06f58f9364d261\","
@@ -433,7 +543,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("3b3334524c696dcfa93cabacd2a4f404", id);
         prefabBase->ChangeID(id);
-        auto prefabBaseInit = prefabBase->Init(Prefab::TypeName,
+        auto prefabBaseInit = InitTestPrefab(prefabBase.Get(),
                                                "["
                                                "{"
                                                "\"ID\": \"82ce814f4d913e58eb35ab8b0b7e2eef\","
@@ -467,7 +577,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabNested1); };
         Guid::Parse("671447e947cbd2deea018a8377636ce6", id);
         prefabNested1->ChangeID(id);
-        auto prefabNestedInit1 = prefabNested1->Init(Prefab::TypeName,
+        auto prefabNestedInit1 = InitTestPrefab(prefabNested1.Get(),
                                                    "["
                                                    "{"
                                                    "\"ID\": \"597ab8ea43a5c58b8d06f58f9364d261\","
@@ -504,7 +614,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabNested2); };
         Guid::Parse("b71447e947cbd2deea018a8377636ce6", id);
         prefabNested2->ChangeID(id);
-        auto prefabNestedInit2 = prefabNested2->Init(Prefab::TypeName,
+        auto prefabNestedInit2 = InitTestPrefab(prefabNested2.Get(),
                                                    "["
                                                    "{"
                                                    "\"ID\": \"597ab8ea43a5c58b8d06f58f9364d261\","
@@ -578,7 +688,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("690e55514cd6fdc2a269429a2bf84133", id);
         prefab->ChangeID(id);
-        auto prefabInit = prefab->Init(Prefab::TypeName,
+        auto prefabInit = InitTestPrefab(prefab.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"fc3f88cf413c2e668039a0bb7429900d\","
@@ -614,6 +724,13 @@ TEST_CASE("Prefabs")
         // Apply change on instance A and verify it's applied on instance B
         bool applyResult = PrefabManager::ApplyAll(instanceA);
         REQUIRE(!applyResult);
+        const ISerializable::DeserializeStream** fogData = prefab->ObjectsDataCache.TryGet(instanceA->GetPrefabObjectID());
+        REQUIRE(fogData);
+        const GlobalAssetObjectId appliedLightReference = GetTestGlobalObjectId(**fogData, "DirectionalInscatteringLight");
+        CHECK(appliedLightReference.Kind == GlobalObjectKind::PrefabObject);
+        CHECK(appliedLightReference.SourceAsset == AssetGuid(prefab->GetID()));
+        CHECK(appliedLightReference.PrefabInstanceFileId == 0);
+        CHECK(appliedLightReference.ToRuntimeObjectGuid() == instanceA->Children[1]->GetPrefabObjectID());
         REQUIRE(instanceB);
         REQUIRE(instanceB->Children.Count() == 2);
         CHECK(instanceB.As<ExponentialHeightFog>()->DirectionalInscatteringLight == instanceB->Children[1]);
@@ -634,7 +751,7 @@ TEST_CASE("Prefabs")
         Guid::Parse("dc3f88cf413c2e668039a0bb7429900d", rootPrefabObjectId);
         Guid::Parse("54873cc44e950c754f0c7bb59dd432d6", lightPrefabObjectId);
         prefab->ChangeID(prefabId);
-        const bool prefabInit = prefab->Init(Prefab::TypeName,
+        const bool prefabInit = InitTestPrefab(prefab.Get(),
                                              "["
                                              "{"
                                              "\"ID\": \"dc3f88cf413c2e668039a0bb7429900d\","
@@ -650,17 +767,22 @@ TEST_CASE("Prefabs")
                                              "}"
                                              "]");
         REQUIRE(!prefabInit);
+        rootPrefabObjectId = GetTestPrefabObjectId(prefabId, rootPrefabObjectId);
+        lightPrefabObjectId = GetTestPrefabObjectId(prefabId, lightPrefabObjectId);
 
         rapidjson_flax::StringBuffer sceneBuffer;
         CompactJsonWriter sceneWriter(sceneBuffer);
         sceneWriter.StartObject();
         sceneWriter.JKEY("EngineBuild");
         sceneWriter.Int(FLAXENGINE_VERSION_BUILD);
+        const Guid sceneId = Guid::New();
+        sceneWriter.JKEY("ID");
+        sceneWriter.Guid(sceneId);
         sceneWriter.JKEY("Data");
         sceneWriter.StartArray();
         sceneWriter.StartObject();
-        sceneWriter.JKEY("ID");
-        sceneWriter.Guid(Guid::New());
+        sceneWriter.JKEY("FileId");
+        sceneWriter.Int64(1);
         sceneWriter.JKEY("TypeName");
         sceneWriter.String("FlaxEngine.Scene", ARRAY_COUNT("FlaxEngine.Scene") - 1);
         sceneWriter.EndObject();
@@ -687,19 +809,20 @@ TEST_CASE("Prefabs")
 
         DirectionalLight* externalLight = DirectionalLight::Spawn(ScriptingObject::SpawnParams(Guid::New(), DirectionalLight::TypeInitializer));
         REQUIRE(externalLight);
-        externalLight->SetParent(scene);
+        externalLight->SetPersistentDocumentIdentity(AssetGuid(sceneId), externalLight->GetLocalFileId());
         externalLight->Initialize();
+        externalLight->SetParent(scene);
         REQUIRE(externalLight->IsRegistered());
         REQUIRE(externalLight->GetScene() == scene);
-        const Guid externalLightId = externalLight->GetID();
         instanceA->SetName(TEXT("Changed Fog"));
         fogA->DirectionalInscatteringLight = externalLight;
 
         REQUIRE(!PrefabManager::ApplyAll(instanceA));
         const ISerializable::DeserializeStream** rootDataPtr = prefab->ObjectsDataCache.TryGet(rootPrefabObjectId);
         REQUIRE(rootDataPtr);
-        CHECK(JsonTools::GetGuid(**rootDataPtr, "DirectionalInscatteringLight") == lightPrefabObjectId);
-        CHECK(JsonTools::GetGuid(**rootDataPtr, "DirectionalInscatteringLight") != externalLightId);
+        const GlobalAssetObjectId prefabLightReference = GetTestGlobalObjectId(**rootDataPtr, "DirectionalInscatteringLight");
+        CHECK(prefabLightReference.ToRuntimeObjectGuid() == lightPrefabObjectId);
+        CHECK(prefabLightReference != externalLight->GetGlobalObjectId());
         ExponentialHeightFog* defaultFog = ScriptingObject::Cast<ExponentialHeightFog>(prefab->GetDefaultInstance(rootPrefabObjectId));
         REQUIRE(defaultFog);
         CHECK(defaultFog->DirectionalInscatteringLight == prefab->GetDefaultInstance(lightPrefabObjectId));
@@ -711,7 +834,7 @@ TEST_CASE("Prefabs")
         rapidjson_flax::Document instanceDocument;
         instanceDocument.Parse(instanceBuffer.GetString(), instanceBuffer.GetSize());
         REQUIRE(!instanceDocument.HasParseError());
-        CHECK(JsonTools::GetGuid(instanceDocument, "DirectionalInscatteringLight") == externalLightId);
+        CHECK(GetTestGlobalObjectId(instanceDocument, "DirectionalInscatteringLight") == externalLight->GetGlobalObjectId());
         CHECK(instanceB->GetName() == TEXT("Changed Fog"));
         CHECK(fogB->DirectionalInscatteringLight == instanceB->Children[0]);
 
@@ -734,7 +857,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("25dbe4b0416be0777a6ce59e8788b10f", id);
         prefabB->ChangeID(id);
-        auto prefabBInit = prefabB->Init(Prefab::TypeName,
+        auto prefabBInit = InitTestPrefab(prefabB.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"aac6b9644492fbca1a6ab0a7904a557e\","
@@ -750,7 +873,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabA); };
         Guid::Parse("4cb744714f746e31855f41815612d14b", id);
         prefabA->ChangeID(id);
-        auto prefabAInit = prefabA->Init(Prefab::TypeName,
+        auto prefabAInit = InitTestPrefab(prefabA.Get(),
                                          "["
                                          "{"
                                          "\"ID\": \"244274a04cc60d56a2f024bfeef5772d\","
@@ -807,7 +930,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("cccbe4b0416be0777a6ce59e8788b10f", id);
         prefabC->ChangeID(id);
-        auto prefabCInit = prefabC->Init(Prefab::TypeName,
+        auto prefabCInit = InitTestPrefab(prefabC.Get(),
             "["
             "{"
             "\"ID\": \"aac6b9644492fbca1a6ab0a7904a557e\","
@@ -830,7 +953,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabB); };
         Guid::Parse("bbb744714f746e31855f41815612d14b", id);
         prefabB->ChangeID(id);
-        auto prefabBInit = prefabB->Init(Prefab::TypeName,
+        auto prefabBInit = InitTestPrefab(prefabB.Get(),
             "["
             "{"
             "\"ID\": \"244274a04cc60d56a2f024bfeef5772d\","
@@ -870,7 +993,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabA); };
         Guid::Parse("aaa744714f746e31855f41815612d14b", id);
         prefabA->ChangeID(id);
-        auto prefabAInit = prefabA->Init(Prefab::TypeName,
+        auto prefabAInit = InitTestPrefab(prefabA.Get(),
             "["
             "{"
             "\"ID\": \"123274a04cc60d56a2f024bfeef5772d\","
@@ -956,7 +1079,10 @@ TEST_CASE("Prefabs")
         CHECK(instanceA2.As<ExponentialHeightFog>()->DirectionalInscatteringLight == instanceA2->Children[0]);
         REQUIRE(instanceA3->Is<ExponentialHeightFog>());
         REQUIRE(instanceA3->Children.Count() == 1);
-        CHECK(instanceA3.As<ExponentialHeightFog>()->DirectionalInscatteringLight == instanceA3->Children[0]);
+        const DirectionalLight* instanceA3Light = instanceA3.As<ExponentialHeightFog>()->DirectionalInscatteringLight.Get();
+        CHECK(instanceA3Light != instanceA1->Children[0]);
+        CHECK(instanceA3Light != instanceA2->Children[0]);
+        CHECK(instanceA3Light == instanceA3->Children[0]);
 
         // Cleanup
         instanceA->DeleteObject();
@@ -974,7 +1100,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("333334524c696dcfa93cabacd2a4f404", id);
         prefab->ChangeID(id);
-        auto prefabInit = prefab->Init(Prefab::TypeName,
+        auto prefabInit = InitTestPrefab(prefab.Get(),
             "["
             "{"
             "\"ID\": \"1111cfaa4bd1a53435129480e5bbdb3b\","
@@ -1024,7 +1150,7 @@ TEST_CASE("Prefabs")
         Guid id;
         Guid::Parse("15dbe4b0416be0777a6ce59e8788b10f", id);
         prefabInner->ChangeID(id);
-        auto prefabInnerInit = prefabInner->Init(Prefab::TypeName,
+        auto prefabInnerInit = InitTestPrefab(prefabInner.Get(),
             "["
             "{"
             "\"ID\": \"3de462104f56f681c14650a0171f88fb\","
@@ -1052,7 +1178,7 @@ TEST_CASE("Prefabs")
         SCOPE_EXIT{ Content::DeleteAsset(prefabOuter); };
         Guid::Parse("2ab744714f746e31855f41815612d14b", id);
         prefabOuter->ChangeID(id);
-        auto prefabOuterInit = prefabOuter->Init(Prefab::TypeName,
+        auto prefabOuterInit = InitTestPrefab(prefabOuter.Get(),
             "["
             "{"
             "\"ID\": \"dba7f4bb4acfd62608b9a8bf550f31a5\","
@@ -1152,8 +1278,11 @@ TEST_CASE("Prefabs")
         Guid::Parse("10000000000000000000000000000003", movableVisualsPrefabObjectId);
         Guid::Parse("10000000000000000000000000000004", modelPrefabObjectId);
         Guid::Parse("10000000000000000000000000000005", modelChildPrefabObjectId);
+        const LocalFileId rootPrefabObjectFileId = GetTestFileId(rootPrefabObjectId);
+        const LocalFileId modelPrefabObjectFileId = GetTestFileId(modelPrefabObjectId);
+        const LocalFileId modelChildPrefabObjectFileId = GetTestFileId(modelChildPrefabObjectId);
         prefab->ChangeID(prefabId);
-        const bool prefabInit = prefab->Init(Prefab::TypeName,
+        const bool prefabInit = InitTestPrefab(prefab.Get(),
             "["
             "{"
             "\"ID\": \"10000000000000000000000000000001\","
@@ -1187,6 +1316,11 @@ TEST_CASE("Prefabs")
             "}"
             "]");
         REQUIRE(!prefabInit);
+        rootPrefabObjectId = GetTestPrefabObjectId(prefabId, rootPrefabObjectId);
+        visualsPrefabObjectId = GetTestPrefabObjectId(prefabId, visualsPrefabObjectId);
+        movableVisualsPrefabObjectId = GetTestPrefabObjectId(prefabId, movableVisualsPrefabObjectId);
+        modelPrefabObjectId = GetTestPrefabObjectId(prefabId, modelPrefabObjectId);
+        modelChildPrefabObjectId = GetTestPrefabObjectId(prefabId, modelChildPrefabObjectId);
 
         Guid sceneId;
         Guid firstRootId;
@@ -1202,41 +1336,55 @@ TEST_CASE("Prefabs")
         Guid::Parse("30000000000000000000000000000001", secondRootId);
         Guid::Parse("30000000000000000000000000000002", secondModelId);
         Guid::Parse("30000000000000000000000000000003", secondModelChildId);
+        const LocalFileId firstRootFileId = GetTestFileId(firstRootId);
+        const LocalFileId firstModelFileId = GetTestFileId(firstModelId);
+        const LocalFileId firstModelChildFileId = GetTestFileId(firstModelChildId);
+        const LocalFileId secondRootFileId = GetTestFileId(secondRootId);
+        const LocalFileId secondModelFileId = GetTestFileId(secondModelId);
+        const LocalFileId secondModelChildFileId = GetTestFileId(secondModelChildId);
+        firstRootId = SceneObject::MakeRuntimeObjectId(sceneId, firstRootFileId);
+        firstModelId = SceneObject::MakeRuntimeObjectId(sceneId, firstModelFileId);
+        firstModelChildId = SceneObject::MakeRuntimeObjectId(sceneId, firstModelChildFileId);
+        secondRootId = SceneObject::MakeRuntimeObjectId(sceneId, secondRootFileId);
+        secondModelId = SceneObject::MakeRuntimeObjectId(sceneId, secondModelFileId);
+        secondModelChildId = SceneObject::MakeRuntimeObjectId(sceneId, secondModelChildFileId);
 
         rapidjson_flax::StringBuffer sceneBuffer;
         CompactJsonWriter writer(sceneBuffer);
         writer.StartObject();
         writer.JKEY("EngineBuild");
         writer.Int(FLAXENGINE_VERSION_BUILD);
+        writer.JKEY("ID");
+        writer.Guid(sceneId);
         writer.JKEY("Data");
         writer.StartArray();
         writer.StartObject();
-        writer.JKEY("ID");
-        writer.Guid(sceneId);
+        writer.JKEY("FileId");
+        writer.Int64(1);
         writer.JKEY("TypeName");
         writer.String("FlaxEngine.Scene", ARRAY_COUNT("FlaxEngine.Scene") - 1);
         writer.EndObject();
-        const auto writePrefabObject = [&](const Guid& id, const Guid& prefabObjectId, const Guid& parentId)
+        const auto writePrefabObject = [&](LocalFileId fileId, LocalFileId prefabObjectFileId, LocalFileId parentFileId)
         {
             writer.StartObject();
-            writer.JKEY("ID");
-            writer.Guid(id);
+            writer.JKEY("FileId");
+            writer.Int64(fileId);
             writer.JKEY("PrefabID");
             writer.Guid(prefabId);
-            writer.JKEY("PrefabObjectID");
-            writer.Guid(prefabObjectId);
-            writer.JKEY("ParentID");
-            writer.Guid(parentId);
+            writer.JKEY("PrefabObjectFileId");
+            writer.Int64(prefabObjectFileId);
+            writer.JKEY("ParentFileId");
+            writer.Int64(parentFileId);
             writer.EndObject();
         };
-        const auto writeStaleInstance = [&](const Guid& rootId, const Guid& modelId, const Guid& modelChildId)
+        const auto writeStaleInstance = [&](LocalFileId rootFileId, LocalFileId modelFileId, LocalFileId modelChildFileId)
         {
-            writePrefabObject(rootId, rootPrefabObjectId, sceneId);
-            writePrefabObject(modelId, modelPrefabObjectId, rootId);
-            writePrefabObject(modelChildId, modelChildPrefabObjectId, modelId);
+            writePrefabObject(rootFileId, rootPrefabObjectFileId, 1);
+            writePrefabObject(modelFileId, modelPrefabObjectFileId, rootFileId);
+            writePrefabObject(modelChildFileId, modelChildPrefabObjectFileId, modelFileId);
         };
-        writeStaleInstance(firstRootId, firstModelId, firstModelChildId);
-        writeStaleInstance(secondRootId, secondModelId, secondModelChildId);
+        writeStaleInstance(firstRootFileId, firstModelFileId, firstModelChildFileId);
+        writeStaleInstance(secondRootFileId, secondModelFileId, secondModelChildFileId);
         writer.EndArray(7);
         writer.EndObject();
 

@@ -67,13 +67,77 @@ struct AutoActorCleanup
 
 namespace
 {
-    bool ContainsExternalSceneObjectReference(const rapidjson_flax::Value& value, const Dictionary<Guid, Guid>& externalSceneObjectIds)
+    LocalFileId GetLocalFileId(const rapidjson_flax::Value& value, const char* name)
+    {
+        const auto member = value.FindMember(name);
+        return member != value.MemberEnd() && member->value.IsInt64() ? member->value.GetInt64() : 0;
+    }
+
+    bool TryGetGlobalObjectId(const rapidjson_flax::Value& value, GlobalAssetObjectId& id)
+    {
+        if (!value.IsObject())
+            return false;
+        const auto kind = value.FindMember("kind");
+        const auto guid = value.FindMember("guid");
+        const auto fileId = value.FindMember("fileId");
+        const auto instanceFileId = value.FindMember("prefabInstanceFileId");
+        if (kind == value.MemberEnd() || !kind->value.IsInt() ||
+            guid == value.MemberEnd() || !guid->value.IsString() ||
+            fileId == value.MemberEnd() || !fileId->value.IsInt64() ||
+            instanceFileId == value.MemberEnd() || !instanceFileId->value.IsInt64())
+        {
+            return false;
+        }
+        const int32 kindValue = kind->value.GetInt();
+        if (kindValue < static_cast<int32>(GlobalObjectKind::ImportedAssetObject) || kindValue > static_cast<int32>(GlobalObjectKind::BuiltinObject))
+            return false;
+        id.Kind = static_cast<GlobalObjectKind>(kindValue);
+        id.SourceAsset = AssetGuid(JsonTools::GetGuid(guid->value));
+        id.LocalFileId = fileId->value.GetInt64();
+        id.PrefabInstanceFileId = instanceFileId->value.GetInt64();
+        return id.IsValid();
+    }
+
+    void SetGlobalObjectId(rapidjson_flax::Value& value, const GlobalAssetObjectId& id, rapidjson_flax::Document::AllocatorType& allocator)
+    {
+        value["kind"].SetInt(static_cast<int32>(id.Kind));
+        const StringAnsi source(id.SourceAsset.Value.ToString(Guid::FormatType::N));
+        value["guid"].SetString(source.Get(), source.Length(), allocator);
+        value["fileId"].SetInt64(id.LocalFileId);
+        value["prefabInstanceFileId"].SetInt64(id.PrefabInstanceFileId);
+    }
+
+    void NormalizePrefabObjectReferences(rapidjson_flax::Value& value, rapidjson_flax::Document::AllocatorType& allocator, const Dictionary<GlobalAssetObjectId, GlobalAssetObjectId>& mapping)
     {
         if (value.IsObject())
         {
+            GlobalAssetObjectId id;
+            if (TryGetGlobalObjectId(value, id))
+            {
+                if (const GlobalAssetObjectId* mapped = mapping.TryGet(id))
+                    SetGlobalObjectId(value, *mapped, allocator);
+                return;
+            }
+            for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
+                NormalizePrefabObjectReferences(i->value, allocator, mapping);
+        }
+        else if (value.IsArray())
+        {
+            for (auto i = value.Begin(); i != value.End(); ++i)
+                NormalizePrefabObjectReferences(*i, allocator, mapping);
+        }
+    }
+
+    bool ContainsExternalSceneObjectReference(const rapidjson_flax::Value& value, const Dictionary<Guid, Guid>& externalSceneObjectIds, const HashSet<GlobalAssetObjectId>& externalGlobalObjectIds)
+    {
+        if (value.IsObject())
+        {
+            GlobalAssetObjectId id;
+            if (TryGetGlobalObjectId(value, id))
+                return externalGlobalObjectIds.Contains(id);
             for (auto i = value.MemberBegin(); i != value.MemberEnd(); ++i)
             {
-                if (ContainsExternalSceneObjectReference(i->value, externalSceneObjectIds))
+                if (ContainsExternalSceneObjectReference(i->value, externalSceneObjectIds, externalGlobalObjectIds))
                     return true;
             }
         }
@@ -81,7 +145,7 @@ namespace
         {
             for (auto i = value.Begin(); i != value.End(); ++i)
             {
-                if (ContainsExternalSceneObjectReference(*i, externalSceneObjectIds))
+                if (ContainsExternalSceneObjectReference(*i, externalSceneObjectIds, externalGlobalObjectIds))
                     return true;
             }
         }
@@ -92,7 +156,7 @@ namespace
         return false;
     }
 
-    int32 RemoveExternalSceneObjectOverrides(rapidjson_flax::Value& objectData, const Dictionary<Guid, Guid>& externalSceneObjectIds)
+    int32 RemoveExternalSceneObjectOverrides(rapidjson_flax::Value& objectData, const Dictionary<Guid, Guid>& externalSceneObjectIds, const HashSet<GlobalAssetObjectId>& externalGlobalObjectIds)
     {
         int32 removedCount = 0;
         for (auto i = objectData.MemberBegin(); i != objectData.MemberEnd();)
@@ -102,7 +166,7 @@ namespace
             {
                 for (auto property = i->value.MemberBegin(); property != i->value.MemberEnd();)
                 {
-                    if (ContainsExternalSceneObjectReference(property->value, externalSceneObjectIds))
+                    if (ContainsExternalSceneObjectReference(property->value, externalSceneObjectIds, externalGlobalObjectIds))
                     {
                         property = i->value.EraseMember(property);
                         removedCount++;
@@ -114,7 +178,7 @@ namespace
                 }
                 ++i;
             }
-            else if (ContainsExternalSceneObjectReference(i->value, externalSceneObjectIds))
+            else if (ContainsExternalSceneObjectReference(i->value, externalSceneObjectIds, externalGlobalObjectIds))
             {
                 const bool isSceneParent = i->name == "ParentFileId";
                 i = objectData.EraseMember(i);
@@ -483,10 +547,26 @@ bool PrefabInstanceData::SynchronizePrefabInstances(PrefabInstancesData& prefabI
         }
 
         // Generate nested prefab instances to properly handle Ids Mapping within each nested prefab
-        SceneObjectsFactory::PrefabSyncData prefabSyncData(*sceneObjects.Value, instance.Data, modifier.Value);
+        rapidjson_flax::Document prefabSyncDocument;
+        prefabSyncDocument.CopyFrom(instance.Data, prefabSyncDocument.GetAllocator());
+        for (const Guid& prefabObjectId : newPrefabObjectIds)
+        {
+            const ISerializable::DeserializeStream* data;
+            if (prefabObjectIdToDiffData.TryGet(prefabObjectId, data))
+            {
+                rapidjson_flax::Value value;
+                value.CopyFrom(*data, prefabSyncDocument.GetAllocator());
+                prefabSyncDocument.PushBack(value.Move(), prefabSyncDocument.GetAllocator());
+            }
+        }
+        SceneObjectsFactory::PrefabSyncData prefabSyncData(*sceneObjects.Value, prefabSyncDocument, modifier.Value);
         SceneObjectsFactory::SetupPrefabInstances(context, prefabSyncData);
 
         // Apply modifications
+        const Guid previousSourceAssetId = modifier->CurrentSourceAssetId;
+        const GlobalObjectKind previousDocumentKind = modifier->CurrentDocumentKind;
+        modifier->CurrentSourceAssetId = prefabId;
+        modifier->CurrentDocumentKind = GlobalObjectKind::PrefabObject;
         for (int32 i = existingObjectsCount - 1; i >= 0; i--)
         {
             SceneObject* obj = sceneObjects->At(i);
@@ -510,6 +590,8 @@ bool PrefabInstanceData::SynchronizePrefabInstances(PrefabInstancesData& prefabI
                 }
             }
         }
+        modifier->CurrentSourceAssetId = previousSourceAssetId;
+        modifier->CurrentDocumentKind = previousDocumentKind;
 
         // Deserialize new objects added to prefab
         for (int32 i = 0; i < newPrefabObjectIds.Count(); i++)
@@ -523,7 +605,7 @@ bool PrefabInstanceData::SynchronizePrefabInstances(PrefabInstancesData& prefabI
             SceneObjectsFactory::Deserialize(context, obj, *(ISerializable::DeserializeStream*)data);
 
             // Link new prefab instance to prefab and prefab object
-            obj->LinkPrefab(prefabId, prefabObjectId);
+            obj->LinkPrefabObject(prefabId, GetLocalFileId(*data, "FileId"));
 
             deserializeSceneObjectIndex++;
         }
@@ -705,10 +787,14 @@ bool PrefabInstanceData::SynchronizePrefabInstances(PrefabInstancesData& prefabI
     // Build cache data
     IdToDataLookupType prefabObjectIdToDiffData;
     prefabObjectIdToDiffData.EnsureCapacity(defaultInstanceData.Size());
+    const auto currentPrefab = Content::LoadRuntimeObject<Prefab>(prefabId);
     for (int32 i = 0; i < sceneObjects->Count(); i++)
     {
         SceneObject* obj = sceneObjects.Value->At(i);
-        prefabObjectIdToDiffData.Add(obj->GetSceneObjectId(), &defaultInstanceData[i]);
+        const ISerializable::DeserializeStream* data = &defaultInstanceData[i];
+        if (currentPrefab && newPrefabObjectIds.Contains(obj->GetSceneObjectId()))
+            currentPrefab->ObjectsDataCache.TryGet(obj->GetSceneObjectId(), data);
+        prefabObjectIdToDiffData.Add(obj->GetSceneObjectId(), data);
     }
 
     // Process prefab instances to synchronize changes
@@ -1189,6 +1275,13 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
                 data.RemoveMember("FileId");
                 data.RemoveMember("PrefabID");
                 data.RemoveMember("PrefabObjectFileId");
+
+                // Scene instances use instance-local file IDs. Prefab data must refer to the
+                // authored file ID of the corresponding parent in the prefab document.
+                const SceneObject* parent = obj->GetParent();
+                auto parentFileId = it->FindMember("ParentFileId");
+                if (parent && parent->GetPrefabID() == prefabId && parentFileId != it->MemberEnd())
+                    parentFileId->value.SetInt64(parent->GetPrefabObjectFileId());
             }
             else
             {
@@ -1201,8 +1294,10 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
         // Find scene objects outside of the prefab instance. References to them are valid scene overrides,
         // but cannot be persisted in the prefab asset.
         Dictionary<Guid, Guid> externalSceneObjectIds;
+        HashSet<GlobalAssetObjectId> externalGlobalObjectIds;
         const auto scriptingObjects = Scripting::GetObjects();
         externalSceneObjectIds.EnsureCapacity(scriptingObjects.Count());
+        externalGlobalObjectIds.EnsureCapacity(scriptingObjects.Count());
         for (ScriptingObject* scriptingObject : scriptingObjects)
         {
             auto sceneObject = ScriptingObject::Cast<SceneObject>(scriptingObject);
@@ -1211,12 +1306,19 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             Actor* actor = ScriptingObject::Cast<Actor>(sceneObject);
             Actor* parent = actor ? actor : sceneObject->GetParent();
             if (parent && parent->GetScene())
+            {
                 externalSceneObjectIds[sceneObject->GetSceneObjectId()] = Guid::Empty;
+                const GlobalAssetObjectId globalId = sceneObject->GetGlobalObjectId();
+                if (globalId.IsValid())
+                    externalGlobalObjectIds.Add(globalId);
+            }
         }
 
         // Change object ids to match the prefab objects ids (helps with linking references in scripts)
         Dictionary<Guid, Guid> objectInstanceIdToPrefabObjectId;
+        Dictionary<GlobalAssetObjectId, GlobalAssetObjectId> objectInstanceGlobalIdToPrefabObjectId;
         objectInstanceIdToPrefabObjectId.EnsureCapacity(ObjectsCount);
+        objectInstanceGlobalIdToPrefabObjectId.EnsureCapacity(ObjectsCount);
         i = 0;
         for (auto it = array.Begin(); it != array.End(); ++it, i++)
         {
@@ -1225,6 +1327,14 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             if (obj->GetPrefabID() == prefabId)
             {
                 objectInstanceIdToPrefabObjectId.Add(obj->GetSceneObjectId(), obj->GetPrefabObjectID());
+            }
+            if (obj->HasPrefabLink())
+            {
+                const GlobalAssetObjectId instanceId = obj->GetGlobalObjectId();
+                GlobalAssetObjectId authoredId = instanceId;
+                authoredId.PrefabInstanceFileId = 0;
+                if (instanceId.IsValid())
+                    objectInstanceGlobalIdToPrefabObjectId[instanceId] = authoredId;
             }
         }
         int32 ignoredExternalOverrides = 0;
@@ -1235,9 +1345,9 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             if (obj->GetPrefabID() == prefabId)
             {
                 // Existing prefab properties keep their previous value when the scene override points outside the instance.
-                ignoredExternalOverrides += RemoveExternalSceneObjectOverrides(*it, externalSceneObjectIds);
+                ignoredExternalOverrides += RemoveExternalSceneObjectOverrides(*it, externalSceneObjectIds, externalGlobalObjectIds);
             }
-            else if (ContainsExternalSceneObjectReference(*it, externalSceneObjectIds))
+            else if (ContainsExternalSceneObjectReference(*it, externalSceneObjectIds, externalGlobalObjectIds))
             {
                 // New prefab objects have no previous value, so external references are mapped to null below.
                 ignoredExternalOverrides++;
@@ -1246,6 +1356,7 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
         for (auto i = externalSceneObjectIds.Begin(); i.IsNotEnd(); ++i)
             objectInstanceIdToPrefabObjectId[i->Key] = Guid::Empty;
         JsonTools::ChangeIds(diffDataDocument, objectInstanceIdToPrefabObjectId);
+        NormalizePrefabObjectReferences(diffDataDocument, diffDataDocument.GetAllocator(), objectInstanceGlobalIdToPrefabObjectId);
         if (ignoredExternalOverrides != 0)
             LOG(Warning, "Ignored {0} prefab override(s) that reference scene objects outside the prefab instance.", ignoredExternalOverrides);
     }
@@ -1330,7 +1441,7 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
         SceneObjectsFactory::Context context(modifier.Value);
         context.SourceAssetId = GetID();
         context.DocumentKind = GlobalObjectKind::PrefabObject;
-        context.AssignDocumentLocalFileIds = false;
+        context.AssignDocumentLocalFileIds = true;
         context.SuppressMissingPrefabObjectWarnings = suppressMissingPrefabObjectWarnings;
         for (int32 i = 0; i < ObjectsCount; i++)
         {
@@ -1407,9 +1518,15 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
             SceneObjectsFactory::Deserialize(context, obj, data[i]);
 
             int32 dataIndex;
-            if (diffPrefabObjectIdToDataIndex.TryGet(obj->GetSceneObjectId(), dataIndex))
+            if (diffPrefabObjectIdToDataIndex.TryGet(ObjectsIds[i], dataIndex))
             {
+                const Guid previousSourceAssetId = modifier->CurrentSourceAssetId;
+                const GlobalObjectKind previousDocumentKind = modifier->CurrentDocumentKind;
+                modifier->CurrentSourceAssetId = prefabId;
+                modifier->CurrentDocumentKind = GlobalObjectKind::PrefabObject;
                 obj->Deserialize(diffDataDocument[dataIndex], modifier.Value);
+                modifier->CurrentSourceAssetId = previousSourceAssetId;
+                modifier->CurrentDocumentKind = previousDocumentKind;
 
                 // Synchronize order of the scene objects with the serialized data (eg. user reordered actors in prefab editor and applied changes)
                 if (i != 0)
@@ -1417,7 +1534,7 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
                     for (int32 j = 0; j < targetObjects->Count(); j++)
                     {
                         SceneObject* targetObject = targetObjects->At(j);
-                        if (targetObject->GetPrefabObjectID() == obj->GetID())
+                        if (targetObject->GetPrefabObjectID() == ObjectsIds[i])
                         {
                             obj->SetOrderInParent(targetObject->GetOrderInParent());
                             break;
