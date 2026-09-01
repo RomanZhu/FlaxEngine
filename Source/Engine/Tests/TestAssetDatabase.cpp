@@ -458,6 +458,7 @@ TEST_CASE("Asset database scanner reconciles typed rows and retains unrelated du
     baselineRevision = database.GetRevision();
     REQUIRE_FALSE(FileSystem::DeleteFile(movedPath));
     REQUIRE_FALSE(FileSystem::DeleteFile(movedPath + TEXT(".meta")));
+    REQUIRE_FALSE(FileSystem::DeleteDirectory(movedFolder));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
     CHECK(scan.Diagnostics.IsEmpty());
     AssetRecord removedRecord;
@@ -468,7 +469,9 @@ TEST_CASE("Asset database scanner reconciles typed rows and retains unrelated du
     REQUIRE(changes[0].Removed.Count() == 1);
     CHECK(changes[0].Removed[0].AssetGuid == sourceId);
     CHECK(changes[0].Imported.IsEmpty());
-    CHECK(changes[0].DiagnosticsChanged.IsEmpty());
+    REQUIRE(changes[0].DiagnosticsChanged.Count() == 1);
+    CHECK_FALSE(changes[0].DiagnosticsChanged[0].AssetGuid.IsValid());
+    CHECK(changes[0].DiagnosticsChanged[0].ActiveCount == 0);
     const AssetDatabaseReadSnapshot removedSnapshot = database.GetDurableSnapshot();
     CHECK(removedSnapshot.GetState().Sources.IsEmpty());
     CHECK(removedSnapshot.GetState().Objects.IsEmpty());
