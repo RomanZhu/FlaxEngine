@@ -12,6 +12,7 @@
 #include "Engine/Scripting/ManagedCLR/MMethod.h"
 #include "Engine/Serialization/FileWriteStream.h"
 #include "Engine/Serialization/FileReadStream.h"
+#include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/MessageBox.h"
@@ -33,6 +34,44 @@ namespace EditorImpl
     SplashScreen* Splash = nullptr;
 
     void OnUpdate();
+
+    bool CreateNewProjectSettingsBootstrap(const StringView& projectPath, const Guid& settingsIndexGuid, const Guid& gameSettingsGuid)
+    {
+        const String contentPath = String(projectPath) / TEXT("Content");
+        const String settingsPath = contentPath / TEXT("Settings");
+        if (FileSystem::CreateDirectory(settingsPath))
+            return true;
+
+        AssetPipelineDiagnostic diagnostic;
+        AssetMeta folderMeta;
+        folderMeta.ID = Guid::New();
+        folderMeta.FolderAsset = true;
+        folderMeta.Processor.ID = TEXT("Flax.Folder");
+        if (AssetMeta::SaveAtomic(contentPath / TEXT("Settings.meta"), folderMeta, diagnostic))
+            return true;
+
+        AssetMeta gameMeta;
+        gameMeta.ID = gameSettingsGuid;
+        gameMeta.AssetType = TEXT("FlaxEngine.JsonAsset");
+        gameMeta.Processor.ID = TEXT("Flax.Settings");
+        const String gameSourcePath = settingsPath / TEXT("GameSettings.settings");
+        const char gameSource[] = "{\n  \"settingsVersion\": 1,\n  \"type\": \"FlaxEditor.Content.Settings.GameSettings\",\n  \"data\": {}\n}\n";
+        if (File::WriteAllBytes(gameSourcePath, reinterpret_cast<const byte*>(gameSource), ARRAY_COUNT(gameSource) - 1) ||
+            AssetMeta::SaveAtomic(gameSourcePath + TEXT(".meta"), gameMeta, diagnostic))
+            return true;
+
+        AssetMeta indexMeta;
+        indexMeta.ID = settingsIndexGuid;
+        indexMeta.AssetType = TEXT("FlaxEngine.JsonAsset");
+        indexMeta.Processor.ID = TEXT("Flax.Settings");
+        const String indexSourcePath = settingsPath / TEXT("ProjectSettingsIndex.settings");
+        const StringAnsi gameGuid(gameSettingsGuid.ToString(Guid::FormatType::N).ToLower());
+        const StringAnsi indexSource = StringAnsi::Format(
+            "{{\n  \"settingsVersion\": 1,\n  \"type\": \"FlaxEngine.JsonAsset\",\n  \"data\": {{\n    \"GameSettings\": {{\n      \"guid\": \"{0}\",\n      \"fileId\": 1\n    }}\n  }}\n}}\n",
+            gameGuid);
+        return File::WriteAllBytes(indexSourcePath, reinterpret_cast<const byte*>(indexSource.Get()), indexSource.Length()) ||
+            AssetMeta::SaveAtomic(indexSourcePath + TEXT(".meta"), indexMeta, diagnostic);
+    }
 }
 
 ManagedEditor* Editor::Managed = nullptr;
@@ -446,11 +485,15 @@ int32 Editor::LoadProduct()
         }
 
         // Create project file
+        const Guid settingsIndexGuid = Guid::New();
+        const Guid gameSettingsGuid = Guid::New();
         ProjectInfo newProject;
         newProject.Name = MoveTemp(tmpName);
         newProject.ProjectPath = projectPath / newProject.Name + TEXT(".flaxproj");
         newProject.ProjectFolderPath = projectPath;
         newProject.Version = Version(1, 0);
+        newProject.AssetSystemVersion = 2;
+        newProject.ProjectSettingsIndexGuid = settingsIndexGuid;
         newProject.Company = TEXT("My Company");
         newProject.MinEngineVersion = FLAXENGINE_VERSION;
         newProject.GameTarget = TEXT("GameTarget");
@@ -464,6 +507,8 @@ int32 Editor::LoadProduct()
         // Generate source files
         if (FileSystem::CreateDirectory(projectPath / TEXT("Content")))
             return 11;
+        if (EditorImpl::CreateNewProjectSettingsBootstrap(projectPath, settingsIndexGuid, gameSettingsGuid))
+            return 13;
         if (FileSystem::CreateDirectory(projectPath / TEXT("Source/Game")))
             return 11;
         bool failed = File::WriteAllText(projectPath / TEXT("Source/GameTarget.Build.cs"),TEXT(
