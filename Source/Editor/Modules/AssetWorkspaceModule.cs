@@ -1417,6 +1417,50 @@ namespace FlaxEditor.Modules
                 }
             }
 
+            if (requests.Count > 1)
+            {
+                var nativeEntries = new AssetCopyEntryRequest[requests.Count];
+                var useNativeBatch = true;
+                for (int i = 0; i < requests.Count; i++)
+                {
+                    var item = requests[i].Item;
+                    var targetPath = ContentMutationPathUtils.Normalize(requests[i].Destination);
+                    if (item == null || !item.Exists || !CanUseNativeAssetTransaction(item, item.Path, targetPath))
+                    {
+                        useNativeBatch = false;
+                        break;
+                    }
+                    var preflight = PreflightCopy(item, targetPath);
+                    if (!preflight.Succeeded)
+                        return preflight;
+                    nativeEntries[i] = new AssetCopyEntryRequest
+                    {
+                        SourcePath = item.Path,
+                        DestinationPath = targetPath,
+                        ExpectedAssetGuid = ((AssetItem)item).ID,
+                    };
+                }
+                if (useNativeBatch)
+                {
+                    ContentMutationDiagnostics.Log("mutation.copy.begin", $"items={requests.Count}; nativeBatch=true");
+#if FLAX_TESTS
+                    for (int i = 0; i < nativeEntries.Length; i++)
+                        CanonicalCopyObserver?.Invoke(nativeEntries[i].SourcePath, nativeEntries[i].DestinationPath);
+#endif
+                    if (AssetOperationService.CopyAssets(nativeEntries, out var copiedGuids) ||
+                        copiedGuids == null || copiedGuids.Length != nativeEntries.Length)
+                    {
+                        ContentMutationDiagnostics.Log("mutation.copy.failed", $"items={requests.Count}; nativeBatch=true");
+                        return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed,
+                            nativeEntries[0].SourcePath, nativeEntries[0].DestinationPath,
+                            "The native asset copy batch failed.");
+                    }
+                    ContentMutationDiagnostics.Log("mutation.copy.committed", $"items={requests.Count}; nativeBatch=true");
+                    return ContentMutationResult.Success(nativeEntries[0].SourcePath,
+                        nativeEntries[0].DestinationPath, completedPaths: nativeEntries.Select(x => x.DestinationPath).ToArray());
+                }
+            }
+
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
             var steps = new List<ContentMutationStep>(requests.Count);
             for (int i = 0; i < requests.Count; i++)

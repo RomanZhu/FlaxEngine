@@ -255,6 +255,8 @@ public:
     API_FUNCTION() static bool SetLabels(const Guid& sourceID, const Array<String>& labels);
     API_FUNCTION() static bool MoveAsset(const StringView& sourcePath, const StringView& destinationPath);
     API_FUNCTION() static bool CopyAsset(const StringView& sourcePath, const StringView& destinationPath, API_PARAM(Out) Guid& copiedGuid);
+    API_FUNCTION() static bool CopyAssets(const Array<AssetCopyEntryRequest>& entries,
+        API_PARAM(Out) Array<Guid>& copiedGuids);
     API_FUNCTION() static bool DeleteAsset(const StringView& sourcePath);
     API_FUNCTION() static bool TrashEntries(const Array<AssetTrashEntryRequest>& entries,
         API_PARAM(Out) AssetTrashBatch& trash);

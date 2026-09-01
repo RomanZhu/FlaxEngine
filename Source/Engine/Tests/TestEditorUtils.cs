@@ -26,17 +26,23 @@ namespace FlaxEngine.Tests
         {
             Directory.CreateDirectory(folderPath);
             assetPath = Path.Combine(folderPath, "Canonical.txt");
+            var folder = new ContentFolder(ContentFolderType.Content, folderPath, null);
+            CreateCanonicalTextItem(assetPath, folder, out assetId);
+            return folder;
+        }
+
+        private static BinaryAssetItem CreateCanonicalTextItem(string assetPath, ContentFolder folder, out Guid assetId)
+        {
             File.WriteAllText(assetPath, "canonical source");
             assetId = AssetOperationService.CreateImportedSourceMetadata(assetPath, typeof(RawDataAsset).FullName, "Flax.Text");
             Assert.AreNotEqual(Guid.Empty, assetId);
-            Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(assetPath, out var record));
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(AssetObjectId.Main(new AssetGuid(assetId)), out var record));
 
             var item = new BinaryAssetItem(assetPath, ref assetId, typeof(RawDataAsset).FullName,
                 typeof(RawDataAsset), ContentItemSearchFilter.Other);
             item.SetAssetDatabaseRecord(record);
-            var folder = new ContentFolder(ContentFolderType.Content, folderPath, null);
             item.ParentFolder = folder;
-            return folder;
+            return item;
         }
 
         private static void CleanupCanonicalCopyAsset(string path)
@@ -236,6 +242,60 @@ namespace FlaxEngine.Tests
             finally
             {
                 Directory.Delete(root, true);
+            }
+        }
+
+        [Test]
+        public void TestMultiCopyRoutesCanonicalSourcesThroughNativeBatch()
+        {
+            Assert.AreEqual(0, RunMultiCopyRoutesCanonicalSourcesThroughNativeBatch());
+        }
+
+        public static int RunMultiCopyRoutesCanonicalSourcesThroughNativeBatch()
+        {
+            var root = Path.Combine(Globals.ProjectContentFolder, "__CanonicalBatchCopy_" + Guid.NewGuid().ToString("N"));
+            var firstSource = Path.Combine(root, "First.txt");
+            var secondSource = Path.Combine(root, "Second.txt");
+            var firstDestination = Path.Combine(root, "First Copy.txt");
+            var secondDestination = Path.Combine(root, "Second Copy.txt");
+            int nativeCopies = 0;
+            try
+            {
+                Directory.CreateDirectory(root);
+                var folder = new ContentFolder(ContentFolderType.Content, root, null);
+                var first = CreateCanonicalTextItem(firstSource, folder, out _);
+                var second = CreateCanonicalTextItem(secondSource, folder, out _);
+                AssetWorkspaceModule.CanonicalCopyObserver = (_, _) => nativeCopies++;
+
+                var result = new AssetWorkspaceModule(null).Copy(new[]
+                {
+                    (Item: (ContentItem)first, Destination: firstDestination),
+                    (Item: (ContentItem)second, Destination: secondDestination),
+                });
+
+                if (!result.Succeeded)
+                    return 1;
+                if (nativeCopies != 2)
+                    return 2;
+                if (result.CompletedPaths.Length != 2)
+                    return 3;
+                if (!result.CompletedPaths.Any(x => string.Equals(Path.GetFullPath(x), Path.GetFullPath(firstDestination),
+                        StringComparison.OrdinalIgnoreCase)) ||
+                    !result.CompletedPaths.Any(x => string.Equals(Path.GetFullPath(x), Path.GetFullPath(secondDestination),
+                        StringComparison.OrdinalIgnoreCase)))
+                    return 4;
+                return 0;
+            }
+            finally
+            {
+                AssetWorkspaceModule.CanonicalCopyObserver = null;
+                CleanupCanonicalCopyAsset(firstDestination);
+                CleanupCanonicalCopyAsset(secondDestination);
+                CleanupCanonicalCopyAsset(firstSource);
+                CleanupCanonicalCopyAsset(secondSource);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
             }
         }
 

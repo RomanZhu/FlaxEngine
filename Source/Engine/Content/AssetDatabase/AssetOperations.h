@@ -90,6 +90,16 @@ API_STRUCT() struct FLAXENGINE_API AssetTrashEntryRequest
     API_FIELD() bool IsFolder = false;
 };
 
+/// <summary>One exact canonical source copy in an all-or-none native batch.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetCopyEntryRequest
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetCopyEntryRequest);
+
+    API_FIELD() String SourcePath;
+    API_FIELD() String DestinationPath;
+    API_FIELD() Guid ExpectedAssetGuid = Guid::Empty;
+};
+
 /// <summary>Exact native-owned recovery paths for one staged Content entry.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetTrashFragment
 {
@@ -198,6 +208,9 @@ private:
         const AssetMeta& meta, AssetOperationCommit& commit, AssetPipelineDiagnostic& diagnostic);
     bool MoveExact(AssetOperationKind kind, const AssetOperationTarget& target, const StringView& destination,
         AssetTrashRecord* trash, AssetPipelineDiagnostic& diagnostic);
+    bool CopyAssetInternal(const AssetOperationTarget& target, const StringView& destination, Guid& copiedGuid,
+        AssetPipelineDiagnostic& diagnostic, AssetOperationCommit* deferredCommit,
+        const Guid& requestedCopiedGuid = Guid::Empty);
 
 public:
     AssetOperations(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
@@ -215,6 +228,8 @@ public:
     bool RenameAsset(const AssetOperationTarget& target, const StringView& newFileName,
         AssetPipelineDiagnostic& diagnostic);
     bool CopyAsset(const AssetOperationTarget& target, const StringView& destination, Guid& copiedGuid,
+        AssetPipelineDiagnostic& diagnostic);
+    bool CopyAssets(const Array<AssetCopyEntryRequest>& requests, Array<Guid>& copiedGuids,
         AssetPipelineDiagnostic& diagnostic);
     bool WriteImporterSettings(const AssetOperationTarget& target, const AssetImporterSettingsRevision& expected,
         int32 settingsVersion, const StringAnsiView& settingsJson, AssetPipelineDiagnostic& diagnostic,

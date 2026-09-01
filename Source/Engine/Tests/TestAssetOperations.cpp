@@ -11,6 +11,11 @@
 #include "Engine/Platform/StringUtils.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Serialization/JsonWriters.h"
+#include "Engine/Scripting/ManagedCLR/MClass.h"
+#include "Engine/Scripting/ManagedCLR/MException.h"
+#include "Engine/Scripting/ManagedCLR/MMethod.h"
+#include "Engine/Scripting/ManagedCLR/MUtils.h"
+#include "Engine/Scripting/Scripting.h"
 #include "Engine/Utilities/Crc.h"
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -68,6 +73,7 @@ namespace
         int32 RefreshCalls = 0;
         Guid ClearedSource;
         Guid ClearedCopy;
+        int32 FailClearOnCall = 0;
         Array<AssetOperationCommit> LastCommits;
         int32 ImporterRevisionCalls = 0;
         bool FailRefresh = false;
@@ -81,6 +87,13 @@ namespace
             ClearCalls++;
             ClearedSource = sourceGuid;
             ClearedCopy = copiedGuid;
+            if (FailClearOnCall == ClearCalls)
+            {
+                diagnostic = AssetPipelineDiagnostic();
+                diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+                diagnostic.Message = TEXT("Injected copied-state failure.");
+                return true;
+            }
             diagnostic = AssetPipelineDiagnostic();
             return false;
         }
@@ -251,6 +264,133 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     Array<AssetPipelineDiagnostic> recoveryDiagnostics;
     CHECK_FALSE(operations.RecoverIncompleteTransactions(recoveryDiagnostics));
     CHECK(recoveryDiagnostics.IsEmpty());
+}
+
+TEST_CASE("Asset operations publish canonical copy batches once")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetCopyBatch-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    const byte sourceBytes[] = { 1, 2, 3 };
+    const AssetMeta firstMeta = MakeOperationMeta();
+    const AssetMeta secondMeta = MakeOperationMeta();
+    const String firstSource = content / TEXT("First.bin");
+    const String secondSource = content / TEXT("Second.bin");
+    REQUIRE_FALSE(operations.CreateAsset(firstSource,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), firstMeta, diagnostic));
+    REQUIRE_FALSE(operations.CreateAsset(secondSource,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), secondMeta, diagnostic));
+    const int32 baselineRefreshCalls = database.RefreshCalls;
+
+    Array<AssetCopyEntryRequest> requests;
+    requests.EnsureCapacity(2);
+    AssetCopyEntryRequest& first = requests.AddOne();
+    first.SourcePath = firstSource;
+    first.DestinationPath = content / TEXT("First Copy.bin");
+    first.ExpectedAssetGuid = firstMeta.ID;
+    AssetCopyEntryRequest& second = requests.AddOne();
+    second.SourcePath = secondSource;
+    second.DestinationPath = content / TEXT("Second Copy.bin");
+    second.ExpectedAssetGuid = secondMeta.ID;
+    Array<Guid> copiedGuids;
+
+    REQUIRE_FALSE(operations.CopyAssets(requests, copiedGuids, diagnostic));
+    REQUIRE(copiedGuids.Count() == 2);
+    CHECK(copiedGuids[0].IsValid());
+    CHECK(copiedGuids[1].IsValid());
+    CHECK(copiedGuids[0] != copiedGuids[1]);
+    CHECK(FileSystem::FileExists(first.DestinationPath));
+    CHECK(FileSystem::FileExists(second.DestinationPath));
+    CHECK(database.RefreshCalls == baselineRefreshCalls + 1);
+    REQUIRE(database.LastCommits.Count() == 2);
+    CHECK(database.LastCommits[0].Kind == AssetOperationKind::Copy);
+    CHECK(database.LastCommits[1].Kind == AssetOperationKind::Copy);
+    CHECK(database.LastCommits[0].TransactionId.IsValid());
+    CHECK(database.LastCommits[0].TransactionId == database.LastCommits[1].TransactionId);
+}
+
+TEST_CASE("Asset operations roll back canonical copy batch failures")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetCopyBatchRollback-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    const byte sourceBytes[] = { 4, 5, 6 };
+    const AssetMeta firstMeta = MakeOperationMeta();
+    const AssetMeta secondMeta = MakeOperationMeta();
+    const String firstSource = content / TEXT("First.bin");
+    const String secondSource = content / TEXT("Second.bin");
+    REQUIRE_FALSE(operations.CreateAsset(firstSource,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), firstMeta, diagnostic));
+    REQUIRE_FALSE(operations.CreateAsset(secondSource,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), secondMeta, diagnostic));
+    const int32 baselineRefreshCalls = database.RefreshCalls;
+    database.FailClearOnCall = database.ClearCalls + 2;
+
+    Array<AssetCopyEntryRequest> requests;
+    requests.EnsureCapacity(2);
+    AssetCopyEntryRequest& first = requests.AddOne();
+    first.SourcePath = firstSource;
+    first.DestinationPath = content / TEXT("First Copy.bin");
+    first.ExpectedAssetGuid = firstMeta.ID;
+    AssetCopyEntryRequest& second = requests.AddOne();
+    second.SourcePath = secondSource;
+    second.DestinationPath = content / TEXT("Second Copy.bin");
+    second.ExpectedAssetGuid = secondMeta.ID;
+    Array<Guid> copiedGuids;
+
+    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic));
+    CHECK(copiedGuids.IsEmpty());
+    CHECK_FALSE(FileSystem::FileExists(first.DestinationPath));
+    CHECK_FALSE(FileSystem::FileExists(first.DestinationPath + TEXT(".meta")));
+    CHECK_FALSE(FileSystem::FileExists(second.DestinationPath));
+    CHECK_FALSE(FileSystem::FileExists(second.DestinationPath + TEXT(".meta")));
+    CHECK(FileSystem::FileExists(firstSource));
+    CHECK(FileSystem::FileExists(secondSource));
+    CHECK(database.RefreshCalls == baselineRefreshCalls);
+
+    database.FailClearOnCall = 0;
+    database.FailRefresh = true;
+    const int32 publicationFailureBaseline = database.RefreshCalls;
+    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic));
+    CHECK(copiedGuids.IsEmpty());
+    CHECK_FALSE(FileSystem::FileExists(first.DestinationPath));
+    CHECK_FALSE(FileSystem::FileExists(first.DestinationPath + TEXT(".meta")));
+    CHECK_FALSE(FileSystem::FileExists(second.DestinationPath));
+    CHECK_FALSE(FileSystem::FileExists(second.DestinationPath + TEXT(".meta")));
+    CHECK(database.RefreshCalls == publicationFailureBaseline + 2);
+}
+
+TEST_CASE("Project panel routes canonical multi-copy through native batch")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestEditorUtils");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunMultiCopyRoutesCanonicalSourcesThroughNativeBatch", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestEditorUtils"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
 }
 
 TEST_CASE("Asset operations atomically remap external-actors scene copies")

@@ -2446,6 +2446,55 @@ bool AssetOperationService::CopyAsset(const StringView& sourcePath, const String
 #endif
 }
 
+bool AssetOperationService::CopyAssets(const Array<AssetCopyEntryRequest>& entries, Array<Guid>& copiedGuids)
+{
+    copiedGuids.Clear();
+#if USE_EDITOR
+    if (AssetPipelineService::Initialize() || !Operations || entries.IsEmpty())
+        return true;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    Array<AssetCopyEntryRequest> resolvedEntries;
+    resolvedEntries.EnsureCapacity(entries.Count());
+    for (const AssetCopyEntryRequest& entry : entries)
+    {
+        AssetCopyEntryRequest resolvedEntry = entry;
+        resolvedEntry.SourcePath = ResolveFacadeAssetPath(entry.SourcePath);
+        resolvedEntry.DestinationPath = ResolveFacadeAssetPath(entry.DestinationPath);
+        bool found = false;
+        for (const AssetRecord& record : snapshot.Records)
+        {
+            if (record.IsMainAsset() &&
+                FileSystem::AreFilePathsEqual(record.SourcePath.Get(), resolvedEntry.SourcePath) &&
+                (!entry.ExpectedAssetGuid.IsValid() || entry.ExpectedAssetGuid == record.SourceAssetID))
+            {
+                resolvedEntry.SourcePath = record.SourcePath.Get();
+                resolvedEntry.ExpectedAssetGuid = record.SourceAssetID;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            AssetPipelineDiagnostic diagnostic;
+            diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+            diagnostic.SourcePath = resolvedEntry.SourcePath;
+            diagnostic.Message = TEXT("Canonical copy batch source is not registered as a main source asset.");
+            SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+            return true;
+        }
+        resolvedEntries.Add(MoveTemp(resolvedEntry));
+    }
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = Operations->CopyAssets(resolvedEntries, copiedGuids, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
 bool AssetOperationService::DeleteAsset(const StringView& sourcePath)
 {
 #if USE_EDITOR
