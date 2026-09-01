@@ -38,6 +38,7 @@ namespace
         meta.UserDataJson = "{\"owner\":\"test\"}";
         meta.UnknownFields.Add("rootExtension", "[1,2,3]");
         SubAssetMeta mesh;
+        mesh.ID = Guid::New();
         mesh.LocalId = 771;
         mesh.TypeName = TEXT("FlaxEngine.Model");
         mesh.DisplayName = TEXT("Body");
@@ -216,6 +217,7 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     CHECK(copiedMeta.ID == copiedGuid);
     CHECK(copiedMeta.Processor.SettingsJson == persistedSourceMeta.Processor.SettingsJson);
     REQUIRE(copiedMeta.SubAssets.ContainsKey(TEXT("mesh:Body")));
+    CHECK(copiedMeta.SubAssets[TEXT("mesh:Body")].ID != persistedSourceMeta.SubAssets[TEXT("mesh:Body")].ID);
     CHECK(copiedMeta.SubAssets[TEXT("mesh:Body")].LocalId == 771);
 
     const String moved = content / TEXT("Moved/Robot.gltf");
@@ -982,6 +984,7 @@ TEST_CASE("Asset operations importer settings are revision-bound and atomic")
         REQUIRE(updated.MainObjectUnknownFields.ContainsKey("mainExtension"));
         CHECK(updated.MainObjectUnknownFields["mainExtension"] == persisted.MainObjectUnknownFields["mainExtension"]);
         REQUIRE(updated.SubAssets.ContainsKey(TEXT("mesh:Body")));
+        CHECK(updated.SubAssets[TEXT("mesh:Body")].ID == persisted.SubAssets[TEXT("mesh:Body")].ID);
         CHECK(updated.SubAssets[TEXT("mesh:Body")].LocalId == persisted.SubAssets[TEXT("mesh:Body")].LocalId);
         CHECK(updated.SubAssets[TEXT("mesh:Body")].TypeName == persisted.SubAssets[TEXT("mesh:Body")].TypeName);
         CHECK(updated.SubAssets[TEXT("mesh:Body")].DisplayName == persisted.SubAssets[TEXT("mesh:Body")].DisplayName);

@@ -45,16 +45,17 @@ TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
         "{"
         "\"newRoot\":{\"plugin\":true},"
         "\"labels\":[\"stone\",\"environment\"],"
-        "\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"FlaxEngine.Model\"},\"mesh:/Root/Body\":{\"fileId\":9007199254740993,\"collisionSalt\":0,\"type\":\"FlaxEngine.Model\",\"name\":\"Body\",\"removed\":false,\"pluginSub\":7}},"
+        "\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"FlaxEngine.Model\"},\"mesh:/Root/Body\":{\"guid\":\"53ac120a49ed4beebf9c810cc48f2ea7\",\"fileId\":9007199254740993,\"collisionSalt\":0,\"type\":\"FlaxEngine.Model\",\"name\":\"Body\",\"removed\":false,\"pluginSub\":7}},"
         "\"importer\":{\"settings\":{\"z\":1,\"a\":2},\"version\":2,\"id\":\"Flax.Model\",\"pluginProcessor\":\"kept\"},"
         "\"folderAsset\":false,"
-        "\"guid\":\"36F15F0C-4B35-4AF8-8BA2-F72F6CB82E22\","
-        "\"fileFormatVersion\":1} ";
+        "\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\","
+        "\"fileFormatVersion\":2} ";
     AssetMeta meta;
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(AssetMeta::Parse(json, TEXT("Robot.gltf.meta"), meta, diagnostic));
     CHECK(meta.ID.ToString(Guid::FormatType::N) == TEXT("36f15f0c4b354af88ba2f72f6cb82e22"));
     CHECK(meta.SubAssets.Count() == 1);
+    CHECK(meta.SubAssets[TEXT("mesh:/Root/Body")].ID.ToString(Guid::FormatType::N) == TEXT("53ac120a49ed4beebf9c810cc48f2ea7"));
     CHECK(meta.SubAssets[TEXT("mesh:/Root/Body")].LocalId == 9007199254740993ll);
     CHECK(meta.SubAssets[TEXT("mesh:/Root/Body")].CollisionSalt == 0);
     CHECK(meta.UnknownFields.ContainsKey("newRoot"));
@@ -71,6 +72,7 @@ TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
     CHECK(first.Contains("\"newRoot\""));
     CHECK(first.Find("\"id\"") < first.Find("\"version\""));
     CHECK(first.Find("\"version\"") < first.Find("\"settings\""));
+    CHECK(first.Find("\"guid\": \"53ac120a49ed4beebf9c810cc48f2ea7\"") < first.Find("\"fileId\": 9007199254740993"));
     CHECK(first.Find("\"fileId\": 9007199254740993") < first.Find("\"type\": \"FlaxEngine.Model\""));
     CHECK(first.Contains("\"pluginProcessor\""));
     CHECK(first.Contains("\"pluginSub\""));
@@ -82,10 +84,10 @@ TEST_CASE("Asset meta rejects invalid importer and duplicate local file IDs")
 {
     AssetMeta meta;
     AssetPipelineDiagnostic diagnostic;
-    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"bad id\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}", TEXT("bad.meta"), meta, diagnostic));
+    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"bad id\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}", TEXT("bad.meta"), meta, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
 
-    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\"},\"mesh:B\":{\"fileId\":7,\"collisionSalt\":1,\"type\":\"T\"}},\"labels\":[]}", TEXT("duplicate.meta"), meta, diagnostic));
+    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"guid\":\"53ac120a49ed4beebf9c810cc48f2ea7\",\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\"},\"mesh:B\":{\"guid\":\"737e46e96fdb4a08a310cd19515ef09b\",\"fileId\":7,\"collisionSalt\":1,\"type\":\"T\"}},\"labels\":[]}", TEXT("duplicate.meta"), meta, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
 }
 
@@ -106,6 +108,17 @@ TEST_CASE("Folder metadata has no imported object table")
     REQUIRE_FALSE(AssetMeta::Parse(json, TEXT("Folder.meta"), reparsed, diagnostic));
     CHECK(reparsed.FolderAsset);
     CHECK(reparsed.SubAssets.Count() == 0);
+}
+
+TEST_CASE("Asset meta rejects duplicate object GUIDs and reconciliation identifiers")
+{
+    AssetMeta meta;
+    AssetPipelineDiagnostic diagnostic;
+    const char* duplicateGuid = "{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"guid\":\"53ac120a49ed4beebf9c810cc48f2ea7\",\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\"},\"mesh:B\":{\"guid\":\"53ac120a49ed4beebf9c810cc48f2ea7\",\"fileId\":8,\"collisionSalt\":0,\"type\":\"T\"}},\"labels\":[]}";
+    CHECK(AssetMeta::Parse(duplicateGuid, TEXT("duplicate-guid.meta"), meta, diagnostic));
+
+    const char* duplicateAlias = "{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"guid\":\"53ac120a49ed4beebf9c810cc48f2ea7\",\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\",\"previousIdentifiers\":[\"mesh:B\"]},\"mesh:B\":{\"guid\":\"737e46e96fdb4a08a310cd19515ef09b\",\"fileId\":8,\"collisionSalt\":0,\"type\":\"T\"}},\"labels\":[]}";
+    CHECK(AssetMeta::Parse(duplicateAlias, TEXT("duplicate-alias.meta"), meta, diagnostic));
 }
 
 TEST_CASE("Asset meta atomic write preserves old complete sidecar on failures")
@@ -154,22 +167,25 @@ TEST_CASE("Asset meta atomic write preserves old complete sidecar on failures")
     CHECK(loaded.ID == changed.ID);
 }
 
-TEST_CASE("Asset meta no write parse reports tracked generic upgrade")
+TEST_CASE("Asset meta strictly rejects unsupported and non-canonical identity formats")
 {
     const String path = Globals::ProjectLibraryFolder / TEXT("Tests/old.meta");
-    const StringAnsi oldJson = "{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}";
+    const StringAnsi oldJson = "{\"fileFormatVersion\":1,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}";
     REQUIRE_FALSE(File::WriteAllBytes(path, oldJson.Get(), oldJson.Length()));
     SCOPE_EXIT { FileSystem::DeleteFile(path); };
     BytesContainer before;
     REQUIRE_FALSE(File::ReadAllBytes(path, before));
     AssetMeta meta;
     AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(AssetMeta::Load(path, meta, diagnostic));
-    CHECK(meta.MetaUpgradeRequired);
+    CHECK(AssetMeta::Load(path, meta, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
     BytesContainer after;
     REQUIRE_FALSE(File::ReadAllBytes(path, after));
     REQUIRE(after.Length() == before.Length());
     CHECK(Platform::MemoryCompare(after.Get(), before.Get(), before.Length()) == 0);
+
+    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36F15F0C-4B35-4AF8-8BA2-F72F6CB82E22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
+    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
 }
 
 TEST_CASE("Processor settings upgrades are staged and independent from implementation versions")
@@ -211,15 +227,17 @@ TEST_CASE("Processor settings upgrades are staged and independent from implement
     CHECK(created.Processor.SettingsJson.Contains("12345"));
 }
 
-TEST_CASE("Asset metadata clone changes only source GUID and preserves object local IDs")
+TEST_CASE("Asset metadata clone regenerates every GUID and preserves reconciliation metadata")
 {
     AssetMeta source = MakeMeta();
     SubAssetMeta live;
+    live.ID = Guid::New();
     live.LocalId = 1234567890123456;
     live.CollisionSalt = 3;
     live.TypeName = TEXT("FlaxEngine.Model");
     live.DisplayName = TEXT("Live");
     SubAssetMeta tombstone = live;
+    tombstone.ID = Guid::New();
     tombstone.LocalId = 2234567890123456;
     tombstone.DisplayName = TEXT("Removed");
     tombstone.Removed = true;
@@ -227,6 +245,9 @@ TEST_CASE("Asset metadata clone changes only source GUID and preserves object lo
     source.SubAssets.Add(TEXT("mesh:/Removed"), tombstone);
     const AssetMeta clone = source.CloneWithNewIdentities();
     CHECK(clone.ID != source.ID);
+    CHECK(clone.SubAssets[TEXT("mesh:/Live")].ID != live.ID);
+    CHECK(clone.SubAssets[TEXT("mesh:/Removed")].ID != tombstone.ID);
+    CHECK(clone.SubAssets[TEXT("mesh:/Live")].ID != clone.SubAssets[TEXT("mesh:/Removed")].ID);
     CHECK(clone.SubAssets[TEXT("mesh:/Live")].LocalId == live.LocalId);
     CHECK(clone.SubAssets[TEXT("mesh:/Live")].CollisionSalt == live.CollisionSalt);
     CHECK(clone.SubAssets[TEXT("mesh:/Removed")].LocalId == tombstone.LocalId);

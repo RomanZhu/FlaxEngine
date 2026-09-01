@@ -28,7 +28,7 @@ enum class AssetMetaWriteFailurePoint : byte
 /// <summary>Universal tracked asset sidecar.</summary>
 struct FLAXENGINE_API AssetMeta
 {
-    static constexpr int32 CurrentFileFormatVersion = 1;
+    static constexpr int32 CurrentFileFormatVersion = 2;
 
     int32 FileFormatVersion = CurrentFileFormatVersion;
     Guid ID;
@@ -41,7 +41,6 @@ struct FLAXENGINE_API AssetMeta
     Array<String> Labels;
     StringAnsi UserDataJson;
     Dictionary<StringAnsi, StringAnsi> UnknownFields;
-    bool MetaUpgradeRequired = false;
 
     /// <summary>Parses and validates sidecar bytes without writing.</summary>
     /// <returns>True on failure.</returns>
@@ -59,6 +58,6 @@ struct FLAXENGINE_API AssetMeta
     /// <returns>True on failure.</returns>
     bool ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) const;
 
-    /// <summary>Clones importer settings and object mappings while assigning only a new source GUID.</summary>
+    /// <summary>Clones importer settings and reconciliation mappings while assigning new GUIDs to every object.</summary>
     AssetMeta CloneWithNewIdentities() const;
 };

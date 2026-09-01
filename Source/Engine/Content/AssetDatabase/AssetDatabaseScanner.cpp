@@ -303,7 +303,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         const uint64 semanticHash = Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length());
         const AssetRecordStatus status = meta.Processor.ID == TEXT("Flax.Unsupported")
             ? AssetRecordStatus::UnsupportedProcessor
-            : meta.MetaUpgradeRequired ? AssetRecordStatus::MetaUpgradeRequired : AssetRecordStatus::Ready;
+            : AssetRecordStatus::Ready;
         Array<AssetRecord> metaRecords;
         AddMetaRecords(meta, sourcePath, metaPath, normalizedPath, semanticHash, status, metaRecords);
         for (AssetRecord& record : metaRecords)

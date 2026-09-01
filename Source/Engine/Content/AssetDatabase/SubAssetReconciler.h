@@ -18,6 +18,7 @@ struct FLAXENGINE_API SubAssetReconcileChange
     SubAssetChangeKind Kind = SubAssetChangeKind::Add;
     String OldKey;
     String NewKey;
+    Guid ID;
     int64 LocalId = 0;
 };
 

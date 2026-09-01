@@ -1057,10 +1057,8 @@ namespace
             const bool jsonDocumentUpgrade = isJsonDocument &&
                 (metadata.SourceKind != AssetSourceKind::TextDocument || metadata.Processor.ID != TEXT("Flax.JsonDocument") ||
                  metadata.Processor.SettingsVersion != 1 || metadata.Processor.SettingsJson != StringAnsiView("{}\n"));
-            if (!metadata.MetaUpgradeRequired && !settingsUpgrade && !jsonDocumentUpgrade)
+            if (!settingsUpgrade && !jsonDocumentUpgrade)
                 return false;
-            metadata.FileFormatVersion = AssetMeta::CurrentFileFormatVersion;
-            metadata.MetaUpgradeRequired = false;
             if (isSettings)
                 ConfigureSettingsMetadata(metadata);
             else if (isJsonDocument)

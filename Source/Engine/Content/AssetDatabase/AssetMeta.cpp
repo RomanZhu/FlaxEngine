@@ -46,6 +46,16 @@ namespace
         return false;
     }
 
+    bool ParseCanonicalGuid(const JsonValue& value, Guid& result)
+    {
+        if (!value.IsString() || value.GetStringLength() != 32)
+            return true;
+        const StringAnsiView text(value.GetString(), value.GetStringLength());
+        if (Guid::Parse(text, result) || !result.IsValid())
+            return true;
+        return StringAnsi(result.ToString(Guid::FormatType::N).ToLower()) != text;
+    }
+
     bool CaptureUnknown(const JsonValue& object, const char* const* known, int32 knownCount, Dictionary<StringAnsi, StringAnsi>& output, AssetPipelineDiagnostic& diagnostic, const StringView& path)
     {
         CanonicalJsonError error;
@@ -118,7 +128,7 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
     const auto importer = document.FindMember("importer");
     const auto objectIds = document.FindMember("objectIds");
     const auto labels = document.FindMember("labels");
-    if (fileFormatVersion == document.MemberEnd() || !fileFormatVersion->value.IsInt() || fileFormatVersion->value.GetInt() < 1 ||
+    if (fileFormatVersion == document.MemberEnd() || !fileFormatVersion->value.IsInt() || fileFormatVersion->value.GetInt() != CurrentFileFormatVersion ||
         guid == document.MemberEnd() || !guid->value.IsString() ||
         folderAsset == document.MemberEnd() || !folderAsset->value.IsBool() ||
         importer == document.MemberEnd() || !importer->value.IsObject() ||
@@ -126,8 +136,7 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata is missing a required field or has an invalid field type."));
 
     result.FileFormatVersion = fileFormatVersion->value.GetInt();
-    result.MetaUpgradeRequired = result.FileFormatVersion != CurrentFileFormatVersion;
-    if (Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), result.ID) || !result.ID.IsValid())
+    if (ParseCanonicalGuid(guid->value, result.ID))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata GUID is invalid."));
     result.FolderAsset = folderAsset->value.GetBool();
     result.SourceKind = result.FolderAsset ? AssetSourceKind::Folder : AssetSourceKind::ImportedSource;
@@ -161,6 +170,9 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
 
     HashSet<int64> localIds;
     localIds.Add(1);
+    HashSet<Guid> objectGuids;
+    objectGuids.Add(result.ID);
+    HashSet<String> reconciliationKeys;
     if (result.FolderAsset)
     {
         result.AssetType = TEXT("FlaxEngine.Folder");
@@ -193,21 +205,27 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
                 continue;
             const String rawKey(StringAnsiView(i->name.GetString(), i->name.GetStringLength()));
             const String stableKey = SubAssetPolicy::NormalizeKey(rawKey);
-            if (!SubAssetPolicy::IsKeyValid(stableKey) || result.SubAssets.ContainsKey(stableKey) || !i->value.IsObject())
+            if (stableKey != rawKey || !SubAssetPolicy::IsKeyValid(stableKey) || !reconciliationKeys.Add(stableKey) || !i->value.IsObject())
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata contains an invalid or duplicate stable object identifier."));
             const JsonValue& object = i->value;
+            const auto objectGuid = object.FindMember("guid");
             const auto localId = object.FindMember("fileId");
             const auto collisionSalt = object.FindMember("collisionSalt");
             const auto type = object.FindMember("type");
             const auto name = object.FindMember("name");
             const auto removed = object.FindMember("removed");
-            if (localId == object.MemberEnd() || !localId->value.IsInt64() || localId->value.GetInt64() <= 1 ||
+            Guid parsedObjectGuid;
+            if (objectGuid == object.MemberEnd() || ParseCanonicalGuid(objectGuid->value, parsedObjectGuid) ||
+                localId == object.MemberEnd() || !localId->value.IsInt64() || localId->value.GetInt64() <= 1 ||
                 collisionSalt == object.MemberEnd() || !collisionSalt->value.IsUint() ||
                 type == object.MemberEnd() || !type->value.IsString() || type->value.GetStringLength() == 0 ||
                 (name != object.MemberEnd() && !name->value.IsString()) ||
                 (removed != object.MemberEnd() && !removed->value.IsBool()))
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata object mapping is invalid."));
             SubAssetMeta subAsset;
+            subAsset.ID = parsedObjectGuid;
+            if (!objectGuids.Add(subAsset.ID))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata repeats an object GUID."));
             subAsset.LocalId = localId->value.GetInt64();
             subAsset.CollisionSalt = collisionSalt->value.GetUint();
             if (!localIds.Add(subAsset.LocalId))
@@ -225,18 +243,18 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
                 {
                     if (!previous.IsString())
                         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Object previousIdentifiers values must be strings."));
-                    const String previousKey = SubAssetPolicy::NormalizeKey(String(StringAnsiView(previous.GetString(), previous.GetStringLength())));
-                    if (!SubAssetPolicy::IsKeyValid(previousKey) || previousKey == stableKey || !previousSet.Add(previousKey))
+                    const String rawPreviousKey(StringAnsiView(previous.GetString(), previous.GetStringLength()));
+                    const String previousKey = SubAssetPolicy::NormalizeKey(rawPreviousKey);
+                    if (previousKey != rawPreviousKey || !SubAssetPolicy::IsKeyValid(previousKey) || previousKey == stableKey ||
+                        !previousSet.Add(previousKey) || !reconciliationKeys.Add(previousKey))
                         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Object previousIdentifiers contains an invalid or duplicate identifier."));
                     subAsset.PreviousKeys.Add(previousKey);
                 }
             }
-            const char* subAssetKnown[] = { "fileId", "collisionSalt", "type", "name", "removed", "previousIdentifiers" };
+            const char* subAssetKnown[] = { "guid", "fileId", "collisionSalt", "type", "name", "removed", "previousIdentifiers" };
             if (CaptureUnknown(object, subAssetKnown, ARRAY_COUNT(subAssetKnown), subAsset.UnknownFields, diagnostic, path))
                 return true;
             result.SubAssets.Add(stableKey, MoveTemp(subAsset));
-            if (stableKey != rawKey)
-                result.MetaUpgradeRequired = true;
         }
     }
 
@@ -318,12 +336,18 @@ bool AssetMeta::ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) 
     }
     HashSet<int64> localIds;
     localIds.Add(1);
+    HashSet<Guid> objectGuids;
+    objectGuids.Add(ID);
+    HashSet<String> reconciliationKeys;
     for (const auto& entry : SubAssets)
     {
-        if (FolderAsset || !SubAssetPolicy::IsKeyValid(entry.Key) || entry.Value.LocalId <= 1 || !localIds.Add(entry.Value.LocalId) || entry.Value.TypeName.IsEmpty())
+        if (FolderAsset || !SubAssetPolicy::IsKeyValid(entry.Key) || !reconciliationKeys.Add(entry.Key) ||
+            !entry.Value.ID.IsValid() || !objectGuids.Add(entry.Value.ID) || entry.Value.LocalId <= 1 ||
+            !localIds.Add(entry.Value.LocalId) || entry.Value.TypeName.IsEmpty())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, StringView::Empty, TEXT("Asset metadata contains an invalid or duplicate object mapping."));
         JsonValue subAsset(rapidjson::kObjectType);
         AddUnknownMembers(subAsset, entry.Value.UnknownFields, allocator);
+        AddStringMember(subAsset, "guid", entry.Value.ID.ToString(Guid::FormatType::N).ToLower(), allocator);
         subAsset.AddMember("fileId", entry.Value.LocalId, allocator);
         subAsset.AddMember("collisionSalt", entry.Value.CollisionSalt, allocator);
         AddStringMember(subAsset, "type", entry.Value.TypeName, allocator);
@@ -337,7 +361,8 @@ bool AssetMeta::ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) 
             for (int32 i = 0; i < sorted.Count(); i++)
             {
                 const String& previousKey = sorted[i];
-                if (!SubAssetPolicy::IsKeyValid(previousKey) || previousKey == entry.Key || (i != 0 && previousKey == sorted[i - 1]))
+                if (!SubAssetPolicy::IsKeyValid(previousKey) || previousKey == entry.Key ||
+                    (i != 0 && previousKey == sorted[i - 1]) || !reconciliationKeys.Add(previousKey))
                     return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, StringView::Empty, TEXT("Asset metadata contains an invalid or duplicate previous stable identifier."));
                 const StringAnsi key(previousKey);
                 previousKeys.PushBack(JsonValue(key.Get(), key.Length(), allocator).Move(), allocator);
@@ -390,6 +415,7 @@ bool AssetMeta::ToJson(StringAnsi& output, AssetPipelineDiagnostic& diagnostic) 
     mainObjectOrder.Add("type");
     objectOrders.Add("/objectIds/main", mainObjectOrder);
     Array<StringAnsi> subAssetOrder;
+    subAssetOrder.Add("guid");
     subAssetOrder.Add("fileId");
     subAssetOrder.Add("collisionSalt");
     subAssetOrder.Add("type");
@@ -436,5 +462,14 @@ AssetMeta AssetMeta::CloneWithNewIdentities() const
 {
     AssetMeta result = *this;
     result.ID = Guid::New();
+    HashSet<Guid> assigned;
+    assigned.Add(result.ID);
+    for (auto& subAsset : result.SubAssets)
+    {
+        do
+        {
+            subAsset.Value.ID = Guid::New();
+        } while (!assigned.Add(subAsset.Value.ID));
+    }
     return result;
 }

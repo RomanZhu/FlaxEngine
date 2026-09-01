@@ -5,11 +5,13 @@
 #include "Engine/Core/Collections/Array.h"
 #include "Engine/Core/Collections/Dictionary.h"
 #include "Engine/Core/Collections/HashSet.h"
+#include "Engine/Core/Types/Guid.h"
 #include "Engine/Core/Types/String.h"
 
 /// <summary>Durable sidecar mapping for one processor-owned subasset.</summary>
 struct FLAXENGINE_API SubAssetMeta
 {
+    Guid ID;
     int64 LocalId = 0;
     uint32 CollisionSalt = 0;
     String TypeName;
