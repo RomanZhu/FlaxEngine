@@ -173,6 +173,12 @@ TEST_CASE("Asset database mutates affected index rows and bounds query copies")
     REQUIRE(indexed.Count() == 2);
     CHECK(indexed[0].SourcePath.Get().EndsWith(TEXT("Page2.png")));
     CHECK(indexed[1].SourcePath.Get().EndsWith(TEXT("Page3.png")));
+
+    // Managed/reflected value types arrive zero-initialized rather than using native member defaults.
+    page.Offset = 0;
+    page.Limit = 0;
+    database.QueryRecords(page, indexed);
+    CHECK(indexed.Count() == 6);
 }
 
 TEST_CASE("Asset database publishes initial and targeted source file hashes durably")

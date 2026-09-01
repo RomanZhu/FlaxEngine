@@ -591,7 +591,9 @@ void AssetDatabase::QueryRecords(const AssetRecordQuery& query, Array<AssetRecor
     if (constrained && !candidates)
         return;
     const int32 offset = Math::Max(query.Offset, 0);
-    const int32 limit = Math::Clamp(query.Limit, 1, 4096);
+    // Reflected value-type callers zero-initialize fields, so zero means the default page rather
+    // than a one-record query. Positive requests are still strictly bounded.
+    const int32 limit = query.Limit > 0 ? Math::Min(query.Limit, 4096) : 256;
     result.EnsureCapacity(limit);
     int32 skipped = 0;
     // The path index is already sorted, so only the requested page of records is copied.
