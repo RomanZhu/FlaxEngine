@@ -108,5 +108,8 @@ private:
     bool _closed = false;
 
     bool WriteOutputFile(const StringAnsiView& outputKind, const StringView& relativePath, const void* data, int32 length, AssetPipelineDiagnostic& diagnostic);
+    bool WriteOutputFileFromPath(const StringAnsiView& outputKind, const StringView& relativePath,
+        const StringView& sourcePath, uint64 expectedSize, const ContentHash& expectedHash,
+        AssetPipelineDiagnostic& diagnostic);
     bool CheckActive(AssetPipelineDiagnostic& diagnostic) const;
 };

@@ -307,6 +307,38 @@ namespace
         total += value;
         return false;
     }
+
+    bool HashFile(const StringView& path, uint64 expectedSize, ContentHash& hash)
+    {
+        if (!FileSystem::FileExists(path) || FileSystem::GetFileSize(path) != expectedSize)
+            return true;
+        File* file = File::Open(path, FileMode::OpenExisting, FileAccess::Read, FileShare::Read);
+        if (!file)
+            return true;
+        ContentHasher hasher;
+        Array<byte> buffer;
+        buffer.Resize(256 * 1024, false);
+        uint64 total = 0;
+        bool failed = false;
+        for (;;)
+        {
+            uint32 read = 0;
+            if (file->Read(buffer.Get(), buffer.Count(), &read) || total > expectedSize || read > expectedSize - total)
+            {
+                failed = true;
+                break;
+            }
+            if (read == 0)
+                break;
+            hasher.Update(buffer.Get(), read);
+            total += read;
+        }
+        Delete(file);
+        if (failed || total != expectedSize || FileSystem::GetFileSize(path) != expectedSize)
+            return true;
+        hash = hasher.Finalize();
+        return false;
+    }
 }
 
 bool AssetImportWorkerProtocol::SaveRequest(const StringView& path, const AssetImportJobRequest& request, AssetPipelineDiagnostic& diagnostic)
@@ -623,8 +655,8 @@ bool AssetImportWorkerProtocol::ValidateResult(const AssetImportJobRequest& requ
         if (!AssetPathPolicy::IsSameOrChild(path, request.OutputStagingPath) || !FileSystem::FileExists(path) ||
             FileSystem::GetFileSize(path) != output.Size)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, TEXT("Isolated import worker output path or size is invalid."));
-        Array<byte> bytes;
-        if (File::ReadAllBytes(path, bytes) || ContentHash::Compute(bytes.Get(), bytes.Count()) != output.Hash)
+        ContentHash hash;
+        if (HashFile(path, output.Size, hash) || hash != output.Hash)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, TEXT("Isolated import worker output hash is invalid."));
         relativeOutputs.Add(output.RelativePath);
     }

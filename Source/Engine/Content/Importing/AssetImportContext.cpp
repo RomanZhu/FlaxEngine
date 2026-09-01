@@ -2,6 +2,9 @@
 
 #include "AssetImportContext.h"
 #include "Engine/Content/AssetDatabase/SubAsset.h"
+#include "Engine/Platform/File.h"
+#include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/StringUtils.h"
 #include <algorithm>
 
 namespace
@@ -14,6 +17,39 @@ namespace
         diagnostic.AssetGuid = asset.Value;
         diagnostic.SourcePath = path;
         diagnostic.Message = message;
+        return true;
+    }
+
+    bool OutputFailure(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const AssetGuid& asset,
+        const StringView& path, const StringView& message)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        diagnostic.Code = code;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+        diagnostic.AssetGuid = asset.Value;
+        diagnostic.SourcePath = path;
+        diagnostic.Message = message;
+        return true;
+    }
+
+    bool IsSafeOutputName(const StringView& name, const StringAnsiView& extension)
+    {
+        if (name.IsEmpty() || name.Length() > 128 || extension.Length() < 2 || extension.Length() > 32 || extension[0] != '.')
+            return false;
+        for (int32 i = 0; i < name.Length(); i++)
+        {
+            const Char c = name[i];
+            if (!((c >= TEXT('a') && c <= TEXT('z')) || (c >= TEXT('A') && c <= TEXT('Z')) ||
+                (c >= TEXT('0') && c <= TEXT('9')) || c == TEXT('-') || c == TEXT('_')))
+                return false;
+        }
+        for (int32 i = 1; i < extension.Length(); i++)
+        {
+            const char c = extension[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_'))
+                return false;
+        }
         return true;
     }
 
@@ -30,13 +66,27 @@ namespace
 }
 
 AssetImportContext::AssetImportContext(const AssetGuid& asset, const StringView& sourcePath, const ArtifactTarget& target,
-                                       const StringAnsiView& settings, AssetImportReadCallback read)
+                                       const StringAnsiView& settings, AssetImportReadCallback read,
+                                       const StringView& outputStagingPath, uint64 maximumOutputBytes, int32 maximumOutputFiles)
     : _asset(asset)
     , _sourcePath(sourcePath)
     , _target(target)
     , _settings(settings)
     , _read(MoveTemp(read))
+    , _outputStagingPath(outputStagingPath)
+    , _maximumOutputBytes(maximumOutputBytes)
+    , _maximumOutputFiles(maximumOutputFiles)
 {
+    FileSystem::NormalizePath(_outputStagingPath);
+}
+
+AssetImportContext::~AssetImportContext()
+{
+    for (OutputStreamState& output : _outputStreams)
+    {
+        if (output.Writer)
+            Delete(output.Writer);
+    }
 }
 
 bool AssetImportContext::ReadSource(Array<byte>& data, ContentHash& hash, AssetPipelineDiagnostic& diagnostic)
@@ -166,7 +216,8 @@ int32 AssetImportContext::AddObjectToAsset(const StringView& stableIdentifier, c
 int32 AssetImportContext::CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension,
                                        ArtifactTargetDimension targetDimensions)
 {
-    if (_completed || name.IsEmpty() || kind.IsEmpty() || extension.IsEmpty() ||
+    if (_completed || kind.IsEmpty() || !IsSafeOutputName(name, extension) || _outputStagingPath.IsEmpty() ||
+        _maximumOutputBytes == 0 || _maximumOutputFiles < 1 || _result.Outputs.Count() >= _maximumOutputFiles ||
         (static_cast<uint32>(targetDimensions) & ~static_cast<uint32>(ArtifactTargetDimension::All)) != 0)
         return -1;
     for (const AssetImportOutputDeclaration& output : _result.Outputs)
@@ -179,7 +230,21 @@ int32 AssetImportContext::CreateOutput(const StringView& name, const StringAnsiV
     output.Kind = kind;
     output.Extension = extension;
     output.TargetDimensions = targetDimensions;
+    output.RelativePath = name + String(extension);
+    output.StagingPath = _outputStagingPath / output.RelativePath;
+    FileSystem::NormalizePath(output.StagingPath);
+    if (!FileSystem::AreFilePathsEqual(StringUtils::GetDirectoryName(output.StagingPath), _outputStagingPath) ||
+        FileSystem::FileExists(output.StagingPath) || FileSystem::DirectoryExists(output.StagingPath))
+    {
+        return -1;
+    }
+    File* writer = File::Open(output.StagingPath, FileMode::CreateNew, FileAccess::Write, FileShare::Read);
+    if (!writer)
+        return -1;
     _result.Outputs.Add(MoveTemp(output));
+    OutputStreamState state;
+    state.Writer = writer;
+    _outputStreams.Add(MoveTemp(state));
     return _result.Outputs.Count() - 1;
 }
 
@@ -190,7 +255,26 @@ bool AssetImportContext::WriteOutput(int32 outputIndex, const Span<byte>& data, 
     AssetImportOutputDeclaration& output = _result.Outputs[outputIndex];
     if (output.Completed)
         return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer wrote to a completed output."));
-    output.Data.Add(data.Get(), data.Length());
+    if (data.Length() == 0)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+    const uint64 length = static_cast<uint64>(data.Length());
+    if (length > _maximumOutputBytes || _outputBytesWritten > _maximumOutputBytes - length)
+        return OutputFailure(diagnostic, AssetPipelineDiagnosticCode::ResourceLimitExceeded, _asset, _sourcePath,
+            TEXT("Importer exceeded its output-byte quota while streaming an output."));
+    OutputStreamState& state = _outputStreams[outputIndex];
+    uint32 written = 0;
+    if (!state.Writer || state.Writer->Write(data.Get(), static_cast<uint32>(data.Length()), &written) ||
+        written != static_cast<uint32>(data.Length()))
+    {
+        return OutputFailure(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, _asset, _sourcePath,
+            TEXT("Importer could not stream a declared output to worker staging."));
+    }
+    state.Hasher.Update(data.Get(), length);
+    output.Size += length;
+    _outputBytesWritten += length;
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -202,6 +286,14 @@ bool AssetImportContext::CompleteOutput(int32 outputIndex, AssetPipelineDiagnost
     AssetImportOutputDeclaration& output = _result.Outputs[outputIndex];
     if (output.Completed)
         return ContextFailure(diagnostic, _asset, _sourcePath, TEXT("Importer output was completed more than once."));
+    OutputStreamState& state = _outputStreams[outputIndex];
+    if (!state.Writer)
+        return OutputFailure(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, _asset, _sourcePath,
+            TEXT("Importer output staging writer is unavailable."));
+    state.Writer->Close();
+    Delete(state.Writer);
+    state.Writer = nullptr;
+    output.Hash = state.Hasher.Finalize();
     output.Completed = true;
     diagnostic = AssetPipelineDiagnostic();
     return false;

@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/Build/ArtifactBuildContext.h"
+#include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
@@ -113,6 +114,43 @@ TEST_CASE("ArtifactBuildContext enforces quotas and cancellation cleanup")
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::BuildCancelled);
     context.Cancel();
     CHECK_FALSE(FileSystem::DirectoryExists(staging));
+}
+
+TEST_CASE("ArtifactBuildContext streams validated temporary outputs")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("ArtifactBuildFileOutput-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    PreparedAsset prepared = BuildContextPrepared(TEXT("Content/source.synthetic"), ContentHash::Compute("source", 6));
+    Array<ArtifactBuildInput> inputs;
+    AssetCancellationSource cancellation;
+    ArtifactBuildContext context(root, content, library, Guid::New(), prepared, inputs, cancellation.GetToken(), 1024, 1024, 4);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(context.Initialize(diagnostic));
+    const String transferRoot = ArtifactStore::GetTemporaryPath(library) / TEXT("CallbackWorkers/Test");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(transferRoot));
+    const String transfer = transferRoot / TEXT("runtime.bin");
+    const char outputBytes[] = "streamed";
+    REQUIRE_FALSE(File::WriteAllBytes(transfer, outputBytes, 8));
+    const ContentHash outputHash = ContentHash::Compute(outputBytes, 8);
+    const String outsideTransfer = root / TEXT("outside.bin");
+    REQUIRE_FALSE(File::WriteAllBytes(outsideTransfer, outputBytes, 8));
+
+    ArtifactWriter writer;
+    REQUIRE_FALSE(context.OpenOutput(StringAnsiView("runtime"), writer, diagnostic));
+    CHECK(writer.WriteFileFromPath(TEXT("outside.bin"), outsideTransfer, 8, outputHash, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
+    REQUIRE_FALSE(writer.WriteFileFromPath(TEXT("runtime.bin"), transfer, 8, outputHash, diagnostic));
+    REQUIRE(context.GetFiles().Count() == 1);
+    CHECK(context.GetFiles()[0].Size == 8);
+    CHECK(context.GetFiles()[0].Hash == outputHash);
+    CHECK(FileSystem::FileExists(context.GetFiles()[0].AbsolutePath));
+    CHECK(writer.WriteFileFromPath(TEXT("invalid.bin"), transfer, 8, ContentHash::Compute("wrong", 5), diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
+    REQUIRE_FALSE(context.Close(diagnostic));
 }
 
 TEST_CASE("ArtifactBuildContext rejects undeclared input capabilities during initialization")

@@ -8,7 +8,9 @@
 #include "Engine/Content/Importing/CustomDependencyRegistry.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 namespace
@@ -93,13 +95,16 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
 {
     const AssetGuid asset(Guid::New());
     ArtifactTarget target;
+    const String outputStaging = Globals::TemporaryFolder / (TEXT("AssetImportContextOutput-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(outputStaging));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(outputStaging, true); };
     AssetImportContext context(asset, TEXT("Content/model.foo"), target, "{}", [](const StringView& path, Array<byte>& bytes, ContentHash& hash, AssetPipelineDiagnostic&)
     {
         bytes.Add(42);
         const StringAnsi narrow(path);
         hash = ContentHash::Compute(narrow.Get(), narrow.Length());
         return false;
-    });
+    }, outputStaging, 3, 1);
     Array<byte> bytes;
     ContentHash hash;
     AssetPipelineDiagnostic diagnostic;
@@ -136,7 +141,30 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
     CHECK(foundLogicalPath);
     REQUIRE(result.Outputs.Count() == 1);
     CHECK(result.Outputs[0].TargetDimensions == ArtifactTargetDimension::Platform);
-    CHECK(result.Outputs[0].Data.Count() == 3);
+    CHECK(result.Outputs[0].RelativePath == TEXT("runtime.bin"));
+    CHECK(result.Outputs[0].Size == 3);
+    const byte expectedOutput[] = { 1, 2, 3 };
+    CHECK(result.Outputs[0].Hash == ContentHash::Compute(expectedOutput, ARRAY_COUNT(expectedOutput)));
+    Array<byte> outputBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(result.Outputs[0].StagingPath, outputBytes));
+    REQUIRE(outputBytes.Count() == ARRAY_COUNT(expectedOutput));
+    CHECK(Platform::MemoryCompare(outputBytes.Get(), expectedOutput, ARRAY_COUNT(expectedOutput)) == 0);
+}
+
+TEST_CASE("AssetImportContext enforces output quota while streaming")
+{
+    const String outputStaging = Globals::TemporaryFolder / (TEXT("AssetImportContextQuota-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(outputStaging));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(outputStaging, true); };
+    AssetImportContext context(AssetGuid(Guid::New()), TEXT("Content/model.foo"), ArtifactTarget(), "{}",
+        AssetImportReadCallback(), outputStaging, 2, 1);
+    AssetPipelineDiagnostic diagnostic;
+    const int32 output = context.CreateOutput(TEXT("runtime"), "runtime", ".bin");
+    REQUIRE(output >= 0);
+    const byte tooLarge[] = { 1, 2, 3 };
+    CHECK(context.WriteOutput(output, Span<byte>(tooLarge, ARRAY_COUNT(tooLarge)), diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ResourceLimitExceeded);
+    CHECK(FileSystem::GetFileSize(outputStaging / TEXT("runtime.bin")) == 0);
 }
 
 TEST_CASE("Process-safe native callback importers require an external worker")
@@ -218,6 +246,16 @@ TEST_CASE("Asset import worker protocol rejects mismatched capabilities and esca
     output.Hash = ContentHash::Compute("output", 6);
     output.Size = 6;
     result.Outputs.Add(output);
+    CHECK(AssetImportWorkerProtocol::ValidateResult(request, result, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
+
+    result.Outputs.Clear();
+    output.RelativePath = TEXT("runtime.bin");
+    const String outputPath = staging / output.RelativePath;
+    REQUIRE_FALSE(File::WriteAllBytes(outputPath, "output", 6));
+    result.Outputs.Add(output);
+    CHECK_FALSE(AssetImportWorkerProtocol::ValidateResult(request, result, diagnostic));
+    result.Outputs[0].Hash = ContentHash::Compute("changed", 7);
     CHECK(AssetImportWorkerProtocol::ValidateResult(request, result, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
 }

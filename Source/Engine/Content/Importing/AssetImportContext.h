@@ -6,7 +6,10 @@
 #include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineDiagnostics.h"
 #include "Engine/Core/Delegate.h"
+#include "Engine/Core/NonCopyable.h"
 #include "Engine/Core/Types/Span.h"
+
+class FileBase;
 
 enum class AssetImportDependencyKind : byte
 {
@@ -48,7 +51,10 @@ struct FLAXENGINE_API AssetImportOutputDeclaration
     StringAnsi Kind;
     StringAnsi Extension;
     ArtifactTargetDimension TargetDimensions = ArtifactTargetDimension::All;
-    Array<byte> Data;
+    String RelativePath;
+    String StagingPath;
+    uint64 Size = 0;
+    ContentHash Hash;
     bool Completed = false;
 };
 
@@ -64,7 +70,7 @@ struct FLAXENGINE_API AssetImportContextResult
 using AssetImportReadCallback = Function<bool(const StringView&, Array<byte>&, ContentHash&, AssetPipelineDiagnostic&)>;
 
 /// <summary>Importer-facing declaration and controlled input-read surface.</summary>
-class FLAXENGINE_API AssetImportContext
+class FLAXENGINE_API AssetImportContext : public NonCopyable
 {
     AssetGuid _asset;
     String _sourcePath;
@@ -72,11 +78,23 @@ class FLAXENGINE_API AssetImportContext
     StringAnsi _settings;
     AssetImportReadCallback _read;
     AssetImportContextResult _result;
+    struct OutputStreamState
+    {
+        FileBase* Writer = nullptr;
+        ContentHasher Hasher;
+    };
+    String _outputStagingPath;
+    Array<OutputStreamState> _outputStreams;
+    uint64 _maximumOutputBytes;
+    int32 _maximumOutputFiles;
+    uint64 _outputBytesWritten = 0;
     bool _completed = false;
 
 public:
     AssetImportContext(const AssetGuid& asset, const StringView& sourcePath, const ArtifactTarget& target,
-                       const StringAnsiView& settings, AssetImportReadCallback read);
+                       const StringAnsiView& settings, AssetImportReadCallback read, const StringView& outputStagingPath,
+                       uint64 maximumOutputBytes, int32 maximumOutputFiles);
+    ~AssetImportContext();
 
     const AssetGuid& GetAsset() const { return _asset; }
     const String& GetSourcePath() const { return _sourcePath; }

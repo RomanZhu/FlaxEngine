@@ -37,6 +37,10 @@ public:
     /// <summary>Writes a relative file below this output's staging directory. Returns true on failure.</summary>
     bool WriteFile(const StringView& relativePath, const void* data, int32 length, AssetPipelineDiagnostic& diagnostic);
 
+    /// <summary>Streams an engine-validated temporary file into this output without buffering the complete file. Returns true on failure.</summary>
+    bool WriteFileFromPath(const StringView& relativePath, const StringView& sourcePath, uint64 expectedSize,
+        const ContentHash& expectedHash, AssetPipelineDiagnostic& diagnostic);
+
     void Close()
     {
         _context = nullptr;

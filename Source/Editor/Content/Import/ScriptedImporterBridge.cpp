@@ -7,7 +7,6 @@
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Engine/Globals.h"
-#include "Engine/Platform/File.h"
 #include "Engine/Platform/Platform.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Scripting/Internal/InternalCalls.h"
@@ -100,8 +99,15 @@ namespace
 
     bool IsSafeOutputName(const StringView& name, const StringAnsiView& extension)
     {
-        if (!SubAssetPolicy::IsKeyValid(name) || extension.IsEmpty() || extension.Length() > 32 || extension[0] != '.')
+        if (name.IsEmpty() || name.Length() > 128 || extension.Length() < 2 || extension.Length() > 32 || extension[0] != '.')
             return false;
+        for (int32 i = 0; i < name.Length(); i++)
+        {
+            const Char c = name[i];
+            if (!((c >= TEXT('a') && c <= TEXT('z')) || (c >= TEXT('A') && c <= TEXT('Z')) ||
+                (c >= TEXT('0') && c <= TEXT('9')) || c == TEXT('-') || c == TEXT('_')))
+                return false;
+        }
         for (int32 i = 1; i < extension.Length(); i++)
         {
             const char c = extension[i];
@@ -167,7 +173,8 @@ namespace
                 TEXT("Scripted importer attempted to read a file outside its authorized input snapshots."));
         };
 
-        AssetImportContext context(request.Asset, request.SourcePath, request.Target, meta.Processor.SettingsJson, MoveTemp(read));
+        AssetImportContext context(request.Asset, request.SourcePath, request.Target, meta.Processor.SettingsJson,
+            MoveTemp(read), request.OutputStagingPath, request.Limits.MaximumOutputBytes, request.Limits.MaximumOutputFiles);
         CurrentWorkerRequest = &request;
         const bool importFailed = descriptor.Import(context, diagnostic);
         CurrentWorkerRequest = nullptr;
@@ -189,22 +196,21 @@ namespace
         result.Dependencies = MoveTemp(contextResult.Dependencies);
         for (const AssetImportOutputDeclaration& output : contextResult.Outputs)
         {
-            if (!IsSafeOutputName(output.Name, output.Extension) || output.Data.IsEmpty())
+            const String expectedRelativePath = output.Name + String(output.Extension);
+            const String expectedStagingPath = request.OutputStagingPath / expectedRelativePath;
+            if (!IsSafeOutputName(output.Name, output.Extension) || output.Size == 0 || output.Hash.IsZero() ||
+                output.RelativePath != expectedRelativePath ||
+                !FileSystem::AreFilePathsEqual(output.StagingPath, expectedStagingPath) ||
+                !FileSystem::FileExists(output.StagingPath) || FileSystem::GetFileSize(output.StagingPath) != output.Size)
                 return WorkerFailure(diagnostic, request, AssetPipelineDiagnosticCode::ArtifactInvalid,
                     TEXT("Scripted importer produced an invalid or empty output declaration."));
             AssetImportWorkerOutput workerOutput;
             workerOutput.Name = output.Name;
             workerOutput.Kind = output.Kind;
-            workerOutput.RelativePath = output.Name + String(output.Extension);
-            workerOutput.Size = output.Data.Count();
-            workerOutput.Hash = ContentHash::Compute(output.Data.Get(), output.Data.Count());
+            workerOutput.RelativePath = output.RelativePath;
+            workerOutput.Size = output.Size;
+            workerOutput.Hash = output.Hash;
             workerOutput.TargetDimensions = output.TargetDimensions;
-            const String outputPath = request.OutputStagingPath / workerOutput.RelativePath;
-            const String outputDirectory = StringUtils::GetDirectoryName(outputPath);
-            if ((!FileSystem::DirectoryExists(outputDirectory) && FileSystem::CreateDirectory(outputDirectory)) ||
-                File::WriteAllBytes(outputPath, output.Data.Get(), output.Data.Count()))
-                return WorkerFailure(diagnostic, request, AssetPipelineDiagnosticCode::BuildFailed,
-                    TEXT("Scripted importer worker could not write a declared output."));
             result.Outputs.Add(MoveTemp(workerOutput));
         }
         diagnostic = AssetPipelineDiagnostic();

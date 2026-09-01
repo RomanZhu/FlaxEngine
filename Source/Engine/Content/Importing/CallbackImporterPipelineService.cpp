@@ -406,14 +406,10 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
             return true;
         for (const AssetImportWorkerOutput& output : workerResult.Outputs)
         {
-            Array<byte> bytes;
             const String workerPath = execution->Request.OutputStagingPath / output.RelativePath;
-            if (File::ReadAllBytes(workerPath, bytes))
-                return Fail(publicationDiagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, AssetPipelineDiagnosticStage::Publication,
-                    current.ID, current.ProcessorID, workerPath, TEXT("Validated worker output disappeared before parent publication."));
             ArtifactWriter writer;
             if (execution->Context->OpenOutput(output.Kind, writer, publicationDiagnostic) ||
-                writer.WriteFile(output.RelativePath, bytes.Get(), bytes.Count(), publicationDiagnostic))
+                writer.WriteFileFromPath(output.RelativePath, workerPath, output.Size, output.Hash, publicationDiagnostic))
                 return true;
         }
         ArtifactOutputValidator validator = [](const StringView& path, const ArtifactManifestOutput& output,

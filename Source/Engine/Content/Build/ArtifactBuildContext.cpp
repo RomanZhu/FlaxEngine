@@ -32,6 +32,20 @@ bool ArtifactWriter::WriteFile(const StringView& relativePath, const void* data,
     return _context->WriteOutputFile(_outputKind, relativePath, data, length, diagnostic);
 }
 
+bool ArtifactWriter::WriteFileFromPath(const StringView& relativePath, const StringView& sourcePath,
+    uint64 expectedSize, const ContentHash& expectedHash, AssetPipelineDiagnostic& diagnostic)
+{
+    if (!_context)
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+        diagnostic.Message = TEXT("Artifact writer is closed.");
+        return true;
+    }
+    return _context->WriteOutputFileFromPath(_outputKind, relativePath, sourcePath, expectedSize, expectedHash, diagnostic);
+}
+
 ArtifactBuildContext::ArtifactBuildContext(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
     const Guid& jobId, const PreparedAsset& prepared, const Array<ArtifactBuildInput>& inputs,
     const AssetCancellationToken& cancellation, uint64 maximumInputBytes, uint64 maximumOutputBytes, int32 maximumOutputFiles,
@@ -341,6 +355,145 @@ bool ArtifactBuildContext::WriteOutputFile(const StringAnsiView& outputKind, con
     file.Hash = ContentHash::Compute(data, length);
     _files.Add(MoveTemp(file));
     _outputBytesWritten += length;
+    return false;
+}
+
+bool ArtifactBuildContext::WriteOutputFileFromPath(const StringAnsiView& outputKind, const StringView& relativePath,
+    const StringView& sourcePath, uint64 expectedSize, const ContentHash& expectedHash,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    if (CheckActive(diagnostic))
+        return true;
+    String normalized(relativePath);
+    normalized.Replace(TEXT('\\'), TEXT('/'));
+    const PackageEntryPath packagePath(normalized);
+    if (expectedSize == 0 || expectedHash.IsZero() || normalized.Contains(TEXT(":")) ||
+        !AssetPathPolicy::IsPackageEntryPathValid(packagePath))
+    {
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::LibraryPathInvalid, _prepared, relativePath,
+            TEXT("Artifact file-backed output path or expected content is invalid."));
+        diagnostic.OutputKind = String(outputKind);
+        return true;
+    }
+    if (_files.Count() >= _maximumOutputFiles || expectedSize > _maximumOutputBytes ||
+        _outputBytesWritten > _maximumOutputBytes - expectedSize)
+    {
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::ResourceLimitExceeded, _prepared, relativePath,
+            TEXT("Artifact build exceeded its output file or byte limit."));
+        diagnostic.OutputKind = String(outputKind);
+        return true;
+    }
+    int32 outputIndex = -1;
+    for (int32 i = 0; i < _prepared.Outputs.Count(); i++)
+    {
+        if (_prepared.Outputs[i].Kind == outputKind)
+        {
+            outputIndex = i;
+            break;
+        }
+    }
+    if (outputIndex < 0)
+    {
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, _prepared, relativePath,
+            TEXT("Artifact output writer no longer matches a declared output."));
+        return true;
+    }
+
+    String normalizedSource(sourcePath);
+    StringUtils::PathRemoveRelativeParts(normalizedSource);
+    FileSystem::NormalizePath(normalizedSource);
+    String temporaryRoot = ArtifactStore::GetTemporaryPath(_libraryRoot);
+    StringUtils::PathRemoveRelativeParts(temporaryRoot);
+    FileSystem::NormalizePath(temporaryRoot);
+    if (!AssetPathPolicy::IsSameOrChild(normalizedSource, temporaryRoot) ||
+        FileSystem::AreFilePathsEqual(normalizedSource, temporaryRoot) ||
+        !FileSystem::FileExists(normalizedSource) || FileSystem::GetFileSize(normalizedSource) != expectedSize)
+    {
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, _prepared, normalizedSource,
+            TEXT("Artifact file-backed output source is outside engine temporary storage or changed size."));
+        return true;
+    }
+    const String outputRoot = _stagingPath / TEXT("Outputs") / String::Format(TEXT("{0}"), outputIndex);
+    const String absolutePath = outputRoot / normalized;
+    if (!AssetPathPolicy::IsSameOrChild(absolutePath, _stagingPath))
+    {
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::LibraryPathInvalid, _prepared, absolutePath,
+            TEXT("Artifact output escaped job staging."));
+        return true;
+    }
+    for (const StagedArtifactFile& file : _files)
+    {
+        if (file.AbsolutePath.Compare(absolutePath, StringSearchCase::IgnoreCase) == 0)
+        {
+            SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, _prepared, absolutePath,
+                TEXT("Artifact output file was written more than once."));
+            return true;
+        }
+    }
+    const String directory = StringUtils::GetDirectoryName(absolutePath);
+    if (!FileSystem::DirectoryExists(directory) && FileSystem::CreateDirectory(directory))
+    {
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, _prepared, absolutePath,
+            TEXT("Cannot create artifact staging output directory."));
+        return true;
+    }
+    File* source = File::Open(normalizedSource, FileMode::OpenExisting, FileAccess::Read, FileShare::Read);
+    File* destination = File::Open(absolutePath, FileMode::CreateNew, FileAccess::Write, FileShare::Read);
+    if (!source || !destination)
+    {
+        if (source)
+            Delete(source);
+        if (destination)
+            Delete(destination);
+        FileSystem::DeleteFile(absolutePath);
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, _prepared, absolutePath,
+            TEXT("Cannot open a file-backed artifact staging output."));
+        return true;
+    }
+    Array<byte> buffer;
+    buffer.Resize(256 * 1024, false);
+    ContentHasher hasher;
+    uint64 copied = 0;
+    bool failed = false;
+    for (;;)
+    {
+        uint32 read = 0;
+        if (source->Read(buffer.Get(), buffer.Count(), &read) || copied > expectedSize || read > expectedSize - copied)
+        {
+            failed = true;
+            break;
+        }
+        if (read == 0)
+            break;
+        uint32 written = 0;
+        if (destination->Write(buffer.Get(), read, &written) || written != read)
+        {
+            failed = true;
+            break;
+        }
+        hasher.Update(buffer.Get(), read);
+        copied += read;
+    }
+    Delete(source);
+    Delete(destination);
+    const ContentHash actualHash = hasher.Finalize();
+    if (failed || copied != expectedSize || actualHash != expectedHash ||
+        FileSystem::GetFileSize(normalizedSource) != expectedSize || FileSystem::GetFileSize(absolutePath) != expectedSize)
+    {
+        FileSystem::DeleteFile(absolutePath);
+        SetBuildFailure(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, _prepared, normalizedSource,
+            TEXT("File-backed artifact output changed while it was streamed into staging."));
+        return true;
+    }
+    StagedArtifactFile file;
+    file.OutputKind = outputKind.ToStringAnsi();
+    file.RelativePath = normalized;
+    file.AbsolutePath = absolutePath;
+    file.Size = expectedSize;
+    file.Hash = actualHash;
+    _files.Add(MoveTemp(file));
+    _outputBytesWritten += expectedSize;
+    diagnostic = AssetPipelineDiagnostic();
     return false;
 }
 
