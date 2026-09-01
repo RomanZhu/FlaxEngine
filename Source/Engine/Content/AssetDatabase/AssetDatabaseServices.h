@@ -236,6 +236,7 @@ public:
     API_FUNCTION() static bool Refresh(ImportAssetOptions options = ImportAssetOptions::Default);
     API_FUNCTION() static bool BuildAsset(const Guid& assetID, bool force = false, bool synchronous = false);
     API_FUNCTION() static bool BuildAssetForeground(const Guid& assetID);
+    API_FUNCTION() static bool CancelBuild(const Guid& assetID);
     API_FUNCTION() static bool RebuildAsset(const Guid& assetID, bool synchronous = false);
     API_FUNCTION() static bool IsArtifactCurrent(const Guid& assetID);
     API_FUNCTION() static String GetBuildStatus(const Guid& assetID);

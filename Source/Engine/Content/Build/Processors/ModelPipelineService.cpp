@@ -538,6 +538,29 @@ AssetBuildJobStatus ModelPipelineService::GetStatus(const Guid& assetID, AssetPi
     return aggregate;
 }
 
+bool ModelPipelineService::Cancel(const Guid& assetID)
+{
+    Array<AssetBuildRequestHandle> handles;
+    {
+        ModelPipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        const Array<AssetBuildRequestHandle>* family = state.FamilyHandles.TryGet(assetID);
+        if (family)
+            handles = *family;
+        else if (const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID))
+            handles.Add(*value);
+    }
+    if (handles.IsEmpty())
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    AssetBuildService* builds = TexturePipelineService::GetBuildService(diagnostic);
+    if (!builds)
+        return true;
+    for (const AssetBuildRequestHandle& handle : handles)
+        builds->CancelRequester(handle);
+    return false;
+}
+
 bool ModelPipelineService::ReconcileMetadata(const Guid& rootAssetID, Array<SubAssetReconcileChange>& changes,
     AssetPipelineDiagnostic& diagnostic)
 {

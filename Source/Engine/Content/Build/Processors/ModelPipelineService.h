@@ -18,6 +18,7 @@ public:
                              const Guid& refreshId = Guid::Empty, uint32 pass = 0,
                              AssetBuildJobPriority priority = AssetBuildJobPriority::Normal);
     static AssetBuildJobStatus GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic);
+    static bool Cancel(const Guid& assetID);
     static bool CreatePlan(const AssetRecord& record, const ArtifactRequest& request, ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Explicitly reconciles stable candidates and atomically updates the tracked root sidecar.</summary>

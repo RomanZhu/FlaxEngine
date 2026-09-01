@@ -521,6 +521,24 @@ AssetBuildJobStatus CallbackImporterPipelineService::GetStatus(const Guid& asset
     return handle.GetStatus();
 }
 
+bool CallbackImporterPipelineService::Cancel(const Guid& assetID)
+{
+    AssetBuildRequestHandle handle;
+    {
+        CallbackImporterPipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
+        if (!value)
+            return true;
+        handle = *value;
+    }
+    AssetImportScheduler* scheduler = AssetImportService::GetScheduler();
+    if (!scheduler)
+        return true;
+    scheduler->Cancel(handle);
+    return false;
+}
+
 void CallbackImporterPipelineService::Shutdown()
 {
     CallbackImporterPipelineState& state = State();

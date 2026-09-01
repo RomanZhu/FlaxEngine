@@ -17,6 +17,7 @@ public:
                              AssetBuildJobPriority priority = AssetBuildJobPriority::Normal);
     static bool RequestBuildAndWait(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic);
     static AssetBuildJobStatus GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic);
+    static bool Cancel(const Guid& assetID);
     static void Shutdown();
 };
 

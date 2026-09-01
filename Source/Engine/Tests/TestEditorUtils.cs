@@ -2070,6 +2070,151 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestConcurrentImportThroughEditorFacingApis()
+        {
+            var root = Path.Combine(Globals.ProjectContentFolder, "__ConcurrentImportUi_" + Guid.NewGuid().ToString("N"));
+            var paths = Enumerable.Range(0, 3).Select(i => Path.Combine(root, "Texture" + i + ".png"))
+                .Concat(Enumerable.Range(0, 3).Select(i => Path.Combine(root, "Model" + i + ".glb"))).ToArray();
+            var ids = new List<Guid>();
+            var consoleDiagnostics = new List<string>();
+            var stage = "setup";
+            var total = System.Diagnostics.Stopwatch.StartNew();
+            LogMessageDelegate capture = (level, message, stackTrace, threadId) =>
+            {
+                if (level == LogType.Warning || level == LogType.Error || level == LogType.Fatal)
+                    lock (consoleDiagnostics)
+                        consoleDiagnostics.Add("[" + stage + "] " + level + ": " + message);
+            };
+            Debug.LogMessageReceived += capture;
+            try
+            {
+                Directory.CreateDirectory(root);
+                var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+                var triangle = Convert.FromBase64String("AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAA=");
+                var gltf = "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":44}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36,\"target\":34962},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6,\"target\":34963}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1,1,0],\"min\":[0,0,0]},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}";
+                var json = System.Text.Encoding.UTF8.GetBytes(gltf);
+                var paddedJsonLength = (json.Length + 3) & ~3;
+                byte[] glb;
+                using (var stream = new MemoryStream())
+                using (var writer = new BinaryWriter(stream))
+                {
+                    writer.Write(0x46546c67u);
+                    writer.Write(2u);
+                    writer.Write((uint)(12 + 8 + paddedJsonLength + 8 + triangle.Length));
+                    writer.Write((uint)paddedJsonLength);
+                    writer.Write(0x4e4f534au);
+                    writer.Write(json);
+                    for (var i = json.Length; i < paddedJsonLength; i++)
+                        writer.Write((byte)' ');
+                    writer.Write((uint)triangle.Length);
+                    writer.Write(0x004e4942u);
+                    writer.Write(triangle);
+                    glb = stream.ToArray();
+                }
+
+                stage = "metadata";
+                for (var i = 0; i < paths.Length; i++)
+                {
+                    File.WriteAllBytes(paths[i], i < 3 ? png : glb);
+                    var id = i < 3
+                        ? TextureImporterService.CreateMetadata(paths[i], FlaxEngine.Tools.TextureTool.Options.Default)
+                        : ModelImporterService.CreateDefaultMetadata(paths[i]);
+                    Assert.AreNotEqual(Guid.Empty, id);
+                    ids.Add(id);
+                }
+                Assert.IsFalse(AssetPipelineService.RefreshSources(paths));
+
+                stage = "overlapping builds";
+                foreach (var id in ids)
+                    Assert.IsFalse(AssetPipelineService.BuildAsset(id));
+                Assert.IsFalse(AssetPipelineService.CancelBuild(ids[ids.Count - 1]));
+                var statusLatency = System.Diagnostics.Stopwatch.StartNew();
+                var initialStatuses = ids.Select(AssetPipelineService.GetBuildStatus).ToArray();
+                Assert.Less(statusLatency.ElapsedMilliseconds, 1000, "Human-facing build status queries stalled Editor interaction.");
+                var peakActive = initialStatuses.Count(status => status == "Queued" || status == "Building" || status == "Publishing");
+                while (true)
+                {
+                    var active = ids.Count(id =>
+                    {
+                        var status = AssetPipelineService.GetBuildStatus(id);
+                        return status == "Queued" || status == "Building" || status == "Publishing";
+                    });
+                    peakActive = Math.Max(peakActive, active);
+                    if (active == 0)
+                        break;
+                    Assert.Less(total.ElapsedMilliseconds, 5 * 60 * 1000, "Concurrent importer cohort exceeded the hard abort ceiling.");
+                    Thread.Sleep(2);
+                }
+                Assert.GreaterOrEqual(peakActive, 2, "The reduced cohort never exposed overlapping human-facing job states.");
+                Assert.AreEqual("Cancelled", AssetPipelineService.GetBuildStatus(ids[ids.Count - 1]));
+                foreach (var id in ids.Take(ids.Count - 1))
+                    Assert.AreEqual("ReadyExact", AssetPipelineService.GetBuildStatus(id), AssetPipelineService.GetBuildDiagnostic(id).Message);
+
+                stage = "selection";
+                var selectionLatency = System.Diagnostics.Stopwatch.StartNew();
+                var records = AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { PathPrefix = root, MainAssetsOnly = true });
+                Assert.AreEqual(paths.Length, records.Length);
+                var item = FlaxEditor.Editor.Instance.ContentDatabase.FindAsset(ids[0]);
+                Assert.NotNull(item);
+                var contentWindow = FlaxEditor.Editor.Instance.Windows.ContentWin;
+                contentWindow.Select(item, true);
+                Assert.AreEqual(ids[0], contentWindow.Selection.Single().ID);
+                contentWindow.ClearSelection(false);
+                Assert.Less(selectionLatency.ElapsedMilliseconds, 1000, "Project selection stalled while import results were presented.");
+
+                stage = "cached restart";
+                AssetPipelineService.DrainArtifactPublications();
+                Assert.IsFalse(AssetPipelineService.Shutdown());
+                Assert.IsFalse(AssetPipelineService.Initialize());
+                Assert.IsFalse(AssetPipelineService.LoadOrScan());
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(ids[0]));
+                Assert.IsFalse(AssetPipelineService.BuildAsset(ids[0]));
+                Assert.IsEmpty(AssetPipelineService.DrainArtifactPublications(), "Cached restart unexpectedly imported again.");
+
+                stage = "external remove and re-add";
+                var retainedSource = File.ReadAllBytes(paths[0]);
+                var retainedMeta = File.ReadAllBytes(paths[0] + ".meta");
+                File.Delete(paths[0]);
+                File.Delete(paths[0] + ".meta");
+                var removal = System.Diagnostics.Stopwatch.StartNew();
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { paths[0] }));
+                Assert.Less(removal.ElapsedMilliseconds, 1000);
+                Assert.IsFalse(AssetDatabaseQueryService.TryGetMainRecordAtPath(paths[0], out _));
+                File.WriteAllBytes(paths[0], retainedSource);
+                File.WriteAllBytes(paths[0] + ".meta", retainedMeta);
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { paths[0] }));
+                Assert.AreEqual(ids[0], AssetDatabaseQueryService.AssetPathToGUID(paths[0]));
+                AssetPipelineService.DrainArtifactPublications();
+                Assert.IsFalse(AssetPipelineService.BuildAsset(ids[0]));
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(ids[0]));
+                Assert.IsEmpty(AssetPipelineService.DrainArtifactPublications(), "Cached re-add unexpectedly imported again.");
+
+                var diagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
+                    x.Severity != AssetPipelineDiagnosticSeverity.Info &&
+                    (ids.Contains(x.AssetGuid) || paths.Contains(x.SourcePath, StringComparer.OrdinalIgnoreCase))).ToArray();
+                Assert.IsEmpty(diagnostics, string.Join(Environment.NewLine, diagnostics.Select(x => x.Code + ": " + x.Message)));
+                lock (consoleDiagnostics)
+                    Assert.IsEmpty(consoleDiagnostics, string.Join(Environment.NewLine, consoleDiagnostics));
+                Assert.Less(total.ElapsedMilliseconds, 5 * 60 * 1000);
+            }
+            finally
+            {
+                Debug.LogMessageReceived -= capture;
+                foreach (var path in paths)
+                    CleanupCanonicalCopyAsset(path);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
+            }
+        }
+
+        public static int RunConcurrentImportThroughEditorFacingApis()
+        {
+            new TestEditorUtils().TestConcurrentImportThroughEditorFacingApis();
+            return 0;
+        }
+
+        [Test]
         public void TestModelItemRejectsUnavailableExactArtifact()
         {
             var id = Guid.NewGuid();

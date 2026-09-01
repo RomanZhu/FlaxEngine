@@ -3245,6 +3245,26 @@ bool AssetPipelineService::BuildAssetForeground(const Guid& assetID)
 #endif
 }
 
+bool AssetPipelineService::CancelBuild(const Guid& assetID)
+{
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(assetID, record) || !record.IsMainAsset())
+        return true;
+#if COMPILE_WITH_TEXTURE_TOOL
+    if (record.ProcessorID == TEXT("Flax.Texture"))
+        return TexturePipelineService::Cancel(assetID);
+#endif
+#if COMPILE_WITH_MODEL_TOOL
+    if (record.ProcessorID == TEXT("Flax.Model"))
+        return ModelPipelineService::Cancel(assetID);
+#endif
+    if (CallbackImporterPipelineService::OwnsProcessor(record.ProcessorID))
+        return CallbackImporterPipelineService::Cancel(assetID);
+#endif
+    return true;
+}
+
 bool AssetPipelineService::RebuildAsset(const Guid& assetID, bool synchronous)
 {
     return BuildAsset(assetID, true, synchronous);

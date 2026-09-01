@@ -530,6 +530,23 @@ AssetBuildJobStatus TexturePipelineService::GetStatus(const Guid& assetID, Asset
     return handle.GetStatus();
 }
 
+bool TexturePipelineService::Cancel(const Guid& assetID)
+{
+    AssetBuildRequestHandle handle;
+    AssetBuildService* builds = nullptr;
+    {
+        TexturePipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        const AssetBuildRequestHandle* value = state.Handles.TryGet(assetID);
+        if (!value || !state.Builds)
+            return true;
+        handle = *value;
+        builds = state.Builds.get();
+    }
+    builds->CancelRequester(handle);
+    return false;
+}
+
 void TexturePipelineService::Shutdown()
 {
     ArtifactResolver::Get().Reset();
