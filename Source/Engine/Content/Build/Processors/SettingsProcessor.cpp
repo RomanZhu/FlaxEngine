@@ -42,7 +42,8 @@ namespace
         const auto versionMember = json.FindMember("settingsVersion");
         const auto typeMember = json.FindMember("type");
         const auto dataMember = json.FindMember("data");
-        if (versionMember == json.MemberEnd() || !versionMember->value.IsUint() || versionMember->value.GetUint() != 1 ||
+        if (json.HasMember("documentVersion") || json.HasMember("sceneVersion") || json.HasMember("prefabVersion") ||
+            versionMember == json.MemberEnd() || !versionMember->value.IsUint() || versionMember->value.GetUint() != 1 ||
             typeMember == json.MemberEnd() || !typeMember->value.IsString() || typeMember->value.GetStringLength() == 0 ||
             dataMember == json.MemberEnd() || !dataMember->value.IsObject())
             return nullptr;
@@ -178,7 +179,7 @@ bool SettingsProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pre
     const JsonValue* data = json.HasParseError() ? nullptr : ValidateSourceDocument(json, dataType);
     if (!data)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
-            record.ID, record.SourcePath.Get(), TEXT("Settings source must contain settingsVersion, type, and object data fields."));
+            record.ID, record.SourcePath.Get(), TEXT("Unsupported settings source format. Run the separate offline migrator from the old branch before building this asset."));
 
     HashSet<AssetObjectId> references;
     if (CollectReferences(*data, references))

@@ -490,9 +490,20 @@ TEST_CASE("Default canonical metadata preserves typed authored document families
     for (int32 i = 0; i < ARRAY_COUNT(cases); i++)
     {
         const String source = root / (String::Format(TEXT("Asset{0}."), i) + cases[i].Extension);
-        String sourceText = TEXT("{\"type\":\"");
+        String sourceText = TEXT("{\"documentVersion\":1,\"type\":\"");
         sourceText += cases[i].TypeName;
-        sourceText += TEXT("\"}\n");
+        if (StringView(cases[i].ProcessorID) == TEXT("Flax.GraphDocument"))
+            sourceText += TEXT("\",\"graphVersion\":1,\"properties\":{},\"parameters\":{},\"graph\":{\"nodes\":{},\"connections\":[],\"editor\":{}}}\n");
+        else if (StringView(cases[i].Extension) == TEXT("materialinstance"))
+            sourceText += TEXT("\",\"baseMaterial\":{\"$type\":\"AssetReference\",\"guid\":\"00000000000000000000000000000000\"},\"overrides\":{}}\n");
+        else if (StringView(cases[i].Extension) == TEXT("skeletonmask"))
+            sourceText += TEXT("\",\"skeleton\":\"00000000000000000000000000000000\",\"maskedNodes\":[]}\n");
+        else if (StringView(cases[i].Extension) == TEXT("sceneanimation"))
+            sourceText += TEXT("\",\"framesPerSecond\":60.0,\"durationFrames\":0,\"tracks\":[]}\n");
+        else if (StringView(cases[i].Extension) == TEXT("particlesystem"))
+            sourceText += TEXT("\",\"framesPerSecond\":60.0,\"durationFrames\":0,\"tracks\":[],\"parameterOverrides\":[]}\n");
+        else
+            sourceText += TEXT("\",\"collisionType\":\"None\",\"sourceModel\":null,\"modelLodIndex\":0,\"materialSlotsMask\":4294967295,\"convexFlags\":[],\"convexVertexLimit\":255}\n");
         REQUIRE_FALSE(File::WriteAllText(source, sourceText, Encoding::ANSI));
         sources.Add(source);
         stagingPaths.Add(source + TEXT(".staged-meta"));
@@ -514,7 +525,7 @@ TEST_CASE("Default canonical metadata preserves typed authored document families
     }
 
     const String mismatch = root / TEXT("Mismatch.particlesystem");
-    REQUIRE_FALSE(File::WriteAllText(mismatch, TEXT("{\"type\":\"FlaxEngine.ParticleEmitter\"}\n"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(mismatch, TEXT("{\"documentVersion\":1,\"type\":\"FlaxEngine.ParticleEmitter\"}\n"), Encoding::ANSI));
     sources.Clear();
     stagingPaths.Clear();
     sources.Add(mismatch);
@@ -526,6 +537,37 @@ TEST_CASE("Default canonical metadata preserves typed authored document families
     const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
     REQUIRE(diagnostics.HasItems());
     CHECK(diagnostics[0].Code == AssetPipelineDiagnosticCode::InvalidMeta);
+}
+
+TEST_CASE("Default canonical metadata rejects unsupported authored markers before staging")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AuthoredMarkerGate-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    const char* invalid[] =
+    {
+        "{\"type\":\"FlaxEngine.ParticleSystem\"}\n",
+        "{\"documentVersion\":0,\"type\":\"FlaxEngine.ParticleSystem\"}\n",
+        "{\"documentVersion\":2,\"type\":\"FlaxEngine.ParticleSystem\"}\n",
+        "{\"documentVersion\":1,\"sceneVersion\":4,\"type\":\"FlaxEngine.ParticleSystem\"}\n",
+    };
+    for (int32 i = 0; i < ARRAY_COUNT(invalid); i++)
+    {
+        const String source = root / String::Format(TEXT("Invalid{0}.particlesystem"), i);
+        const String staging = source + TEXT(".staged-meta");
+        REQUIRE_FALSE(File::WriteAllText(source, String(invalid[i]), Encoding::ANSI));
+        Array<String> sources;
+        Array<String> stagingPaths;
+        sources.Add(source);
+        stagingPaths.Add(staging);
+        const Array<Guid> ids = AssetOperationService::StageDefaultMetadataBatch(sources, stagingPaths);
+        REQUIRE(ids.Count() == 1);
+        CHECK_FALSE(ids[0].IsValid());
+        CHECK_FALSE(FileSystem::FileExists(staging));
+        const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
+        REQUIRE(diagnostics.HasItems());
+        CHECK(diagnostics[0].Message.Contains(TEXT("offline migrator")));
+    }
 }
 
 TEST_CASE("Canonical refresh narrowly repairs regression-damaged authored metadata")

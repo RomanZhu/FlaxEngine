@@ -38,6 +38,7 @@ TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
         "\"importer\":{\"settings\":{\"z\":1,\"a\":2},\"version\":2,\"id\":\"Flax.Model\",\"pluginProcessor\":\"kept\"},"
         "\"folderAsset\":false,"
         "\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\","
+        "\"userData\":{\"owner\":\"test\"},"
         "\"fileFormatVersion\":2} ";
     AssetMeta meta;
     AssetPipelineDiagnostic diagnostic;
@@ -50,6 +51,7 @@ TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
     CHECK(meta.UnknownFields.ContainsKey("newRoot"));
     CHECK(meta.Processor.UnknownFields.ContainsKey("pluginProcessor"));
     CHECK(meta.SubAssets[TEXT("mesh:/Root/Body")].UnknownFields.ContainsKey("pluginSub"));
+    CHECK(meta.UserDataJson.Contains("\"owner\": \"test\""));
 
     StringAnsi first;
     StringAnsi second;
@@ -174,6 +176,7 @@ TEST_CASE("Asset meta strictly rejects unsupported and non-canonical identity fo
     AssetPipelineDiagnostic diagnostic;
     CHECK(AssetMeta::Load(path, meta, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
+    CHECK(diagnostic.Message.Contains(TEXT("offline migrator")));
     BytesContainer after;
     REQUIRE_FALSE(File::ReadAllBytes(path, after));
     REQUIRE(after.Length() == before.Length());
@@ -181,6 +184,7 @@ TEST_CASE("Asset meta strictly rejects unsupported and non-canonical identity fo
 
     CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36F15F0C-4B35-4AF8-8BA2-F72F6CB82E22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
     CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
+    CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
 }
 
 TEST_CASE("Asset metadata clone regenerates every GUID and preserves reconciliation metadata")

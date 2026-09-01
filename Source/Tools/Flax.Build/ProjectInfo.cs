@@ -204,8 +204,8 @@ namespace Flax.Build
                 new ConfigurationDictionaryConverter(),
             },
             IncludeFields = true,
-            AllowTrailingCommas = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
+            AllowTrailingCommas = false,
+            ReadCommentHandling = JsonCommentHandling.Disallow,
             TypeInfoResolver = ProjectInfoSourceGenerationContext.Default,
         };
 
@@ -446,6 +446,68 @@ namespace Flax.Build
             File.WriteAllText(ProjectPath, contents);
         }
 
+        private static void ValidateCurrentFormat(string contents)
+        {
+            const string guidance = "Unsupported current project format. Run the separate offline migrator from the old branch before building this project.";
+            using var document = JsonDocument.Parse(contents);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException(guidance);
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in root.EnumerateObject())
+            {
+                if (!names.Add(property.Name))
+                    throw new InvalidDataException(guidance);
+            }
+            bool StringField(string name, bool allowEmpty = false) =>
+                root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String &&
+                (allowEmpty || !string.IsNullOrEmpty(value.GetString()));
+            if (!StringField("Name") || !StringField("Version") ||
+                !StringField("Company", true) || !StringField("Copyright", true) || !StringField("GameTarget") ||
+                !StringField("EditorTarget") || !StringField("MinEngineVersion") ||
+                !Version.TryParse(root.GetProperty("Version").GetString(), out _) ||
+                !Version.TryParse(root.GetProperty("MinEngineVersion").GetString(), out _))
+                throw new InvalidDataException(guidance);
+            if (!root.TryGetProperty("AssetSystemVersion", out var assetVersion) || assetVersion.ValueKind != JsonValueKind.Number ||
+                !assetVersion.TryGetInt32(out var version) || version != 2)
+                throw new InvalidDataException(guidance);
+            if (!StringField("ProjectSettingsIndexGuid") ||
+                !Guid.TryParseExact(root.GetProperty("ProjectSettingsIndexGuid").GetString(), "N", out var settingsGuid) ||
+                settingsGuid == Guid.Empty || settingsGuid.ToString("N") != root.GetProperty("ProjectSettingsIndexGuid").GetString())
+                throw new InvalidDataException(guidance);
+            if (!root.TryGetProperty("References", out var references) || references.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException(guidance);
+            foreach (var reference in references.EnumerateArray())
+            {
+                if (reference.ValueKind != JsonValueKind.Object || !reference.TryGetProperty("Name", out var name) ||
+                    name.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(name.GetString()))
+                    throw new InvalidDataException(guidance);
+            }
+            if (root.TryGetProperty("DefaultScene", out var defaultScene))
+            {
+                if (defaultScene.ValueKind != JsonValueKind.Object || !defaultScene.TryGetProperty("guid", out var guid) ||
+                    guid.ValueKind != JsonValueKind.String || !Guid.TryParseExact(guid.GetString(), "N", out var parsedGuid) ||
+                    parsedGuid == Guid.Empty || parsedGuid.ToString("N") != guid.GetString() ||
+                    !defaultScene.TryGetProperty("fileId", out var fileId) || !fileId.TryGetInt64(out var localId) || localId == 0)
+                    throw new InvalidDataException(guidance);
+            }
+            if (root.TryGetProperty("EngineNickname", out var nickname) &&
+                (nickname.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(nickname.GetString())))
+                throw new InvalidDataException(guidance);
+            if (root.TryGetProperty("DefaultSceneSpawn", out var spawn))
+            {
+                bool Vector(JsonElement value) => value.ValueKind == JsonValueKind.Object &&
+                    value.TryGetProperty("X", out var x) && x.ValueKind == JsonValueKind.Number &&
+                    value.TryGetProperty("Y", out var y) && y.ValueKind == JsonValueKind.Number &&
+                    value.TryGetProperty("Z", out var z) && z.ValueKind == JsonValueKind.Number;
+                if (spawn.ValueKind != JsonValueKind.Object || !spawn.TryGetProperty("Position", out var position) ||
+                    !spawn.TryGetProperty("Direction", out var direction) || !Vector(position) || !Vector(direction))
+                    throw new InvalidDataException(guidance);
+            }
+            if (root.TryGetProperty("Configuration", out var configuration) && configuration.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException(guidance);
+        }
+
         /// <summary>
         /// Loads the project from the specified file.
         /// </summary>
@@ -468,6 +530,7 @@ namespace Flax.Build
                 // Load
                 Log.Verbose("Loading project file from \"" + path + "\"...");
                 var contents = File.ReadAllText(path);
+                ValidateCurrentFormat(contents);
                 var project = JsonSerializer.Deserialize<ProjectInfo>(contents.AsSpan(), JsonOptions);
                 project.ProjectPath = path;
                 project.ProjectFolderPath = Path.GetDirectoryName(path);
@@ -475,8 +538,6 @@ namespace Flax.Build
                 // Process project data
                 if (string.IsNullOrEmpty(project.Name))
                     throw new Exception("Missing project name.");
-                if (project.Version == null)
-                    project.Version = new Version(1, 0);
                 if (project.Version.Revision == 0)
                     project.Version = new Version(project.Version.Major, project.Version.Minor, project.Version.Build);
                 if (project.Version.Build == 0 && project.Version.Revision == -1)

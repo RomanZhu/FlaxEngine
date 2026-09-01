@@ -9,6 +9,7 @@
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/JsonTools.h"
+#include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include <ThirdParty/pugixml/pugixml.hpp>
 using namespace pugi;
 
@@ -181,6 +182,94 @@ bool ProjectInfo::LoadProject(const String& projectPath)
         return true;
     }
 
+    const auto unsupported = [&projectPath](const Char* reason)
+    {
+        const String message = String::Format(TEXT("Unsupported current project format: {0} Run the separate offline migrator from the old branch before opening this project."), reason);
+        ShowProjectLoadError(*message, projectPath);
+        return true;
+    };
+    CanonicalJsonError canonicalError;
+    if (!document.IsObject() || CanonicalJsonWriter::Validate(document, canonicalError))
+        return unsupported(TEXT("the manifest is not a unique-key JSON object."));
+    const auto requireString = [&document](const char* name, bool allowEmpty = false)
+    {
+        const auto member = document.FindMember(name);
+        return member != document.MemberEnd() && member->value.IsString() &&
+            (allowEmpty || member->value.GetStringLength() != 0);
+    };
+    if (!requireString("Name") || !requireString("Version") || !requireString("Company", true) ||
+        !requireString("Copyright", true) || !requireString("GameTarget") || !requireString("EditorTarget") ||
+        !requireString("MinEngineVersion"))
+        return unsupported(TEXT("a required current string field is missing or invalid."));
+    const auto assetSystemVersion = document.FindMember("AssetSystemVersion");
+    if (assetSystemVersion == document.MemberEnd() || !assetSystemVersion->value.IsInt() || assetSystemVersion->value.GetInt() != 2)
+        return unsupported(TEXT("AssetSystemVersion must be exactly 2."));
+    const auto settingsGuid = document.FindMember("ProjectSettingsIndexGuid");
+    Guid parsedSettingsGuid;
+    if (settingsGuid == document.MemberEnd() || !settingsGuid->value.IsString() || settingsGuid->value.GetStringLength() != 32 ||
+        Guid::Parse(StringAnsiView(settingsGuid->value.GetString(), settingsGuid->value.GetStringLength()), parsedSettingsGuid) ||
+        !parsedSettingsGuid.IsValid() || StringAnsi(parsedSettingsGuid.ToString(Guid::FormatType::N).ToLower()) !=
+            StringAnsiView(settingsGuid->value.GetString(), settingsGuid->value.GetStringLength()))
+        return unsupported(TEXT("ProjectSettingsIndexGuid must be a lowercase 32-hex GUID."));
+    ::Version parsedVersion;
+    const auto versionText = document.FindMember("Version");
+    const auto minimumText = document.FindMember("MinEngineVersion");
+    if (::Version::Parse(String(StringAnsiView(versionText->value.GetString(), versionText->value.GetStringLength())), &parsedVersion) ||
+        ::Version::Parse(String(StringAnsiView(minimumText->value.GetString(), minimumText->value.GetStringLength())), &parsedVersion))
+        return unsupported(TEXT("Version and MinEngineVersion must be parseable strings."));
+    const auto referencesValue = document.FindMember("References");
+    if (referencesValue == document.MemberEnd() || !referencesValue->value.IsArray())
+        return unsupported(TEXT("References must be an array."));
+    for (const auto& reference : referencesValue->value.GetArray())
+    {
+        if (!reference.IsObject())
+            return unsupported(TEXT("every project reference requires a nonempty Name."));
+        const auto name = reference.FindMember("Name");
+        if (name == reference.MemberEnd() || !name->value.IsString() || name->value.GetStringLength() == 0)
+            return unsupported(TEXT("every project reference requires a nonempty Name."));
+    }
+    const auto defaultSceneValue = document.FindMember("DefaultScene");
+    if (defaultSceneValue != document.MemberEnd())
+    {
+        if (!defaultSceneValue->value.IsObject())
+            return unsupported(TEXT("DefaultScene must use the current composite object form."));
+        const auto guid = defaultSceneValue->value.FindMember("guid");
+        const auto fileId = defaultSceneValue->value.FindMember("fileId");
+        Guid parsedGuid;
+        if (guid == defaultSceneValue->value.MemberEnd() || !guid->value.IsString() || guid->value.GetStringLength() != 32 ||
+            Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), parsedGuid) || !parsedGuid.IsValid() ||
+            StringAnsi(parsedGuid.ToString(Guid::FormatType::N).ToLower()) != StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()) ||
+            fileId == defaultSceneValue->value.MemberEnd() || !fileId->value.IsInt64() || fileId->value.GetInt64() == 0)
+            return unsupported(TEXT("DefaultScene must contain a canonical GUID and nonzero fileId."));
+    }
+    const auto engineNickname = document.FindMember("EngineNickname");
+    if (engineNickname != document.MemberEnd() && (!engineNickname->value.IsString() || engineNickname->value.GetStringLength() == 0))
+        return unsupported(TEXT("EngineNickname must be a nonempty string when present."));
+    const auto defaultSpawn = document.FindMember("DefaultSceneSpawn");
+    if (defaultSpawn != document.MemberEnd())
+    {
+        const auto validVector = [](const rapidjson_flax::Value& value)
+        {
+            if (!value.IsObject())
+                return false;
+            const auto x = value.FindMember("X");
+            const auto y = value.FindMember("Y");
+            const auto z = value.FindMember("Z");
+            return x != value.MemberEnd() && x->value.IsNumber() && y != value.MemberEnd() && y->value.IsNumber() &&
+                z != value.MemberEnd() && z->value.IsNumber();
+        };
+        if (!defaultSpawn->value.IsObject())
+            return unsupported(TEXT("DefaultSceneSpawn must use the current Ray object form."));
+        const auto position = defaultSpawn->value.FindMember("Position");
+        const auto direction = defaultSpawn->value.FindMember("Direction");
+        if (position == defaultSpawn->value.MemberEnd() || direction == defaultSpawn->value.MemberEnd() ||
+            !validVector(position->value) || !validVector(direction->value))
+            return unsupported(TEXT("DefaultSceneSpawn must use the current Ray object form."));
+    }
+    const auto configuration = document.FindMember("Configuration");
+    if (configuration != document.MemberEnd() && !configuration->value.IsObject())
+        return unsupported(TEXT("Configuration must be an object when present."));
+
     // Parse properties
     Name = JsonTools::GetString(document, "Name", String::Empty);
     ProjectPath = projectPath;
@@ -192,14 +281,6 @@ bool ProjectInfo::LoadProject(const String& projectPath)
         if (version.IsString())
         {
             Version::Parse(version.GetText(), &Version);
-        }
-        else if (version.IsObject())
-        {
-            Version = ::Version(
-                JsonTools::GetInt(version, "Major", 0),
-                JsonTools::GetInt(version, "Minor", 0),
-                JsonTools::GetInt(version, "Build", -1),
-                JsonTools::GetInt(version, "Revision", -1));
         }
     }
     if (Version.Revision() == 0)
@@ -261,17 +342,7 @@ bool ProjectInfo::LoadProject(const String& projectPath)
     if (defaultSceneMember != document.MemberEnd())
     {
         const auto& value = defaultSceneMember->value;
-        if (value.IsString())
-        {
-            const Guid legacyGuid = JsonTools::GetGuid(value);
-            if (!legacyGuid.IsValid())
-            {
-                ShowProjectLoadError(TEXT("Invalid legacy DefaultScene GUID."), projectPath);
-                return true;
-            }
-            DefaultScene = AssetObjectId::Main(AssetGuid(legacyGuid));
-        }
-        else if (value.IsObject())
+        if (value.IsObject())
         {
             const Guid guid = JsonTools::GetGuid(value, "guid");
             const auto fileIdMember = value.FindMember("fileId");
@@ -296,13 +367,6 @@ bool ProjectInfo::LoadProject(const String& projectPath)
         if (minEngineVersion.IsString())
         {
             Version::Parse(minEngineVersion.GetText(), &MinEngineVersion);
-        }
-        else if (minEngineVersionMember->value.IsObject())
-        {
-            MinEngineVersion = ::Version(
-                JsonTools::GetInt(minEngineVersion, "Major", 0),
-                JsonTools::GetInt(minEngineVersion, "Minor", 0),
-                JsonTools::GetInt(minEngineVersion, "Build", 0));
         }
     }
 

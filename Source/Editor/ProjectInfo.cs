@@ -284,6 +284,62 @@ namespace FlaxEditor
             File.WriteAllText(ProjectPath, contents);
         }
 
+        private static void ValidateCurrentFormat(string contents)
+        {
+            const string guidance = "Unsupported current project format. Run the separate offline migrator from the old branch before opening this project.";
+            JObject root;
+            using (var reader = new JsonTextReader(new StringReader(contents)))
+            {
+                root = JObject.Load(reader, new JsonLoadSettings
+                {
+                    CommentHandling = CommentHandling.Ignore,
+                    DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error,
+                });
+            }
+            bool StringField(string name, bool allowEmpty = false) =>
+                root[name]?.Type == JTokenType.String && (allowEmpty || !string.IsNullOrEmpty(root.Value<string>(name)));
+            if (!StringField("Name") || !StringField("Version") || !StringField("Company", true) ||
+                !StringField("Copyright", true) || !StringField("GameTarget") || !StringField("EditorTarget") ||
+                !StringField("MinEngineVersion") || !System.Version.TryParse(root.Value<string>("Version"), out _) ||
+                !System.Version.TryParse(root.Value<string>("MinEngineVersion"), out _) ||
+                root["AssetSystemVersion"]?.Type != JTokenType.Integer || root.Value<int>("AssetSystemVersion") != 2)
+                throw new InvalidDataException(guidance);
+            var settingsGuidText = root.Value<string>("ProjectSettingsIndexGuid");
+            if (!StringField("ProjectSettingsIndexGuid") || !Guid.TryParseExact(settingsGuidText, "N", out var settingsGuid) ||
+                settingsGuid == Guid.Empty || settingsGuid.ToString("N") != settingsGuidText)
+                throw new InvalidDataException(guidance);
+            if (!(root["References"] is JArray references))
+                throw new InvalidDataException(guidance);
+            foreach (var reference in references)
+            {
+                if (!(reference is JObject referenceObject) || referenceObject["Name"]?.Type != JTokenType.String ||
+                    string.IsNullOrEmpty(referenceObject.Value<string>("Name")))
+                    throw new InvalidDataException(guidance);
+            }
+            if (root.TryGetValue("DefaultScene", out var defaultScene))
+            {
+                if (!(defaultScene is JObject scene) || scene["guid"]?.Type != JTokenType.String ||
+                    !Guid.TryParseExact(scene.Value<string>("guid"), "N", out var guid) || guid == Guid.Empty ||
+                    guid.ToString("N") != scene.Value<string>("guid") || scene["fileId"]?.Type != JTokenType.Integer ||
+                    scene.Value<long>("fileId") == 0)
+                    throw new InvalidDataException(guidance);
+            }
+            if (root.TryGetValue("EngineNickname", out var nickname) &&
+                (nickname.Type != JTokenType.String || string.IsNullOrEmpty(nickname.Value<string>())))
+                throw new InvalidDataException(guidance);
+            if (root.TryGetValue("DefaultSceneSpawn", out var spawn))
+            {
+                bool Coordinate(JObject vector, string name) =>
+                    vector[name]?.Type == JTokenType.Float || vector[name]?.Type == JTokenType.Integer;
+                if (!(spawn is JObject ray) || !(ray["Position"] is JObject position) || !(ray["Direction"] is JObject direction) ||
+                    !Coordinate(position, "X") || !Coordinate(position, "Y") || !Coordinate(position, "Z") ||
+                    !Coordinate(direction, "X") || !Coordinate(direction, "Y") || !Coordinate(direction, "Z"))
+                    throw new InvalidDataException(guidance);
+            }
+            if (root.TryGetValue("Configuration", out var configuration) && configuration.Type != JTokenType.Object)
+                throw new InvalidDataException(guidance);
+        }
+
         /// <summary>
         /// Loads the project from the specified file.
         /// </summary>
@@ -306,6 +362,7 @@ namespace FlaxEditor
             {
                 // Load
                 var contents = File.ReadAllText(path);
+                ValidateCurrentFormat(contents);
                 var project = JsonConvert.DeserializeObject<ProjectInfo>(contents, new JsonSerializerSettings() { Converters = new[] { new FlaxVersionConverter() } });
                 project.ProjectPath = path;
                 project.ProjectFolderPath = StringUtils.NormalizePath(Path.GetDirectoryName(path));
@@ -313,8 +370,6 @@ namespace FlaxEditor
                 // Process project data
                 if (string.IsNullOrEmpty(project.Name))
                     throw new Exception("Missing project name.");
-                if (project.Version == null)
-                    project.Version = new Version(1, 0);
                 if (project.Version.Revision == 0)
                     project.Version = new Version(project.Version.Major, project.Version.Minor, project.Version.Build);
                 if (project.Version.Build == 0 && project.Version.Revision == -1)

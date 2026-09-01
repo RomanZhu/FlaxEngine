@@ -44,20 +44,24 @@ namespace
             return nullptr;
         const char* versionName;
         const char* payloadName;
+        uint32 expectedVersion;
         if (expectedType == TEXT("FlaxEngine.SceneAsset"))
         {
             versionName = "sceneVersion";
             payloadName = "objects";
+            expectedVersion = 4;
         }
         else if (expectedType == TEXT("FlaxEngine.Prefab"))
         {
             versionName = "prefabVersion";
             payloadName = "objects";
+            expectedVersion = 4;
         }
         else
         {
             versionName = "documentVersion";
             payloadName = "data";
+            expectedVersion = 1;
             const auto typeMember = json.FindMember("type");
             if (typeMember == json.MemberEnd() || !typeMember->value.IsString() ||
                 String(StringAnsiView(typeMember->value.GetString(), typeMember->value.GetStringLength())) != expectedType)
@@ -66,7 +70,13 @@ namespace
         const auto versionMember = json.FindMember(versionName);
         const auto payloadMember = json.FindMember(payloadName);
         const bool isSceneOrPrefab = expectedType == TEXT("FlaxEngine.SceneAsset") || expectedType == TEXT("FlaxEngine.Prefab");
-        if (versionMember == json.MemberEnd() || !versionMember->value.IsUint() || versionMember->value.GetUint() < 1 ||
+        const StringAnsiView selectedVersion(versionName);
+        const bool mixedMarkers = (selectedVersion != "documentVersion" && json.HasMember("documentVersion")) ||
+            (selectedVersion != "settingsVersion" && json.HasMember("settingsVersion")) ||
+            (selectedVersion != "sceneVersion" && json.HasMember("sceneVersion")) ||
+            (selectedVersion != "prefabVersion" && json.HasMember("prefabVersion"));
+        if (mixedMarkers || versionMember == json.MemberEnd() || !versionMember->value.IsUint() ||
+            versionMember->value.GetUint() != expectedVersion ||
             payloadMember == json.MemberEnd() || (isSceneOrPrefab ? !payloadMember->value.IsArray() :
                 (!payloadMember->value.IsObject() && !payloadMember->value.IsArray())))
             return nullptr;

@@ -2220,7 +2220,8 @@ bool GraphDocumentCodec::DecodeGraph(const StringAnsiView& source, GraphDocument
     const auto properties = json.FindMember("properties");
     const auto parameters = json.FindMember("parameters");
     const auto graph = json.FindMember("graph");
-    if (documentVersion == json.MemberEnd() || !documentVersion->value.IsInt() ||
+    if (json.HasMember("settingsVersion") || json.HasMember("sceneVersion") || json.HasMember("prefabVersion") ||
+        documentVersion == json.MemberEnd() || !documentVersion->value.IsInt() ||
         graphVersion == json.MemberEnd() || !graphVersion->value.IsInt() ||
         type == json.MemberEnd() || !type->value.IsString() || type->value.GetStringLength() == 0 ||
         properties == json.MemberEnd() || !properties->value.IsObject() ||
@@ -2234,7 +2235,8 @@ bool GraphDocumentCodec::DecodeGraph(const StringAnsiView& source, GraphDocument
     snapshot.Document.DocumentVersion = snapshot.DocumentVersion;
     snapshot.Document.GraphVersion = snapshot.GraphVersion;
     if (snapshot.DocumentVersion != CurrentDocumentVersion || snapshot.GraphVersion != CurrentGraphVersion)
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, AssetPipelineDiagnosticStage::Migration, TEXT("Graph document requires an explicit tracked migration."));
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, AssetPipelineDiagnosticStage::Migration,
+            TEXT("Unsupported graph document format. Run the separate offline migrator from the old branch before modifying this document."));
     CanonicalJsonError propertiesError;
     if (CanonicalJsonWriter::Write(properties->value, snapshot.Document.PropertiesJson, propertiesError))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph properties are not canonical JSON."));

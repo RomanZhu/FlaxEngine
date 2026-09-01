@@ -128,11 +128,16 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
     const auto importer = document.FindMember("importer");
     const auto objectIds = document.FindMember("objectIds");
     const auto labels = document.FindMember("labels");
-    if (fileFormatVersion == document.MemberEnd() || !fileFormatVersion->value.IsInt() || fileFormatVersion->value.GetInt() != CurrentFileFormatVersion ||
+    const auto userData = document.FindMember("userData");
+    if (fileFormatVersion == document.MemberEnd() || !fileFormatVersion->value.IsInt() || fileFormatVersion->value.GetInt() != CurrentFileFormatVersion)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path,
+            TEXT("Unsupported metadata format. Run the separate offline migrator from the old branch before modifying this asset."));
+    if (
         guid == document.MemberEnd() || !guid->value.IsString() ||
         folderAsset == document.MemberEnd() || !folderAsset->value.IsBool() ||
         importer == document.MemberEnd() || !importer->value.IsObject() ||
-        labels == document.MemberEnd() || !labels->value.IsArray())
+        labels == document.MemberEnd() || !labels->value.IsArray() ||
+        userData == document.MemberEnd() || !userData->value.IsObject())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata is missing a required field or has an invalid field type."));
 
     result.FileFormatVersion = fileFormatVersion->value.GetInt();
@@ -269,12 +274,8 @@ bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetM
         labelSet.Add(value);
         result.Labels.Add(value);
     }
-    const auto userData = document.FindMember("userData");
-    if (userData != document.MemberEnd())
-    {
-        if (!userData->value.IsObject() || CanonicalJsonWriter::Write(userData->value, result.UserDataJson, canonicalError))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata userData must be an object."));
-    }
+    if (CanonicalJsonWriter::Write(userData->value, result.UserDataJson, canonicalError))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Asset metadata userData must be an object."));
     const char* rootKnown[] = { "fileFormatVersion", "guid", "folderAsset", "importer", "objectIds", "labels", "userData" };
     if (CaptureUnknown(document, rootKnown, ARRAY_COUNT(rootKnown), result.UnknownFields, diagnostic, path))
         return true;

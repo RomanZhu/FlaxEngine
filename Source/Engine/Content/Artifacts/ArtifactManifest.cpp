@@ -181,7 +181,9 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
     const auto dependencies = document.FindMember("dependencies");
     const auto outputs = document.FindMember("outputs");
     const auto buildId = document.FindMember("buildId");
-    if (version == document.MemberEnd() || !version->value.IsInt() || objectId == document.MemberEnd() || !objectId->value.IsObject() ||
+    if (version == document.MemberEnd() || !version->value.IsInt() || version->value.GetInt() != CurrentVersion)
+        return Fail(diagnostic, path, TEXT("Unsupported generated artifact manifest format. Rebuild derived Library artifacts with the current engine."));
+    if (objectId == document.MemberEnd() || !objectId->value.IsObject() ||
         databaseRevision == document.MemberEnd() || !databaseRevision->value.IsUint64() || processor == document.MemberEnd() || !processor->value.IsObject() ||
         target == document.MemberEnd() || !target->value.IsObject() || dependencies == document.MemberEnd() || !dependencies->value.IsArray() ||
         outputs == document.MemberEnd() || !outputs->value.IsArray() || buildId == document.MemberEnd() || !buildId->value.IsString())

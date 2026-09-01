@@ -316,6 +316,11 @@ bool AuthoredAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset
     if (json.HasParseError() || !json.IsObject())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("Authored document JSON is malformed."));
+    const auto documentVersion = json.FindMember("documentVersion");
+    if (documentVersion == json.MemberEnd() || !documentVersion->value.IsUint() || documentVersion->value.GetUint() != 1 ||
+        json.HasMember("settingsVersion") || json.HasMember("sceneVersion") || json.HasMember("prefabVersion"))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+            record.ID, record.SourcePath.Get(), TEXT("Unsupported authored document format. Run the separate offline migrator from the old branch before building this asset."));
     StringAnsiView type;
     if (ReadString(json, "type", type) || String(type) != record.TypeName)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,

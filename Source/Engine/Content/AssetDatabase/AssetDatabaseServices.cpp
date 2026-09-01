@@ -460,7 +460,8 @@ namespace
         AssetImporterLease importer;
         if (!registry || registry->TryAcquire(source.ImporterId, importer, diagnostic))
             return true;
-        if (importer.Get().SettingsSchemaVersion > MAX_int32)
+        if (importer.Get().SettingsSchemaVersion > MAX_int32 ||
+            meta.Processor.SettingsVersion != static_cast<int32>(importer.Get().SettingsSchemaVersion))
         {
             diagnostic = AssetPipelineDiagnostic();
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
@@ -468,7 +469,7 @@ namespace
             diagnostic.AssetGuid = sourceID;
             diagnostic.SourcePath = source.Path;
             diagnostic.ProcessorId = source.ImporterId;
-            diagnostic.Message = TEXT("Importer settings schema version exceeds the supported editor range.");
+            diagnostic.Message = TEXT("Unsupported importer settings schema version. Run the separate offline migrator from the old branch before modifying this asset.");
             return true;
         }
         result.SourceAssetID = sourceID;
@@ -1090,17 +1091,20 @@ namespace
         const String extension = FileSystem::GetExtension(sourcePath).ToLower();
         const char* versionName = "documentVersion";
         const char* payloadName = "data";
+        uint32 expectedVersion = 1;
         if (extension == TEXT("scene"))
         {
             dataType = TEXT("FlaxEngine.SceneAsset");
             versionName = "sceneVersion";
             payloadName = "objects";
+            expectedVersion = 4;
         }
         else if (extension == TEXT("prefab"))
         {
             dataType = TEXT("FlaxEngine.Prefab");
             versionName = "prefabVersion";
             payloadName = "objects";
+            expectedVersion = 4;
         }
         else
         {
@@ -1113,14 +1117,20 @@ namespace
         const auto versionMember = json.FindMember(versionName);
         const auto payloadMember = json.FindMember(payloadName);
         const bool isSceneOrPrefab = extension == TEXT("scene") || extension == TEXT("prefab");
-        if (dataType.IsEmpty() || versionMember == json.MemberEnd() || !versionMember->value.IsUint() || versionMember->value.GetUint() < 1 ||
+        const StringAnsiView selectedVersion(versionName);
+        const bool mixedMarkers = (selectedVersion != "documentVersion" && json.HasMember("documentVersion")) ||
+            (selectedVersion != "settingsVersion" && json.HasMember("settingsVersion")) ||
+            (selectedVersion != "sceneVersion" && json.HasMember("sceneVersion")) ||
+            (selectedVersion != "prefabVersion" && json.HasMember("prefabVersion"));
+        if (dataType.IsEmpty() || mixedMarkers || versionMember == json.MemberEnd() || !versionMember->value.IsUint() ||
+            versionMember->value.GetUint() != expectedVersion ||
             payloadMember == json.MemberEnd() || (isSceneOrPrefab ? !payloadMember->value.IsArray() :
                 (!payloadMember->value.IsObject() && !payloadMember->value.IsArray())))
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
             diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
             diagnostic.SourcePath = sourcePath;
-            diagnostic.Message = TEXT("Authored JSON source document does not match its extension schema.");
+            diagnostic.Message = TEXT("Unsupported authored source format. Run the separate offline migrator from the old branch before modifying this document.");
             return true;
         }
         diagnostic = AssetPipelineDiagnostic();
@@ -1151,16 +1161,70 @@ namespace
             return true;
         }
         const auto type = json.FindMember("type");
+        const auto version = json.FindMember("documentVersion");
         const String declaredType = type != json.MemberEnd() && type->value.IsString()
             ? String(StringAnsiView(type->value.GetString(), type->value.GetStringLength()))
             : String::Empty;
-        if (type == json.MemberEnd() || !type->value.IsString() ||
+        if (version == json.MemberEnd() || !version->value.IsUint() || version->value.GetUint() != 1 ||
+            json.HasMember("settingsVersion") || json.HasMember("sceneVersion") || json.HasMember("prefabVersion") ||
+            type == json.MemberEnd() || !type->value.IsString() ||
             StringView(declaredType).Compare(expectedType, StringSearchCase::CaseSensitive) != 0)
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
             diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
             diagnostic.SourcePath = sourcePath;
-            diagnostic.Message = TEXT("Typed authored source type does not match its extension.");
+            diagnostic.Message = TEXT("Unsupported typed authored source format. Run the separate offline migrator from the old branch before modifying this document.");
+            return true;
+        }
+        const String extension = FileSystem::GetExtension(sourcePath).ToLower();
+        String graphType;
+        bool invalidPayload = false;
+        String payloadError;
+        Array<byte> compiled;
+        if (!GraphDocumentCodec::TypeForExtension(extension, graphType))
+        {
+            GraphDocumentCodec codec;
+            GraphDocumentSnapshot snapshot;
+            invalidPayload = codec.DecodeGraph(StringAnsiView(reinterpret_cast<const char*>(bytes.Get()), bytes.Count()), snapshot, diagnostic) ||
+                snapshot.TypeName != expectedType;
+        }
+        else if (extension == TEXT("materialinstance"))
+        {
+            invalidPayload = MaterialInstanceDocument::Compile(json, compiled, nullptr, payloadError);
+        }
+        else if (extension == TEXT("skeletonmask"))
+        {
+            const auto skeleton = json.FindMember("skeleton");
+            const auto maskedNodes = json.FindMember("maskedNodes");
+            Guid skeletonID;
+            invalidPayload = skeleton == json.MemberEnd() || !skeleton->value.IsString() ||
+                Guid::Parse(StringAnsiView(skeleton->value.GetString(), skeleton->value.GetStringLength()), skeletonID) ||
+                maskedNodes == json.MemberEnd() || !maskedNodes->value.IsArray();
+            if (!invalidPayload)
+            {
+                for (const auto& node : maskedNodes->value.GetArray())
+                    invalidPayload |= !node.IsString();
+            }
+        }
+        else if (extension == TEXT("sceneanimation"))
+        {
+            invalidPayload = SceneAnimationDocument::Compile(json, compiled, nullptr, payloadError);
+        }
+        else if (extension == TEXT("particlesystem"))
+        {
+            invalidPayload = ParticleSystemDocument::Compile(json, compiled, nullptr, payloadError);
+        }
+        else if (extension == TEXT("collisiondata"))
+        {
+            CollisionData::SerializedOptions options;
+            invalidPayload = CollisionDataDocument::Parse(json, options, payloadError);
+        }
+        if (invalidPayload)
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = TEXT("Unsupported typed authored source payload. Run the separate offline migrator from the old branch before modifying this document.");
             return true;
         }
         return false;
@@ -1213,10 +1277,20 @@ namespace
                 return false;
             }
             AssetImporterDescriptor callbackImporter;
-            if (metadata.Processor.ID == TEXT("Flax.Binary") && TryResolveCallbackImporter(sourcePath, callbackImporter))
+            if (TryResolveCallbackImporter(sourcePath, callbackImporter))
             {
-                ConfigureCallbackMetadata(metadata, callbackImporter);
-                return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+                if (metadata.AssetType != RawDataAsset::TypeName || metadata.SourceKind != AssetSourceKind::ImportedSource ||
+                    metadata.Processor.ID != callbackImporter.ID ||
+                    metadata.Processor.SettingsVersion != static_cast<int32>(callbackImporter.SettingsSchemaVersion))
+                {
+                    diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+                    diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+                    diagnostic.SourcePath = sourcePath;
+                    diagnostic.AssetGuid = metadata.ID;
+                    diagnostic.Message = TEXT("Unsupported importer metadata format. Run the separate offline migrator from the old branch before modifying this asset.");
+                    return true;
+                }
+                return false;
             }
             const bool isSettings = extension == TEXT("settings");
             const bool isJsonDocument = !isSettings && IsAuthoredJsonExtension(extension);
@@ -1244,13 +1318,12 @@ namespace
                  metadata.Processor.SettingsVersion != 1 || metadata.Processor.SettingsJson != StringAnsiView("{}\n"));
             if (!settingsUpgrade && !jsonDocumentUpgrade)
                 return false;
-            if (isSettings)
-                ConfigureSettingsMetadata(metadata);
-            else if (isJsonDocument)
-            {
-                ConfigureJsonDocumentMetadata(metadata, metadata.AssetType);
-            }
-            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.AssetGuid = metadata.ID;
+            diagnostic.Message = TEXT("Unsupported authored metadata format. Run the separate offline migrator from the old branch before modifying this asset.");
+            return true;
         }
         AssetMeta metadata;
         metadata.ID = Guid::New();
