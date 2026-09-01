@@ -1380,7 +1380,7 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
         REQUIRE(createdIndex.Fragments.Count() == 1);
         REQUIRE(createdFragments.Count() == 1);
         CHECK(createdIndex.Fragments[0].RootActorLocalId == actorLocalId);
-        CHECK(actor->GetGlobalObjectId().SourceAsset == sceneId);
+        CHECK(actor->GetGlobalObjectId().SourceAsset.Value == sceneId);
         CHECK(actor->GetGlobalObjectId().LocalFileId == actorLocalId);
 
         actor->SetName(TEXT("Updated"));
@@ -1454,7 +1454,7 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
         StaticModel* reopenedDuplicate = reopened->FindActor<StaticModel>(TEXT("Duplicate"));
         REQUIRE(reopenedDuplicate);
         CHECK(reopenedDuplicate->GetLocalFileId() == duplicateLocalId);
-        CHECK(reopenedDuplicate->GetGlobalObjectId().SourceAsset == sceneId);
+        CHECK(reopenedDuplicate->GetGlobalObjectId().SourceAsset.Value == sceneId);
         CHECK(reopenedDuplicate->GetGlobalObjectId().LocalFileId == duplicateLocalId);
         CHECK(reopenedDuplicate->Model.GetID() == modelId);
         CHECK(reopened->FindActor(TEXT("Updated")) == nullptr);
