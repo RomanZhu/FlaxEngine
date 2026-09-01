@@ -5,7 +5,9 @@
 #include "Engine/Content/Importing/AssetPostprocessor.h"
 #include "Engine/Content/Importing/AssetRefreshCoordinator.h"
 #include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
+#include "Engine/Content/Importing/AssetImportWorkerProcess.h"
 #include "Engine/Content/Importing/CustomDependencyRegistry.h"
+#include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
@@ -211,6 +213,22 @@ TEST_CASE("Asset import worker protocol round-trips bounded capabilities")
     CHECK(loaded.OutputStagingPath == request.OutputStagingPath);
     CHECK(loaded.Limits.MaximumMemoryBytes == request.Limits.MaximumMemoryBytes);
     CHECK(loaded.Limits.TimeoutMilliseconds == request.Limits.TimeoutMilliseconds);
+}
+
+TEST_CASE("Asset import worker process rejects cancellation before launch")
+{
+    const String staging = ArtifactStore::GetTemporaryPath(Globals::ProjectLibraryFolder) /
+        TEXT("CallbackWorkers") / Guid::New().ToString(Guid::FormatType::N);
+    AssetImportJobRequest request = MakeWorkerRequest(staging);
+    request.AllowedTools.Clear();
+    AssetCancellationSource cancellation;
+    cancellation.Cancel();
+    AssetImportJobResult result;
+    AssetPipelineDiagnostic diagnostic;
+    CHECK(AssetImportWorkerProcess::Run(TEXT("missing-import-worker"), request, cancellation.GetToken(), result, diagnostic));
+    CHECK(result.Status == AssetImportWorkerStatus::Cancelled);
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::BuildCancelled);
+    CHECK_FALSE(FileSystem::DirectoryExists(staging));
 }
 
 TEST_CASE("Asset import worker protocol rejects mismatched capabilities and escaping outputs")

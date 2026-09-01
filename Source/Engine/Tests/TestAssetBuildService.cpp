@@ -658,6 +658,7 @@ TEST_CASE("AssetBuildService cancels abandoned requests and closes publication b
     limits.MaximumExternalTools = 1;
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+    AssetImportScheduler scheduler(service);
 
     std::atomic<bool> blockerStarted { false };
     std::atomic<bool> releaseBlocker { false };
@@ -673,19 +674,50 @@ TEST_CASE("AssetBuildService cancels abandoned requests and closes publication b
     REQUIRE(WaitUntil([&]() { return blockerStarted.load(); }));
 
     std::atomic<int32> abandonedExecutions { 0 };
+    std::shared_ptr<int32> queuedOwner = std::make_shared<int32>(1);
+    const std::weak_ptr<int32> queuedOwnerWeak = queuedOwner;
     AssetBuildJobRequest abandoned = BasicRequest(JobKey("cancel-queued"), Guid::New());
-    abandoned.Build = [&](const AssetCancellationToken&, AssetPipelineDiagnostic&)
+    abandoned.Build = [&, queuedOwner](const AssetCancellationToken&, AssetPipelineDiagnostic&)
     {
         abandonedExecutions++;
         return false;
     };
     const AssetBuildRequestHandle abandonedHandle = service.Request(abandoned);
-    service.CancelRequester(abandonedHandle);
-    releaseBlocker.store(true);
-    REQUIRE(blockerHandle.Wait(5000));
-    REQUIRE(abandonedHandle.Wait(5000));
+    abandoned.Build = AssetBuildJobAction();
+    queuedOwner.reset();
+    scheduler.Cancel(abandonedHandle);
+    REQUIRE(abandonedHandle.Wait(500));
     CHECK(abandonedHandle.GetStatus() == AssetBuildJobStatus::Cancelled);
     CHECK(abandonedExecutions.load() == 0);
+    CHECK(queuedOwnerWeak.expired());
+    releaseBlocker.store(true);
+    REQUIRE(blockerHandle.Wait(5000));
+
+    std::atomic<bool> runningStarted { false };
+    std::shared_ptr<int32> runningOwner = std::make_shared<int32>(2);
+    const std::weak_ptr<int32> runningOwnerWeak = runningOwner;
+    AssetBuildJobRequest running = BasicRequest(JobKey("cancel-running"), Guid::New());
+    running.MemoryBytes = 32;
+    running.ExternalToolSlots = 1;
+    running.Build = [&, runningOwner](const AssetCancellationToken& token, AssetPipelineDiagnostic&)
+    {
+        runningStarted.store(true);
+        while (!token.IsCancellationRequested())
+            Platform::Sleep(1);
+        return false;
+    };
+    const AssetBuildRequestHandle runningHandle = service.Request(running);
+    running.Build = AssetBuildJobAction();
+    runningOwner.reset();
+    REQUIRE(WaitUntil([&]() { return runningStarted.load(); }));
+    scheduler.Cancel(runningHandle);
+    REQUIRE(runningHandle.Wait(5000));
+    CHECK(runningHandle.GetStatus() == AssetBuildJobStatus::Cancelled);
+    CHECK(runningOwnerWeak.expired());
+    const AssetBuildMetrics afterRunningCancellation = service.GetMetrics();
+    CHECK(afterRunningCancellation.ActiveWorkers == 0);
+    CHECK(afterRunningCancellation.ActiveMemoryBytes == 0);
+    CHECK(afterRunningCancellation.ActiveExternalTools == 0);
 
     std::atomic<bool> shutdownBuildStarted { false };
     std::atomic<int32> shutdownPublications { 0 };

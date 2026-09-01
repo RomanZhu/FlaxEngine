@@ -371,6 +371,12 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     result.Capability = request.Capability;
     if (AssetImportWorkerProtocol::ValidateRequest(request, diagnostic))
         return true;
+    if (cancellation.IsCancellationRequested())
+    {
+        result.Status = AssetImportWorkerStatus::Cancelled;
+        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, request,
+            TEXT("Isolated importer process was cancelled before launch."));
+    }
     const String executablePath(executable);
     String stagingPath(request.OutputStagingPath);
     String workerRoot = ArtifactStore::GetTemporaryPath(Globals::ProjectLibraryFolder) / TEXT("CallbackWorkers");
@@ -422,6 +428,14 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     {
         cleanupProtocolFiles();
         return true;
+    }
+
+    if (cancellation.IsCancellationRequested())
+    {
+        cleanupProtocolFiles();
+        result.Status = AssetImportWorkerStatus::Cancelled;
+        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, request,
+            TEXT("Isolated importer process was cancelled before launch."));
     }
 
 #if PLATFORM_WINDOWS

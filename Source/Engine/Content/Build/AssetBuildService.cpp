@@ -326,7 +326,27 @@ void AssetBuildService::CancelRequester(const AssetBuildRequestHandle& handle)
         return;
     handle._state->Requesters.erase(found);
     if (handle._state->Requesters.empty() && !IsTerminal(handle._state->Status.load(std::memory_order_acquire)))
+    {
         handle._state->Cancellation.Cancel();
+        if (handle._state->Status.load(std::memory_order_acquire) == AssetBuildJobStatus::Queued)
+        {
+            const auto queued = std::find(_impl->Queue.begin(), _impl->Queue.end(), handle._state);
+            ASSERT(queued != _impl->Queue.end());
+            if (queued != _impl->Queue.end())
+            {
+                _impl->Queue.erase(queued);
+                _impl->Metrics.QueuedJobs--;
+            }
+            AssetPipelineDiagnostic diagnostic;
+            diagnostic.Code = AssetPipelineDiagnosticCode::BuildCancelled;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+            diagnostic.AssetGuid = handle._state->Request.AssetID;
+            diagnostic.Message = TEXT("Asset build was cancelled before execution.");
+            _impl->FinishLocked(handle._state, AssetBuildJobStatus::Cancelled, diagnostic);
+            handle._state->Request.Build = AssetBuildJobAction();
+            handle._state->Request.Publish = AssetBuildJobAction();
+        }
+    }
     _impl->Changed.notify_all();
 }
 
@@ -603,32 +623,40 @@ void AssetBuildService::Impl::Worker()
 
         if (failed || cancelledAfterBuild)
         {
-            std::lock_guard<std::mutex> lock(Mutex);
-            Metrics.BuildMilliseconds += buildElapsed;
-            releaseResources();
-            if (cancelledAfterBuild)
             {
-                diagnostic.Code = AssetPipelineDiagnosticCode::BuildCancelled;
-                diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
-                diagnostic.AssetGuid = job->Request.AssetID;
-                diagnostic.Message = TEXT("Asset build was cancelled before publication.");
-                FinishLocked(job, AssetBuildJobStatus::Cancelled, diagnostic);
-            }
-            else
-            {
-                if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                std::lock_guard<std::mutex> lock(Mutex);
+                Metrics.BuildMilliseconds += buildElapsed;
+                releaseResources();
+                if (cancelledAfterBuild)
                 {
-                    diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+                    diagnostic.Code = AssetPipelineDiagnosticCode::BuildCancelled;
                     diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
                     diagnostic.AssetGuid = job->Request.AssetID;
-                    diagnostic.Message = TEXT("Asset build callback failed without a diagnostic.");
+                    diagnostic.Message = TEXT("Asset build was cancelled before publication.");
+                    FinishLocked(job, AssetBuildJobStatus::Cancelled, diagnostic);
                 }
-                FinishLocked(job, AssetBuildJobStatus::Failed, diagnostic);
+                else
+                {
+                    if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                    {
+                        diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
+                        diagnostic.Stage = AssetPipelineDiagnosticStage::Build;
+                        diagnostic.AssetGuid = job->Request.AssetID;
+                        diagnostic.Message = TEXT("Asset build callback failed without a diagnostic.");
+                    }
+                    FinishLocked(job, AssetBuildJobStatus::Failed, diagnostic);
+                }
+            }
+            if (cancelledAfterBuild)
+            {
+                job->Request.Build = AssetBuildJobAction();
+                job->Request.Publish = AssetBuildJobAction();
             }
             continue;
         }
 
         std::unique_lock<std::mutex> publicationLock(PublicationMutex);
+        bool cancelledBeforePublication = false;
         {
             std::lock_guard<std::mutex> lock(Mutex);
             Metrics.BuildMilliseconds += buildElapsed;
@@ -640,15 +668,26 @@ void AssetBuildService::Impl::Worker()
                 diagnostic.AssetGuid = job->Request.AssetID;
                 diagnostic.Message = TEXT("Asset build publication was stopped safely.");
                 FinishLocked(job, AssetBuildJobStatus::Cancelled, diagnostic);
-                continue;
+                cancelledBeforePublication = true;
             }
-            job->Status.store(AssetBuildJobStatus::Publishing, std::memory_order_release);
-            job->Result.Status = AssetBuildJobStatus::Publishing;
-            job->PublicationStartedAt = std::chrono::steady_clock::now();
-            Metrics.PublicationsStarted++;
-            WriteLogLocked(job, AssetBuildJobStatus::Publishing);
+            else
+            {
+                job->Status.store(AssetBuildJobStatus::Publishing, std::memory_order_release);
+                job->Result.Status = AssetBuildJobStatus::Publishing;
+                job->PublicationStartedAt = std::chrono::steady_clock::now();
+                Metrics.PublicationsStarted++;
+                WriteLogLocked(job, AssetBuildJobStatus::Publishing);
+            }
+        }
+        if (cancelledBeforePublication)
+        {
+            publicationLock.unlock();
+            job->Request.Build = AssetBuildJobAction();
+            job->Request.Publish = AssetBuildJobAction();
+            continue;
         }
         failed = job->Request.Publish.IsBinded() && job->Request.Publish(token, diagnostic);
+        bool cancelledDuringPublication = false;
         {
             std::lock_guard<std::mutex> lock(Mutex);
             Metrics.PublicationMilliseconds += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - job->PublicationStartedAt).count();
@@ -660,6 +699,7 @@ void AssetBuildService::Impl::Worker()
                 diagnostic.AssetGuid = job->Request.AssetID;
                 diagnostic.Message = TEXT("Asset build publication was cancelled.");
                 FinishLocked(job, AssetBuildJobStatus::Cancelled, diagnostic);
+                cancelledDuringPublication = true;
             }
             else if (failed)
             {
@@ -676,6 +716,12 @@ void AssetBuildService::Impl::Worker()
             {
                 FinishLocked(job, AssetBuildJobStatus::Succeeded, AssetPipelineDiagnostic());
             }
+        }
+        if (cancelledDuringPublication)
+        {
+            publicationLock.unlock();
+            job->Request.Build = AssetBuildJobAction();
+            job->Request.Publish = AssetBuildJobAction();
         }
     }
 }
