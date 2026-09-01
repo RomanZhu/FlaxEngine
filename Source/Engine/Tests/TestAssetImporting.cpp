@@ -5,7 +5,6 @@
 #include "Engine/Content/Importing/AssetPostprocessor.h"
 #include "Engine/Content/Importing/AssetRefreshCoordinator.h"
 #include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
-#include "Engine/Content/Importing/AssetImportWorkerProcess.h"
 #include "Engine/Content/Importing/CustomDependencyRegistry.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Core/ScopeExit.h"
