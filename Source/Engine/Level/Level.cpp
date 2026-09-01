@@ -909,14 +909,6 @@ void LayersAndTagsSettings::Apply()
 
 bool LevelService::Init()
 {
-#if USE_EDITOR
-    String error;
-    if (SceneFragmentStore::RecoverIncompleteTransactions(error))
-    {
-        LOG(Error, "Cannot recover an interrupted scene save: {0}", error);
-        return true;
-    }
-#endif
     return false;
 }
 

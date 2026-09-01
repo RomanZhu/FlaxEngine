@@ -42,12 +42,3 @@ struct FLAXENGINE_API PreparedSceneSave
     SceneSourceRevision ExpectedSource;
     SceneFragmentSavePlan FragmentPlan;
 };
-
-/// <summary>Test-only interruption points that leave durable recovery state behind.</summary>
-enum class SceneFragmentTransactionFailurePoint : byte
-{
-    None,
-    AfterFirstApply,
-    AfterAllApplyBeforeCommit,
-    AfterCommitBeforeCleanup,
-};

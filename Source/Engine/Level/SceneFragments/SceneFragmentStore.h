@@ -45,19 +45,14 @@ public:
     /// <summary>Captures the exact current scene source revision before serialization. Returns true on failure.</summary>
     static bool CaptureSourceRevision(const StringView& scenePath, SceneSourceRevision& revision, String& error);
 
-    /// <summary>Commits one scene source and its prepared fragment set through a recoverable journal. Returns true on failure.</summary>
+    /// <summary>Commits one scene source and its prepared fragment set. Returns true on failure.</summary>
     static bool CommitSceneSave(const StringView& scenePath, const void* sceneData, int32 sceneDataLength,
-        const SceneSourceRevision& expectedSource, const SceneFragmentSavePlan& plan, String& error,
-        SceneFragmentTransactionFailurePoint failurePoint = SceneFragmentTransactionFailurePoint::None);
+        const SceneSourceRevision& expectedSource, const SceneFragmentSavePlan& plan, String& error);
 
-    /// <summary>Commits several prepared scene sources and fragment sets through one recoverable journal. Returns true on failure.</summary>
-    static bool CommitSceneSaves(const Array<PreparedSceneSave>& saves, String& error,
-        SceneFragmentTransactionFailurePoint failurePoint = SceneFragmentTransactionFailurePoint::None);
+    /// <summary>Commits several prepared scene sources and fragment sets. Returns true on failure.</summary>
+    static bool CommitSceneSaves(const Array<PreparedSceneSave>& saves, String& error);
 
-    /// <summary>Recovers all interrupted scene-fragment transactions. Returns true on failure.</summary>
-    static bool RecoverIncompleteTransactions(String& error);
-
-    /// <summary>Publishes fragments through the recoverable private-store transaction. Returns true on failure.</summary>
+    /// <summary>Publishes fragments through the private-store transaction. Returns true on failure.</summary>
     static bool Save(const Guid& sceneGuid, const Array<SceneFragmentWrite>& fragments, String& error);
 
     /// <summary>Removes the private fragment directory owned by a scene. Returns true on failure.</summary>

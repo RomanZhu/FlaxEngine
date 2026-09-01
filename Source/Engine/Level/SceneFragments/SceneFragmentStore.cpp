@@ -1,7 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "SceneFragmentStore.h"
-#include "Engine/Content/AssetDatabase/DurableAssetFileSystem.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -21,130 +20,29 @@ namespace
 {
     constexpr const Char* IndexFileName = TEXT("scene-fragments.index");
     constexpr const Char* FragmentExtension = TEXT(".sceneactor");
-    constexpr uint32 TransactionJournalMagic = 0x4A465353; // SSFJ
-    constexpr uint32 TransactionJournalVersion = 2;
     CriticalSection TransactionLocker;
 
-    enum class TransactionPhase : byte
-    {
-        Staging,
-        Prepared,
-        Committed,
-    };
-
-    enum class TransactionEntryKind : byte
+    enum class PublicationEntryKind : byte
     {
         Replace,
         Delete,
     };
 
-    struct TransactionEntry
+    struct PublicationEntry
     {
-        TransactionEntryKind Kind = TransactionEntryKind::Replace;
+        PublicationEntryKind Kind = PublicationEntryKind::Replace;
         String Destination;
         bool Existed = false;
         Array<byte> Data;
+        Array<byte> PreviousData;
     };
 
-    struct TransactionJournal
+    struct PublicationBatch
     {
         Guid TransactionId;
-        TransactionPhase Phase = TransactionPhase::Staging;
-        bool RemoveStore = false;
         String StorePath;
-        Array<TransactionEntry> Entries;
+        Array<PublicationEntry> Entries;
         Array<String> RemovedStores;
-    };
-
-    class JournalWriter
-    {
-    public:
-        Array<byte> Data;
-
-        void Byte(byte value)
-        {
-            Data.Add(value);
-        }
-
-        void UInt32(uint32 value)
-        {
-            for (int32 i = 0; i < 4; i++)
-                Data.Add(static_cast<byte>(value >> (i * 8)));
-        }
-
-        void GuidValue(const Guid& value)
-        {
-            UInt32(value.A);
-            UInt32(value.B);
-            UInt32(value.C);
-            UInt32(value.D);
-        }
-
-        void StringValue(const StringView& value)
-        {
-            const StringAnsi utf8(value);
-            UInt32(utf8.Length());
-            if (utf8.HasChars())
-                Data.Add(reinterpret_cast<const byte*>(utf8.Get()), utf8.Length());
-        }
-    };
-
-    class JournalReader
-    {
-        const byte* _data;
-        uint32 _length;
-        uint32 _position = 0;
-
-    public:
-        JournalReader(const byte* data, uint32 length)
-            : _data(data)
-            , _length(length)
-        {
-        }
-
-        bool Bytes(void* output, uint32 length)
-        {
-            if (_position > _length || length > _length - _position)
-                return true;
-            Platform::MemoryCopy(output, _data + _position, length);
-            _position += length;
-            return false;
-        }
-
-        bool Byte(byte& value)
-        {
-            return Bytes(&value, 1);
-        }
-
-        bool UInt32(uint32& value)
-        {
-            byte bytes[4];
-            if (Bytes(bytes, 4))
-                return true;
-            value = static_cast<uint32>(bytes[0]) | (static_cast<uint32>(bytes[1]) << 8) |
-                    (static_cast<uint32>(bytes[2]) << 16) | (static_cast<uint32>(bytes[3]) << 24);
-            return false;
-        }
-
-        bool GuidValue(Guid& value)
-        {
-            return UInt32(value.A) || UInt32(value.B) || UInt32(value.C) || UInt32(value.D);
-        }
-
-        bool StringValue(String& value)
-        {
-            uint32 length;
-            if (UInt32(length) || length > 32768 || length > _length - _position)
-                return true;
-            value = String(StringAnsiView(reinterpret_cast<const char*>(_data + _position), length));
-            _position += length;
-            return false;
-        }
-
-        bool AtEnd() const
-        {
-            return _position == _length;
-        }
     };
 
     bool Fail(String& error, const StringView& message)
@@ -181,50 +79,35 @@ namespace
         return true;
     }
 
-    String GetTransactionsRoot()
+    String GetStagePath(const PublicationBatch& batch, int32 index)
     {
-        return Globals::ProjectLibraryFolder / TEXT("SceneFragments/Transactions");
-    }
-
-    String GetTransactionDirectory(const Guid& transactionId)
-    {
-        return GetTransactionsRoot() / transactionId.ToString(Guid::FormatType::N).ToLower();
-    }
-
-    String GetStagePath(const TransactionJournal& journal, int32 index)
-    {
-        return journal.Entries[index].Destination + TEXT(".ssf-") +
-               journal.TransactionId.ToString(Guid::FormatType::N).ToLower() + TEXT(".tmp");
-    }
-
-    String GetBackupPath(const StringView& transactionDirectory, int32 index)
-    {
-        return String(transactionDirectory) / String::Format(TEXT("{0}.backup"), index);
+        return batch.Entries[index].Destination + TEXT(".ssf-") +
+               batch.TransactionId.ToString(Guid::FormatType::N).ToLower() + TEXT(".tmp");
     }
 
     bool EnsureDirectory(const StringView& path)
     {
-        return DurableAssetFileSystem::EnsureDirectory(path);
+        return path.HasChars() && FileSystem::CreateDirectory(path);
     }
 
-    bool DurableMove(const StringView& destination, const StringView& source, bool overwrite)
+    bool MoveFile(const StringView& destination, const StringView& source, bool overwrite)
     {
-        return DurableAssetFileSystem::Move(destination, source, overwrite);
+        return FileSystem::MoveFile(destination, source, overwrite);
     }
 
-    bool DurableDeleteFile(const StringView& path)
+    bool DeleteFile(const StringView& path)
     {
-        return DurableAssetFileSystem::DeleteFile(path);
+        return FileSystem::DeleteFile(path);
     }
 
-    bool DurableDeleteDirectory(const StringView& path, bool deleteContents)
+    bool DeleteDirectory(const StringView& path, bool deleteContents)
     {
-        return DurableAssetFileSystem::DeleteDirectory(path, deleteContents);
+        return FileSystem::DeleteDirectory(path, deleteContents);
     }
 
-    bool WriteDurable(const StringView& path, const void* data, int32 length)
+    bool WriteFile(const StringView& path, const void* data, int32 length)
     {
-        return DurableAssetFileSystem::WriteFile(path, data, length);
+        return EnsureDirectory(StringUtils::GetDirectoryName(path)) || File::WriteAllBytes(path, data, length);
     }
 
     bool SameBytes(const StringView& path, const void* data, int32 length)
@@ -232,220 +115,6 @@ namespace
         BytesContainer existing;
         return !File::ReadAllBytes(path, existing) && existing.Length() == length &&
                (length == 0 || Platform::MemoryCompare(existing.Get(), data, length) == 0);
-    }
-
-    bool IsAllowedDestination(const StringView& path)
-    {
-        String normalized(path);
-        FileSystem::NormalizePath(normalized);
-        return AssetPathPolicy::IsSameOrChild(normalized, Globals::ProjectContentFolder) ||
-               AssetPathPolicy::IsSameOrChild(normalized, SceneFragmentStore::GetRootPath());
-    }
-
-    bool SaveJournal(const StringView& directory, const TransactionJournal& journal, String& error)
-    {
-        if (EnsureDirectory(directory))
-            return Fail(error, TEXT("Cannot create the scene save transaction directory."));
-        JournalWriter writer;
-        writer.UInt32(TransactionJournalMagic);
-        writer.UInt32(TransactionJournalVersion);
-        writer.Byte(static_cast<byte>(journal.Phase));
-        writer.Byte(journal.RemoveStore ? 1 : 0);
-        writer.GuidValue(journal.TransactionId);
-        writer.StringValue(journal.StorePath);
-        writer.UInt32(journal.Entries.Count());
-        for (const TransactionEntry& entry : journal.Entries)
-        {
-            writer.Byte(static_cast<byte>(entry.Kind));
-            writer.Byte(entry.Existed ? 1 : 0);
-            writer.StringValue(entry.Destination);
-        }
-        writer.UInt32(journal.RemovedStores.Count());
-        for (const String& store : journal.RemovedStores)
-            writer.StringValue(store);
-        const String path = String(directory) / TEXT("journal.bin");
-        const String staging = path + TEXT(".tmp");
-        if (WriteDurable(staging, writer.Data.Get(), writer.Data.Count()) ||
-            DurableMove(path, staging, true))
-        {
-            DurableDeleteFile(staging);
-            return Fail(error, TEXT("Cannot durably persist the scene save transaction journal."));
-        }
-        return false;
-    }
-
-    bool LoadJournal(const StringView& directory, TransactionJournal& journal, String& error)
-    {
-        BytesContainer bytes;
-        const String path = String(directory) / TEXT("journal.bin");
-        if (File::ReadAllBytes(path, bytes) || bytes.Length() > MAX_uint32)
-            return Fail(error, TEXT("Scene save transaction journal is missing or unreadable."));
-        JournalReader reader(bytes.Get(), static_cast<uint32>(bytes.Length()));
-        uint32 magic;
-        uint32 version;
-        uint32 count;
-        byte phase;
-        byte removeStore;
-        if (reader.UInt32(magic) || reader.UInt32(version) || reader.Byte(phase) || reader.Byte(removeStore) ||
-            reader.GuidValue(journal.TransactionId) || reader.StringValue(journal.StorePath) || reader.UInt32(count) ||
-            magic != TransactionJournalMagic || (version != 1 && version != TransactionJournalVersion) ||
-            phase > static_cast<byte>(TransactionPhase::Committed) || removeStore > 1 || count > 100000)
-        {
-            return Fail(error, TEXT("Scene save transaction journal is malformed or unsupported."));
-        }
-        journal.Phase = static_cast<TransactionPhase>(phase);
-        journal.RemoveStore = removeStore != 0;
-        String normalizedStore(journal.StorePath);
-        FileSystem::NormalizePath(normalizedStore);
-        const String fragmentRoot = SceneFragmentStore::GetRootPath();
-        if (!journal.TransactionId.IsValid() || normalizedStore != journal.StorePath ||
-            (normalizedStore != fragmentRoot &&
-             StringUtils::GetDirectoryName(normalizedStore).Compare(StringView(fragmentRoot), StringSearchCase::IgnoreCase) != 0))
-        {
-            return Fail(error, TEXT("Scene save transaction journal contains invalid ownership."));
-        }
-        for (uint32 i = 0; i < count; i++)
-        {
-            byte kind;
-            byte existed;
-            TransactionEntry entry;
-            if (reader.Byte(kind) || reader.Byte(existed) || reader.StringValue(entry.Destination) ||
-                kind > static_cast<byte>(TransactionEntryKind::Delete) || existed > 1 ||
-                !IsAllowedDestination(entry.Destination))
-            {
-                return Fail(error, TEXT("Scene save transaction journal contains an invalid entry."));
-            }
-            entry.Kind = static_cast<TransactionEntryKind>(kind);
-            entry.Existed = existed != 0;
-            journal.Entries.Add(MoveTemp(entry));
-        }
-        if (version >= 2)
-        {
-            uint32 removedStoreCount;
-            if (reader.UInt32(removedStoreCount) || removedStoreCount > 100000)
-                return Fail(error, TEXT("Scene save transaction journal has an invalid removed-store count."));
-            HashSet<String> removedStores;
-            for (uint32 i = 0; i < removedStoreCount; i++)
-            {
-                String store;
-                if (reader.StringValue(store))
-                    return Fail(error, TEXT("Scene save transaction journal contains an invalid removed store."));
-                String normalized(store);
-                FileSystem::NormalizePath(normalized);
-                if (normalized != store ||
-                    StringUtils::GetDirectoryName(normalized).Compare(StringView(fragmentRoot), StringSearchCase::IgnoreCase) != 0 ||
-                    !removedStores.Add(normalized))
-                {
-                    return Fail(error, TEXT("Scene save transaction journal contains an invalid removed store."));
-                }
-                journal.RemovedStores.Add(MoveTemp(store));
-            }
-        }
-        else if (journal.RemoveStore)
-        {
-            journal.RemovedStores.Add(journal.StorePath);
-        }
-        if (!reader.AtEnd())
-            return Fail(error, TEXT("Scene save transaction journal has trailing data."));
-        return false;
-    }
-
-    bool CleanupTransaction(const StringView& directory, const TransactionJournal& journal, bool committed)
-    {
-        bool failed = false;
-        for (int32 i = 0; i < journal.Entries.Count(); i++)
-        {
-            const String staging = GetStagePath(journal, i);
-            if (FileSystem::FileExists(staging))
-                failed |= DurableDeleteFile(staging);
-        }
-        for (int32 i = journal.Entries.Count() - 1; i >= 0; i--)
-        {
-            if (!journal.Entries[i].Existed &&
-                AssetPathPolicy::IsSameOrChild(journal.Entries[i].Destination, journal.StorePath))
-                DurableDeleteDirectory(StringUtils::GetDirectoryName(journal.Entries[i].Destination), false);
-        }
-        if (committed)
-        {
-            for (const String& store : journal.RemovedStores)
-            {
-                if (FileSystem::DirectoryExists(store))
-                    failed |= DurableDeleteDirectory(store, true);
-            }
-        }
-        else if (!committed && FileSystem::DirectoryExists(journal.StorePath))
-            DurableDeleteDirectory(journal.StorePath, false);
-        if (!failed && FileSystem::DirectoryExists(directory))
-            failed |= DurableDeleteDirectory(directory, true);
-        return failed;
-    }
-
-    bool RollbackJournal(const StringView& directory, const TransactionJournal& journal)
-    {
-        bool failed = false;
-        for (int32 i = journal.Entries.Count() - 1; i >= 0; i--)
-        {
-            const TransactionEntry& entry = journal.Entries[i];
-            if (entry.Existed)
-            {
-                BytesContainer backup;
-                const String backupPath = GetBackupPath(directory, i);
-                const String restorePath = entry.Destination + TEXT(".restore-") +
-                                           journal.TransactionId.ToString(Guid::FormatType::N).ToLower();
-                if (File::ReadAllBytes(backupPath, backup) ||
-                    WriteDurable(restorePath, backup.Get(), static_cast<int32>(backup.Length())) ||
-                    DurableMove(entry.Destination, restorePath, true))
-                {
-                    failed = true;
-                    DurableDeleteFile(restorePath);
-                }
-            }
-            else if (FileSystem::FileExists(entry.Destination))
-            {
-                failed |= DurableDeleteFile(entry.Destination);
-            }
-        }
-        if (!failed)
-            failed = CleanupTransaction(directory, journal, false);
-        return failed;
-    }
-
-    bool RecoverTransaction(const StringView& directory, String& error)
-    {
-        if (!FileSystem::FileExists(String(directory) / TEXT("journal.bin")))
-        {
-            if (DurableDeleteDirectory(directory, true))
-                return Fail(error, TEXT("Unprepared scene save staging state could not be removed."));
-            return false;
-        }
-        TransactionJournal journal;
-        if (LoadJournal(directory, journal, error))
-            return true;
-        if (journal.Phase == TransactionPhase::Prepared && RollbackJournal(directory, journal))
-            return Fail(error, TEXT("Interrupted scene save could not be rolled back; recovery data was preserved."));
-        if (journal.Phase != TransactionPhase::Prepared && CleanupTransaction(directory, journal,
-            journal.Phase == TransactionPhase::Committed))
-        {
-            return Fail(error, TEXT("Recovered scene save transaction state could not be removed."));
-        }
-        return false;
-    }
-
-    bool RecoverAllTransactions(String& error)
-    {
-        error.Clear();
-        const String root = GetTransactionsRoot();
-        if (!FileSystem::DirectoryExists(root))
-            return false;
-        Array<String> directories;
-        if (FileSystem::GetChildDirectories(directories, root))
-            return Fail(error, TEXT("Cannot enumerate scene save transaction recovery state."));
-        for (const String& directory : directories)
-        {
-            if (RecoverTransaction(directory, error))
-                return true;
-        }
-        return false;
     }
 
     bool ParseFragment(const Guid& expectedOwner, const SceneFragmentIndexEntry& entry, const Array<byte>& bytes, String& error)
@@ -686,7 +355,7 @@ bool SceneFragmentStore::PrepareCloneDirectory(const StringView& projectRoot, co
     SCOPE_EXIT
     {
         if (!published)
-            DurableDeleteDirectory(stagingDirectory, true);
+            DeleteDirectory(stagingDirectory, true);
     };
 
     SceneFragmentIndex cloneIndex;
@@ -715,14 +384,14 @@ bool SceneFragmentStore::PrepareCloneDirectory(const StringView& projectRoot, co
         cloneEntry.Content = ContentHash::Compute(buffer.GetString(), buffer.GetSize());
         cloneEntry.Size = buffer.GetSize();
         const String destination = String(stagingDirectory) / cloneEntry.RelativePhysicalPath;
-        if (WriteDurable(destination, buffer.GetString(), static_cast<int32>(buffer.GetSize())))
+        if (WriteFile(destination, buffer.GetString(), static_cast<int32>(buffer.GetSize())))
             return Fail(error, TEXT("Cannot write a staged scene fragment clone."));
         cloneIndex.Fragments.Add(MoveTemp(cloneEntry));
     }
 
     rapidjson_flax::StringBuffer indexBytes;
     WriteIndex(cloneIndex, indexBytes);
-    if (WriteDurable(String(stagingDirectory) / IndexFileName, indexBytes.GetString(),
+    if (WriteFile(String(stagingDirectory) / IndexFileName, indexBytes.GetString(),
         static_cast<int32>(indexBytes.GetSize())))
         return Fail(error, TEXT("Cannot write the staged scene fragment clone index."));
     published = true;
@@ -734,8 +403,6 @@ bool SceneFragmentStore::PrepareSave(const Guid& sceneGuid, const Array<SceneFra
 {
     plan = SceneFragmentSavePlan();
     error.Clear();
-    if (RecoverIncompleteTransactions(error))
-        return true;
     if (!sceneGuid.IsValid())
         return Fail(error, TEXT("Scene fragment owner GUID is invalid."));
     const String scenePath = GetScenePath(sceneGuid);
@@ -843,8 +510,6 @@ bool SceneFragmentStore::PrepareDelete(const Guid& sceneGuid, SceneFragmentSaveP
 {
     plan = SceneFragmentSavePlan();
     error.Clear();
-    if (RecoverIncompleteTransactions(error))
-        return true;
     if (!sceneGuid.IsValid())
         return Fail(error, TEXT("Scene fragment owner GUID is invalid."));
     plan.OwnerSceneGuid = sceneGuid;
@@ -924,27 +589,27 @@ namespace
         return false;
     }
 
-    void AddReplace(TransactionJournal& journal, const StringView& destination, const void* data, int32 length)
+    void AddReplace(PublicationBatch& batch, const StringView& destination, const void* data, int32 length)
     {
         if (SameBytes(destination, data, length))
             return;
-        TransactionEntry entry;
-        entry.Kind = TransactionEntryKind::Replace;
+        PublicationEntry entry;
+        entry.Kind = PublicationEntryKind::Replace;
         entry.Destination = destination;
         entry.Existed = FileSystem::FileExists(destination);
         entry.Data.Set(reinterpret_cast<const byte*>(data), length);
-        journal.Entries.Add(MoveTemp(entry));
+        batch.Entries.Add(MoveTemp(entry));
     }
 
-    void AddDelete(TransactionJournal& journal, const StringView& destination)
+    void AddDelete(PublicationBatch& batch, const StringView& destination)
     {
         if (!FileSystem::FileExists(destination))
             return;
-        TransactionEntry entry;
-        entry.Kind = TransactionEntryKind::Delete;
+        PublicationEntry entry;
+        entry.Kind = PublicationEntryKind::Delete;
         entry.Destination = destination;
         entry.Existed = true;
-        journal.Entries.Add(MoveTemp(entry));
+        batch.Entries.Add(MoveTemp(entry));
     }
 
     struct PreparedCommit
@@ -969,93 +634,110 @@ namespace
         return false;
     }
 
-    bool PublishTransaction(TransactionJournal& journal, const Array<PreparedCommit>& commits, String& error,
-        SceneFragmentTransactionFailurePoint failurePoint)
+    bool CleanupPublication(const PublicationBatch& batch, bool committed)
     {
-        const String directory = GetTransactionDirectory(journal.TransactionId);
-        if (SaveJournal(directory, journal, error))
-            return true;
-
-        for (int32 i = 0; i < journal.Entries.Count(); i++)
+        bool failed = false;
+        for (int32 i = 0; i < batch.Entries.Count(); i++)
         {
-            const TransactionEntry& entry = journal.Entries[i];
+            const String staging = GetStagePath(batch, i);
+            if (FileSystem::FileExists(staging))
+                failed |= DeleteFile(staging);
+        }
+        if (committed)
+        {
+            for (const String& store : batch.RemovedStores)
+            {
+                if (FileSystem::DirectoryExists(store))
+                    failed |= DeleteDirectory(store, true);
+            }
+        }
+        else
+        {
+            for (int32 i = batch.Entries.Count() - 1; i >= 0; i--)
+            {
+                if (!batch.Entries[i].Existed &&
+                    AssetPathPolicy::IsSameOrChild(batch.Entries[i].Destination, batch.StorePath))
+                    DeleteDirectory(StringUtils::GetDirectoryName(batch.Entries[i].Destination), false);
+            }
+            if (FileSystem::DirectoryExists(batch.StorePath))
+                DeleteDirectory(batch.StorePath, false);
+        }
+        return failed;
+    }
+
+    bool RollbackPublication(const PublicationBatch& batch)
+    {
+        bool failed = false;
+        for (int32 i = batch.Entries.Count() - 1; i >= 0; i--)
+        {
+            const PublicationEntry& entry = batch.Entries[i];
             if (entry.Existed)
             {
-                BytesContainer current;
-                if (File::ReadAllBytes(entry.Destination, current) || current.Length() > MAX_int32 ||
-                    WriteDurable(GetBackupPath(directory, i), current.Get(), static_cast<int32>(current.Length())))
+                const String restorePath = entry.Destination + TEXT(".restore-") +
+                                           batch.TransactionId.ToString(Guid::FormatType::N).ToLower();
+                if (WriteFile(restorePath, entry.PreviousData.Get(), entry.PreviousData.Count()) ||
+                    MoveFile(entry.Destination, restorePath, true))
                 {
-                    CleanupTransaction(directory, journal, false);
-                    return Fail(error, TEXT("Cannot create a durable scene save rollback copy."));
+                    failed = true;
+                    if (FileSystem::FileExists(restorePath))
+                        DeleteFile(restorePath);
                 }
             }
+            else if (FileSystem::FileExists(entry.Destination))
+            {
+                failed |= DeleteFile(entry.Destination);
+            }
+        }
+        failed |= CleanupPublication(batch, false);
+        return failed;
+    }
+
+    bool PublishBatch(PublicationBatch& batch, const Array<PreparedCommit>& commits, String& error)
+    {
+        for (PublicationEntry& entry : batch.Entries)
+        {
+            if (entry.Existed && File::ReadAllBytes(entry.Destination, entry.PreviousData))
+                return Fail(error, TEXT("Cannot capture the current scene save entry for in-process rollback."));
         }
 
         if (ValidateExpectedState(commits, error))
-        {
-            CleanupTransaction(directory, journal, false);
             return true;
-        }
 
-        for (int32 i = 0; i < journal.Entries.Count(); i++)
+        for (int32 i = 0; i < batch.Entries.Count(); i++)
         {
-            const TransactionEntry& entry = journal.Entries[i];
-            if (entry.Kind == TransactionEntryKind::Replace &&
-                WriteDurable(GetStagePath(journal, i), entry.Data.Get(), entry.Data.Count()))
+            const PublicationEntry& entry = batch.Entries[i];
+            if (entry.Kind == PublicationEntryKind::Replace &&
+                WriteFile(GetStagePath(batch, i), entry.Data.Get(), entry.Data.Count()))
             {
-                CleanupTransaction(directory, journal, false);
+                CleanupPublication(batch, false);
                 return Fail(error, TEXT("Cannot write a staged scene save entry."));
             }
         }
 
-        journal.Phase = TransactionPhase::Prepared;
-        if (SaveJournal(directory, journal, error))
+        for (int32 i = 0; i < batch.Entries.Count(); i++)
         {
-            CleanupTransaction(directory, journal, false);
-            return true;
-        }
-
-        for (int32 i = 0; i < journal.Entries.Count(); i++)
-        {
-            const TransactionEntry& entry = journal.Entries[i];
-            const bool failed = entry.Kind == TransactionEntryKind::Replace
-                                    ? DurableMove(entry.Destination, GetStagePath(journal, i), true)
-                                    : DurableDeleteFile(entry.Destination);
-            if (failed)
+            const PublicationEntry& entry = batch.Entries[i];
+            const bool applyFailed = entry.Kind == PublicationEntryKind::Replace
+                                         ? MoveFile(entry.Destination, GetStagePath(batch, i), true)
+                                         : DeleteFile(entry.Destination);
+            if (applyFailed)
             {
-                if (RollbackJournal(directory, journal))
+                if (RollbackPublication(batch))
                     return Fail(error, TEXT("Scene save failed and its prior revision could not be restored."));
                 return Fail(error, TEXT("Cannot apply a staged scene save entry."));
             }
-            if (i == 0 && failurePoint == SceneFragmentTransactionFailurePoint::AfterFirstApply)
-                return Fail(error, TEXT("Injected interruption after the first scene save entry."));
         }
 
-        if (failurePoint == SceneFragmentTransactionFailurePoint::AfterAllApplyBeforeCommit)
-            return Fail(error, TEXT("Injected interruption before the scene save commit marker."));
-        journal.Phase = TransactionPhase::Committed;
-        if (SaveJournal(directory, journal, error))
-        {
-            if (RollbackJournal(directory, journal))
-                return Fail(error, TEXT("Scene save commit failed and its prior revision could not be restored."));
-            return true;
-        }
-        if (failurePoint == SceneFragmentTransactionFailurePoint::AfterCommitBeforeCleanup)
-            return Fail(error, TEXT("Injected interruption after the scene save commit marker."));
-        if (CleanupTransaction(directory, journal, true))
-            return Fail(error, TEXT("Committed scene save recovery state could not be removed."));
+        if (CleanupPublication(batch, true))
+            return Fail(error, TEXT("Committed scene save obsolete storage could not be removed."));
         return false;
     }
 
-    bool CommitPreparedPlans(const Array<PreparedCommit>& commits,
-        String& error, SceneFragmentTransactionFailurePoint failurePoint)
+    bool CommitPreparedPlans(const Array<PreparedCommit>& commits, String& error)
     {
         error.Clear();
         if (commits.IsEmpty())
             return false;
-        if (RecoverAllTransactions(error))
-            return true;
-
         HashSet<Guid> owners;
         HashSet<String> sourcePaths;
         HashSet<String> destinations;
@@ -1082,9 +764,9 @@ namespace
         if (ValidateExpectedState(commits, error))
             return true;
 
-        TransactionJournal journal;
-        journal.TransactionId = Guid::New();
-        journal.StorePath = SceneFragmentStore::GetRootPath();
+        PublicationBatch batch;
+        batch.TransactionId = Guid::New();
+        batch.StorePath = SceneFragmentStore::GetRootPath();
         for (const PreparedCommit& commit : commits)
         {
             const SceneFragmentSavePlan& plan = *commit.Plan;
@@ -1101,7 +783,7 @@ namespace
                 {
                     return Fail(error, TEXT("Scene fragment save plan contains an invalid prepared fragment."));
                 }
-                AddReplace(journal, normalized, fragment.Data.Get(), fragment.Data.Count());
+                AddReplace(batch, normalized, fragment.Data.Get(), fragment.Data.Count());
             }
             for (const String& relativePath : plan.RemovedFragments)
             {
@@ -1114,7 +796,7 @@ namespace
                 {
                     return Fail(error, TEXT("Scene fragment save plan contains an invalid removal."));
                 }
-                AddDelete(journal, normalized);
+                AddDelete(batch, normalized);
             }
 
             const String indexPath = SceneFragmentStore::GetIndexPath(plan.OwnerSceneGuid);
@@ -1122,28 +804,28 @@ namespace
                 return Fail(error, TEXT("Scene save batch contains a duplicate fragment index destination."));
             if (plan.RemoveStore)
             {
-                AddDelete(journal, indexPath);
-                journal.RemovedStores.Add(storePath);
+                AddDelete(batch, indexPath);
+                batch.RemovedStores.Add(storePath);
             }
             else
             {
-                AddReplace(journal, indexPath, plan.IndexData.Get(), plan.IndexData.Count());
+                AddReplace(batch, indexPath, plan.IndexData.Get(), plan.IndexData.Count());
             }
             if (commit.ExpectedSource)
             {
                 if (!destinations.Add(commit.ScenePath))
                     return Fail(error, TEXT("Scene save batch contains a duplicate destination."));
-                AddReplace(journal, commit.ScenePath, commit.SceneData, commit.SceneDataLength);
+                AddReplace(batch, commit.ScenePath, commit.SceneData, commit.SceneDataLength);
             }
         }
-        if (journal.Entries.IsEmpty() && journal.RemovedStores.IsEmpty())
+        if (batch.Entries.IsEmpty() && batch.RemovedStores.IsEmpty())
             return false;
-        return PublishTransaction(journal, commits, error, failurePoint);
+        return PublishBatch(batch, commits, error);
     }
 
     bool CommitPreparedPlan(const SceneFragmentSavePlan& plan, const StringView& scenePath,
         const void* sceneData, int32 sceneDataLength, const SceneSourceRevision* expectedSource,
-        String& error, SceneFragmentTransactionFailurePoint failurePoint)
+        String& error)
     {
         PreparedCommit commit;
         commit.Plan = &plan;
@@ -1153,24 +835,22 @@ namespace
         commit.ExpectedSource = expectedSource;
         Array<PreparedCommit> commits;
         commits.Add(MoveTemp(commit));
-        return CommitPreparedPlans(commits, error, failurePoint);
+        return CommitPreparedPlans(commits, error);
     }
 }
 
 bool SceneFragmentStore::CommitSceneSave(const StringView& scenePath, const void* sceneData, int32 sceneDataLength,
-    const SceneSourceRevision& expectedSource, const SceneFragmentSavePlan& plan, String& error,
-    SceneFragmentTransactionFailurePoint failurePoint)
+    const SceneSourceRevision& expectedSource, const SceneFragmentSavePlan& plan, String& error)
 {
     String normalized(scenePath);
     FileSystem::NormalizePath(normalized);
     if (!sceneData || sceneDataLength <= 0 || !AssetPathPolicy::IsSameOrChild(normalized, Globals::ProjectContentFolder))
         return Fail(error, TEXT("Scene save destination or serialized data is invalid."));
     ScopeLock lock(TransactionLocker);
-    return CommitPreparedPlan(plan, normalized, sceneData, sceneDataLength, &expectedSource, error, failurePoint);
+    return CommitPreparedPlan(plan, normalized, sceneData, sceneDataLength, &expectedSource, error);
 }
 
-bool SceneFragmentStore::CommitSceneSaves(const Array<PreparedSceneSave>& saves, String& error,
-    SceneFragmentTransactionFailurePoint failurePoint)
+bool SceneFragmentStore::CommitSceneSaves(const Array<PreparedSceneSave>& saves, String& error)
 {
     Array<PreparedCommit> commits;
     commits.EnsureCapacity(saves.Count());
@@ -1186,13 +866,7 @@ bool SceneFragmentStore::CommitSceneSaves(const Array<PreparedSceneSave>& saves,
         commits.Add(MoveTemp(commit));
     }
     ScopeLock lock(TransactionLocker);
-    return CommitPreparedPlans(commits, error, failurePoint);
-}
-
-bool SceneFragmentStore::RecoverIncompleteTransactions(String& error)
-{
-    ScopeLock lock(TransactionLocker);
-    return RecoverAllTransactions(error);
+    return CommitPreparedPlans(commits, error);
 }
 
 bool SceneFragmentStore::Save(const Guid& sceneGuid, const Array<SceneFragmentWrite>& fragments, String& error)
@@ -1201,8 +875,7 @@ bool SceneFragmentStore::Save(const Guid& sceneGuid, const Array<SceneFragmentWr
     if (PrepareSave(sceneGuid, fragments, plan, error))
         return true;
     ScopeLock lock(TransactionLocker);
-    return CommitPreparedPlan(plan, StringView(), nullptr, 0, nullptr, error,
-        SceneFragmentTransactionFailurePoint::None);
+    return CommitPreparedPlan(plan, StringView(), nullptr, 0, nullptr, error);
 }
 
 bool SceneFragmentStore::Delete(const Guid& sceneGuid, String& error)
@@ -1211,6 +884,5 @@ bool SceneFragmentStore::Delete(const Guid& sceneGuid, String& error)
     if (PrepareDelete(sceneGuid, plan, error))
         return true;
     ScopeLock lock(TransactionLocker);
-    return CommitPreparedPlan(plan, StringView(), nullptr, 0, nullptr, error,
-        SceneFragmentTransactionFailurePoint::None);
+    return CommitPreparedPlan(plan, StringView(), nullptr, 0, nullptr, error);
 }
