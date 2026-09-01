@@ -325,7 +325,7 @@ void Actor::SetParent(Actor* value, bool worldPositionsStays, bool canBreakPrefa
     const bool wasActiveInTree = IsActiveInHierarchy();
     const auto prevParent = _parent;
     const auto prevScene = _scene;
-    const auto newScene = value ? value->_scene : nullptr;
+    const auto newScene = value ? (value->Is<Scene>() ? static_cast<Scene*>(value) : value->_scene) : nullptr;
 
     // Detect it actor is not in a game but new parent is already in a game (we should spawn it)
     const bool isBeingSpawned = !IsDuringPlay() && newScene && value->IsDuringPlay();
