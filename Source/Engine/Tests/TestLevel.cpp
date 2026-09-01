@@ -1272,6 +1272,77 @@ TEST_CASE("LegacyContentAssetFileOperations")
 TEST_CASE("ExternalActorsSceneStorage Lifecycle")
 {
 
+    SECTION("Cross-scene actor move publishes both fragment sets in one save")
+    {
+        const Guid sceneAId = ParseGuid("45454545454545454545454545454501");
+        const Guid sceneBId = ParseGuid("45454545454545454545454545454502");
+        const Guid actorId = ParseGuid("45454545454545454545454545454503");
+        const String sceneAPath = GetTestScenePath(TEXT("MoveActorSource"));
+        const String sceneBPath = GetTestScenePath(TEXT("MoveActorDestination"));
+        CleanupTestSceneFiles(sceneAPath);
+        CleanupTestSceneFiles(sceneBPath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(sceneAPath);
+            CleanupTestSceneFiles(sceneBPath);
+        };
+        WriteTestSceneAsset(sceneAPath, sceneAId, true);
+        WriteTestSceneAsset(sceneBPath, sceneBId, true);
+
+        Scene* sceneA = Scene::Spawn(ScriptingObject::SpawnParams(sceneAId, Scene::TypeInitializer));
+        Scene* sceneB = Scene::Spawn(ScriptingObject::SpawnParams(sceneBId, Scene::TypeInitializer));
+        REQUIRE(sceneA);
+        REQUIRE(sceneB);
+        SCOPE_EXIT
+        {
+            sceneA->DeleteObject();
+            sceneB->DeleteObject();
+        };
+        sceneA->UseExternalActors = true;
+        sceneB->UseExternalActors = true;
+
+        EmptyActor* actor = EmptyActor::Spawn(ScriptingObject::SpawnParams(actorId, EmptyActor::TypeInitializer));
+        REQUIRE(actor);
+        actor->SetName(TEXT("Moved actor"));
+        actor->SetParent(sceneA);
+
+        Array<Scene*> scenes;
+        scenes.Add(sceneA);
+        scenes.Add(sceneB);
+        REQUIRE(!Level::SaveScenes(scenes));
+        const String sourceFragment = GetExternalActorPath(sceneAPath, actorId);
+        const String destinationFragment = GetExternalActorPath(sceneBPath, actorId);
+        REQUIRE(FileSystem::FileExists(sourceFragment));
+        REQUIRE_FALSE(FileSystem::FileExists(destinationFragment));
+
+        const int64 localId = actor->GetLocalFileId();
+        actor->SetParent(sceneB);
+        REQUIRE(actor->GetParent() == sceneB);
+        CHECK(actor->GetID() == actorId);
+        CHECK(actor->GetLocalFileId() == localId);
+        REQUIRE(!Level::SaveScenes(scenes));
+
+        CHECK_FALSE(FileSystem::FileExists(sourceFragment));
+        CHECK(FileSystem::FileExists(destinationFragment));
+        SceneFragmentIndex sourceIndex;
+        SceneFragmentIndex destinationIndex;
+        Array<Array<byte>> sourceFragments;
+        Array<Array<byte>> destinationFragments;
+        String error;
+        REQUIRE(!SceneFragmentStore::Load(sceneAId, sourceIndex, sourceFragments, error));
+        REQUIRE(!SceneFragmentStore::Load(sceneBId, destinationIndex, destinationFragments, error));
+        CHECK(sourceIndex.Fragments.IsEmpty());
+        CHECK(sourceFragments.IsEmpty());
+        REQUIRE(destinationIndex.Fragments.Count() == 1);
+        REQUIRE(destinationFragments.Count() == 1);
+        CHECK(destinationIndex.Fragments[0].RootActorLocalId == localId);
+
+        rapidjson_flax::Document movedFragment;
+        movedFragment.Parse(reinterpret_cast<const char*>(destinationFragments[0].Get()), destinationFragments[0].Count());
+        REQUIRE(!movedFragment.HasParseError());
+        CHECK(JsonTools::GetGuid(movedFragment, "ownerSceneGuid") == sceneBId);
+    }
+
     SECTION("Rename external actors scene preserves GUID-keyed fragments")
     {
         const Guid sceneId = ParseGuid("44444444444444444444444444444441");
