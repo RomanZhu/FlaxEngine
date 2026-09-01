@@ -39,6 +39,18 @@ struct AssetDatabaseMutation
     Array<byte> Payload;
 };
 
+/// <summary>Affected rows captured before one in-process transaction mutation.</summary>
+struct AssetDatabaseUndoEntry
+{
+    AssetDatabaseMutationKind Kind = AssetDatabaseMutationKind::UpsertSource;
+    Guid Key = Guid::Empty;
+    int64 LocalFileId = 0;
+    uint64 Value = 0;
+    String TargetId;
+    ArtifactKey Artifact;
+    SourceAssetDatabaseState Before;
+};
+
 /// <summary>Private mutable copy committed optimistically against one database revision.</summary>
 class FLAXENGINE_API AssetDatabaseTransaction
 {
@@ -50,9 +62,14 @@ private:
     SourceAssetDatabaseState _state;
     AssetChangeSet _changes;
     Array<AssetDatabaseMutation> _mutations;
+    Array<AssetDatabaseUndoEntry> _undo;
     bool _completed = false;
 
     AssetDatabaseTransaction(SourceAssetDatabase* owner, SourceAssetDatabaseState&& state);
+    AssetDatabaseUndoEntry& CaptureUndo(AssetDatabaseMutationKind kind, const Guid& key = Guid::Empty,
+        int64 localFileId = 0, const StringView& targetId = StringView::Empty,
+        const ArtifactKey& artifact = ArtifactKey());
+    void RestoreUndo();
 
 public:
     AssetDatabaseTransaction() = default;

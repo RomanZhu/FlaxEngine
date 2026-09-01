@@ -463,6 +463,8 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
     transaction._state.Database.CleanShutdown = false;
     if (transaction._state.Validate(diagnostic))
     {
+        transaction.RestoreUndo();
+        transaction._state.Database.CurrentRevision = transaction._baseRevision;
         _state = MoveTemp(transaction._state);
         _transactionActive = false;
         transaction._owner = nullptr;
@@ -478,6 +480,8 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
         _walLastRevision, record, diagnostic))
     {
         _recoveryRequired = true;
+        transaction.RestoreUndo();
+        transaction._state.Database.CurrentRevision = transaction._baseRevision;
         _state = MoveTemp(transaction._state);
         _transactionActive = false;
         transaction._owner = nullptr;
@@ -487,6 +491,8 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
     if (_journal.Append(transaction._changes, diagnostic))
     {
         _recoveryRequired = true;
+        transaction.RestoreUndo();
+        transaction._state.Database.CurrentRevision = transaction._baseRevision;
         _state = MoveTemp(transaction._state);
         _transactionActive = false;
         transaction._owner = nullptr;

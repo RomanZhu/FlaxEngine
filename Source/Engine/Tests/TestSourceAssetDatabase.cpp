@@ -446,6 +446,55 @@ TEST_CASE("Source asset database admits one writer and recovers a torn journal t
     CHECK(changes[0].Revision == 1);
 }
 
+TEST_CASE("Source asset database restores affected rows after rollback and failed validation")
+{
+    const String library = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseUndo-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(library, true); };
+    AssetPipelineDiagnostic diagnostic;
+    SourceAssetDatabase database;
+    REQUIRE_FALSE(database.Open(library, Guid::New(), diagnostic));
+
+    const Guid firstId(41, 42, 43, 44);
+    std::unique_ptr<AssetDatabaseTransaction> seed = database.BeginTransaction();
+    REQUIRE(seed);
+    seed->UpsertSource(MakeSource(firstId, TEXT("Content/First.png")));
+    REQUIRE_FALSE(seed->Commit(diagnostic));
+    REQUIRE(database.GetRevision() == 1);
+    Array<byte> expected;
+    database.Read().GetState().Serialize(expected);
+
+    std::unique_ptr<AssetDatabaseTransaction> rolledBack = database.BeginTransaction();
+    REQUIRE(rolledBack);
+    rolledBack->UpsertSource(MakeSource(firstId, TEXT("Content/Renamed.png")));
+    rolledBack->Rollback();
+    Array<byte> afterRollback;
+    database.Read().GetState().Serialize(afterRollback);
+    CHECK(afterRollback == expected);
+    CHECK(database.GetRevision() == 1);
+
+    std::unique_ptr<AssetDatabaseTransaction> invalid = database.BeginTransaction();
+    REQUIRE(invalid);
+    invalid->UpsertSource(MakeSource(firstId, StringView::Empty));
+    CHECK(invalid->Commit(diagnostic));
+    CHECK(database.GetRevision() == 1);
+    Array<byte> afterFailure;
+    database.Read().GetState().Serialize(afterFailure);
+    CHECK(afterFailure == expected);
+
+    const Guid secondId(51, 52, 53, 54);
+    std::unique_ptr<AssetDatabaseTransaction> valid = database.BeginTransaction();
+    REQUIRE(valid);
+    valid->UpsertSource(MakeSource(secondId, TEXT("Content/Second.png")));
+    REQUIRE_FALSE(valid->Commit(diagnostic));
+    CHECK(database.GetRevision() == 2);
+    SourceAssetRow source;
+    REQUIRE(database.Read().TryGetSource(firstId, source));
+    CHECK(source.Path == TEXT("Content/First.png"));
+    REQUIRE(database.Read().TryGetSource(secondId, source));
+    CHECK(source.Path == TEXT("Content/Second.png"));
+}
+
 TEST_CASE("Source asset database object replacement prunes related rows and replays incrementally")
 {
     const String root = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseObjectPrune-") + Guid::New().ToString(Guid::FormatType::N));

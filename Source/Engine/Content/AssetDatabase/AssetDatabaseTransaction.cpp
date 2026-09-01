@@ -39,6 +39,120 @@ AssetDatabaseTransaction::AssetDatabaseTransaction(SourceAssetDatabase* owner, S
 {
 }
 
+AssetDatabaseUndoEntry& AssetDatabaseTransaction::CaptureUndo(AssetDatabaseMutationKind kind, const Guid& key,
+    int64 localFileId, const StringView& targetId, const ArtifactKey& artifact)
+{
+    AssetDatabaseUndoEntry entry;
+    entry.Kind = kind;
+    entry.Key = key;
+    entry.LocalFileId = localFileId;
+    entry.TargetId = targetId;
+    entry.Artifact = artifact;
+    _undo.Add(MoveTemp(entry));
+    return _undo.Last();
+}
+
+void AssetDatabaseTransaction::RestoreUndo()
+{
+    for (int32 i = _undo.Count() - 1; i >= 0; i--)
+    {
+        AssetDatabaseUndoEntry& undo = _undo[i];
+        const SourceAssetDatabaseState& before = undo.Before;
+        switch (undo.Kind)
+        {
+        case AssetDatabaseMutationKind::SetLastCompleteScanId:
+            _state.Database.LastCompleteScanId = undo.Value;
+            break;
+        case AssetDatabaseMutationKind::SetImporterRegistryGeneration:
+            _state.Database.ImporterRegistryGeneration = undo.Value;
+            break;
+        case AssetDatabaseMutationKind::UpsertSource:
+            RemoveRows(_state.Sources, [&](const SourceAssetRow& row) { return row.AssetGuid == undo.Key; });
+            _state.Sources.Add(before.Sources);
+            break;
+        case AssetDatabaseMutationKind::RemoveSource:
+            RemoveRows(_state.Sources, [&](const SourceAssetRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.Objects, [&](const SourceAssetObjectRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.Dependencies, [&](const SourceAssetDependencyRow& row) { return row.OwnerAssetGuid == undo.Key || row.TargetAssetGuid == undo.Key; });
+            RemoveRows(_state.Publications, [&](const SourceAssetPublicationRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.Diagnostics, [&](const SourceAssetDiagnosticRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.ArtifactObjects, [&](const SourceArtifactObjectRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.Labels, [&](const SourceAssetLabelRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.ImportAttempts, [&](const SourceImportAttemptRow& row) { return row.AssetGuid == undo.Key; });
+            _state.Sources.Add(before.Sources);
+            _state.Objects.Add(before.Objects);
+            _state.Dependencies.Add(before.Dependencies);
+            _state.Publications.Add(before.Publications);
+            _state.Diagnostics.Add(before.Diagnostics);
+            _state.ArtifactObjects.Add(before.ArtifactObjects);
+            _state.Labels.Add(before.Labels);
+            _state.ImportAttempts.Add(before.ImportAttempts);
+            break;
+        case AssetDatabaseMutationKind::ReplaceObjects:
+            RemoveRows(_state.Objects, [&](const SourceAssetObjectRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.Dependencies, [&](const SourceAssetDependencyRow& row) { return row.OwnerAssetGuid == undo.Key || row.TargetAssetGuid == undo.Key; });
+            RemoveRows(_state.Publications, [&](const SourceAssetPublicationRow& row) { return row.AssetGuid == undo.Key; });
+            RemoveRows(_state.ArtifactObjects, [&](const SourceArtifactObjectRow& row) { return row.AssetGuid == undo.Key; });
+            _state.Objects.Add(before.Objects);
+            _state.Dependencies.Add(before.Dependencies);
+            _state.Publications.Add(before.Publications);
+            _state.ArtifactObjects.Add(before.ArtifactObjects);
+            break;
+        case AssetDatabaseMutationKind::ReplaceDependencies:
+            RemoveRows(_state.Dependencies, [&](const SourceAssetDependencyRow& row)
+            {
+                return row.OwnerAssetGuid == undo.Key && row.TargetId == undo.TargetId &&
+                    (undo.LocalFileId == 0 || row.OwnerLocalFileId == undo.LocalFileId);
+            });
+            _state.Dependencies.Add(before.Dependencies);
+            break;
+        case AssetDatabaseMutationKind::UpsertPublication:
+            RemoveRows(_state.Publications, [&](const SourceAssetPublicationRow& row)
+            {
+                return row.AssetGuid == undo.Key && row.LocalFileId == undo.LocalFileId && row.TargetId == undo.TargetId;
+            });
+            _state.Publications.Add(before.Publications);
+            break;
+        case AssetDatabaseMutationKind::ReplaceDiagnostics:
+            RemoveRows(_state.Diagnostics, [&](const SourceAssetDiagnosticRow& row) { return row.AssetGuid == undo.Key; });
+            _state.Diagnostics.Add(before.Diagnostics);
+            break;
+        case AssetDatabaseMutationKind::UpsertImportTarget:
+            RemoveRows(_state.ImportTargets, [&](const SourceAssetImportTargetRow& row) { return row.TargetId == undo.TargetId; });
+            _state.ImportTargets.Add(before.ImportTargets);
+            break;
+        case AssetDatabaseMutationKind::ReplaceArtifactObjects:
+            RemoveRows(_state.ArtifactObjects, [&](const SourceArtifactObjectRow& row) { return row.Artifact == undo.Artifact; });
+            _state.ArtifactObjects.Add(before.ArtifactObjects);
+            break;
+        case AssetDatabaseMutationKind::SetLabels:
+            RemoveRows(_state.Labels, [&](const SourceAssetLabelRow& row) { return row.AssetGuid == undo.Key; });
+            _state.Labels.Add(before.Labels);
+            break;
+        case AssetDatabaseMutationKind::AppendFileJournal:
+            _state.FileJournal.Resize(static_cast<int32>(undo.Value));
+            break;
+        case AssetDatabaseMutationKind::UpsertRefreshSession:
+            RemoveRows(_state.RefreshSessions, [&](const SourceRefreshSessionRow& row) { return row.RefreshId == undo.Key; });
+            _state.RefreshSessions.Add(before.RefreshSessions);
+            break;
+        case AssetDatabaseMutationKind::UpsertImportAttempt:
+            RemoveRows(_state.ImportAttempts, [&](const SourceImportAttemptRow& row) { return row.AttemptId == undo.Key; });
+            _state.ImportAttempts.Add(before.ImportAttempts);
+            break;
+        case AssetDatabaseMutationKind::UpsertCustomDependency:
+        case AssetDatabaseMutationKind::RemoveCustomDependency:
+            RemoveRows(_state.CustomDependencies, [&](const SourceCustomDependencyRow& row) { return row.DependencyName == undo.TargetId; });
+            _state.CustomDependencies.Add(before.CustomDependencies);
+            break;
+        case AssetDatabaseMutationKind::ReplaceSnapshot:
+            _state = MoveTemp(undo.Before);
+            break;
+        }
+    }
+    _undo.Clear();
+}
+
 uint64 AssetDatabaseTransaction::GetBaseRevision() const
 {
     return _baseRevision;
@@ -70,6 +184,8 @@ void AssetDatabaseTransaction::SetChangeContext(const Guid& refreshId, uint32 pa
 void AssetDatabaseTransaction::SetLastCompleteScanId(uint64 scanId)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::SetLastCompleteScanId);
+    undo.Value = _state.Database.LastCompleteScanId;
     _state.Database.LastCompleteScanId = scanId;
     RecordMutation(_mutations, AssetDatabaseMutationKind::SetLastCompleteScanId, nullptr, Guid::Empty, 0,
         StringView::Empty, ArtifactKey(), scanId);
@@ -78,6 +194,8 @@ void AssetDatabaseTransaction::SetLastCompleteScanId(uint64 scanId)
 void AssetDatabaseTransaction::SetImporterRegistryGeneration(uint64 generation)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::SetImporterRegistryGeneration);
+    undo.Value = _state.Database.ImporterRegistryGeneration;
     _state.Database.ImporterRegistryGeneration = generation;
     RecordMutation(_mutations, AssetDatabaseMutationKind::SetImporterRegistryGeneration, nullptr, Guid::Empty, 0,
         StringView::Empty, ArtifactKey(), generation);
@@ -86,6 +204,10 @@ void AssetDatabaseTransaction::SetImporterRegistryGeneration(uint64 generation)
 void AssetDatabaseTransaction::UpsertSource(const SourceAssetRow& source)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::UpsertSource, source.AssetGuid);
+    for (const SourceAssetRow& row : _state.Sources)
+        if (row.AssetGuid == source.AssetGuid)
+            undo.Before.Sources.Add(row);
     SourceAssetRow value = source;
     const uint64 revision = _baseRevision + 1;
     for (SourceAssetRow& current : _state.Sources)
@@ -128,6 +250,15 @@ void AssetDatabaseTransaction::UpsertSource(const SourceAssetRow& source)
 void AssetDatabaseTransaction::RemoveSource(const Guid& assetGuid)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::RemoveSource, assetGuid);
+    for (const SourceAssetRow& row : _state.Sources) if (row.AssetGuid == assetGuid) undo.Before.Sources.Add(row);
+    for (const SourceAssetObjectRow& row : _state.Objects) if (row.AssetGuid == assetGuid) undo.Before.Objects.Add(row);
+    for (const SourceAssetDependencyRow& row : _state.Dependencies) if (row.OwnerAssetGuid == assetGuid || row.TargetAssetGuid == assetGuid) undo.Before.Dependencies.Add(row);
+    for (const SourceAssetPublicationRow& row : _state.Publications) if (row.AssetGuid == assetGuid) undo.Before.Publications.Add(row);
+    for (const SourceAssetDiagnosticRow& row : _state.Diagnostics) if (row.AssetGuid == assetGuid) undo.Before.Diagnostics.Add(row);
+    for (const SourceArtifactObjectRow& row : _state.ArtifactObjects) if (row.AssetGuid == assetGuid) undo.Before.ArtifactObjects.Add(row);
+    for (const SourceAssetLabelRow& row : _state.Labels) if (row.AssetGuid == assetGuid) undo.Before.Labels.Add(row);
+    for (const SourceImportAttemptRow& row : _state.ImportAttempts) if (row.AssetGuid == assetGuid) undo.Before.ImportAttempts.Add(row);
     for (int32 i = 0; i < _state.Sources.Count(); i++)
     {
         if (_state.Sources[i].AssetGuid == assetGuid)
@@ -153,6 +284,11 @@ void AssetDatabaseTransaction::RemoveSource(const Guid& assetGuid)
 void AssetDatabaseTransaction::ReplaceObjects(const Guid& assetGuid, const Array<SourceAssetObjectRow>& objects)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceObjects, assetGuid);
+    for (const SourceAssetObjectRow& row : _state.Objects) if (row.AssetGuid == assetGuid) undo.Before.Objects.Add(row);
+    for (const SourceAssetDependencyRow& row : _state.Dependencies) if (row.OwnerAssetGuid == assetGuid || row.TargetAssetGuid == assetGuid) undo.Before.Dependencies.Add(row);
+    for (const SourceAssetPublicationRow& row : _state.Publications) if (row.AssetGuid == assetGuid) undo.Before.Publications.Add(row);
+    for (const SourceArtifactObjectRow& row : _state.ArtifactObjects) if (row.AssetGuid == assetGuid) undo.Before.ArtifactObjects.Add(row);
     Array<SourceAssetObjectRow> previous;
     for (const SourceAssetObjectRow& value : _state.Objects)
     {
@@ -229,6 +365,10 @@ void AssetDatabaseTransaction::ReplaceObjects(const Guid& assetGuid, const Array
 void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, const StringView& targetId, const Array<SourceAssetDependencyRow>& dependencies)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceDependencies, assetGuid, 0, targetId);
+    for (const SourceAssetDependencyRow& row : _state.Dependencies)
+        if (row.OwnerAssetGuid == assetGuid && row.TargetId == targetId)
+            undo.Before.Dependencies.Add(row);
     RemoveRows(_state.Dependencies, [&](const SourceAssetDependencyRow& value)
     {
         return value.OwnerAssetGuid == assetGuid && value.TargetId == targetId;
@@ -251,6 +391,10 @@ void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, int64 
     const Array<SourceAssetDependencyRow>& dependencies)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceDependencies, assetGuid, localFileId, targetId);
+    for (const SourceAssetDependencyRow& row : _state.Dependencies)
+        if (row.OwnerAssetGuid == assetGuid && row.OwnerLocalFileId == localFileId && row.TargetId == targetId)
+            undo.Before.Dependencies.Add(row);
     RemoveRows(_state.Dependencies, [&](const SourceAssetDependencyRow& value)
     {
         return value.OwnerAssetGuid == assetGuid && value.OwnerLocalFileId == localFileId && value.TargetId == targetId;
@@ -273,6 +417,11 @@ void AssetDatabaseTransaction::ReplaceDependencies(const Guid& assetGuid, int64 
 void AssetDatabaseTransaction::UpsertPublication(const SourceAssetPublicationRow& publication)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::UpsertPublication, publication.AssetGuid,
+        publication.LocalFileId, publication.TargetId);
+    for (const SourceAssetPublicationRow& row : _state.Publications)
+        if (row.AssetGuid == publication.AssetGuid && row.LocalFileId == publication.LocalFileId && row.TargetId == publication.TargetId)
+            undo.Before.Publications.Add(row);
     SourceAssetPublicationRow value = publication;
     for (SourceAssetPublicationRow& current : _state.Publications)
     {
@@ -300,6 +449,10 @@ void AssetDatabaseTransaction::UpsertPublication(const SourceAssetPublicationRow
 void AssetDatabaseTransaction::ReplaceDiagnostics(const Guid& assetGuid, const Array<SourceAssetDiagnosticRow>& diagnostics)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceDiagnostics, assetGuid);
+    for (const SourceAssetDiagnosticRow& row : _state.Diagnostics)
+        if (row.AssetGuid == assetGuid)
+            undo.Before.Diagnostics.Add(row);
     RemoveRows(_state.Diagnostics, [&](const SourceAssetDiagnosticRow& value) { return value.AssetGuid == assetGuid && value.IsActive; });
     uint32 activeCount = 0;
     uint64 nextDiagnosticId = 1;
@@ -329,6 +482,10 @@ void AssetDatabaseTransaction::ReplaceDiagnostics(const Guid& assetGuid, const A
 void AssetDatabaseTransaction::UpsertImportTarget(const SourceAssetImportTargetRow& target)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::UpsertImportTarget, Guid::Empty, 0, target.TargetId);
+    for (const SourceAssetImportTargetRow& row : _state.ImportTargets)
+        if (row.TargetId == target.TargetId)
+            undo.Before.ImportTargets.Add(row);
     for (SourceAssetImportTargetRow& current : _state.ImportTargets)
     {
         if (current.TargetId == target.TargetId)
@@ -351,6 +508,11 @@ void AssetDatabaseTransaction::UpsertImportTarget(const SourceAssetImportTargetR
 void AssetDatabaseTransaction::ReplaceArtifactObjects(const ArtifactKey& artifact, const Array<SourceArtifactObjectRow>& objects)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceArtifactObjects, Guid::Empty, 0,
+        StringView::Empty, artifact);
+    for (const SourceArtifactObjectRow& row : _state.ArtifactObjects)
+        if (row.Artifact == artifact)
+            undo.Before.ArtifactObjects.Add(row);
     RemoveRows(_state.ArtifactObjects, [&](const SourceArtifactObjectRow& value) { return value.Artifact == artifact; });
     SourceAssetDatabaseState payload;
     payload.Database = _state.Database;
@@ -367,6 +529,10 @@ void AssetDatabaseTransaction::ReplaceArtifactObjects(const ArtifactKey& artifac
 void AssetDatabaseTransaction::SetLabels(const Guid& assetGuid, const Array<String>& labels)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::SetLabels, assetGuid);
+    for (const SourceAssetLabelRow& row : _state.Labels)
+        if (row.AssetGuid == assetGuid)
+            undo.Before.Labels.Add(row);
     RemoveRows(_state.Labels, [&](const SourceAssetLabelRow& value) { return value.AssetGuid == assetGuid; });
     SourceAssetDatabaseState payload;
     payload.Database = _state.Database;
@@ -384,6 +550,8 @@ void AssetDatabaseTransaction::SetLabels(const Guid& assetGuid, const Array<Stri
 void AssetDatabaseTransaction::AppendFileJournal(const SourceFileJournalRow& entry)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::AppendFileJournal);
+    undo.Value = _state.FileJournal.Count();
     SourceFileJournalRow value = entry;
     if (value.Sequence == 0)
         value.Sequence = _state.FileJournal.HasItems() ? _state.FileJournal.Last().Sequence + 1 : 1;
@@ -397,6 +565,10 @@ void AssetDatabaseTransaction::AppendFileJournal(const SourceFileJournalRow& ent
 void AssetDatabaseTransaction::UpsertRefreshSession(const SourceRefreshSessionRow& session)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::UpsertRefreshSession, session.RefreshId);
+    for (const SourceRefreshSessionRow& row : _state.RefreshSessions)
+        if (row.RefreshId == session.RefreshId)
+            undo.Before.RefreshSessions.Add(row);
     for (SourceRefreshSessionRow& current : _state.RefreshSessions)
     {
         if (current.RefreshId == session.RefreshId)
@@ -419,6 +591,10 @@ void AssetDatabaseTransaction::UpsertRefreshSession(const SourceRefreshSessionRo
 void AssetDatabaseTransaction::UpsertImportAttempt(const SourceImportAttemptRow& attempt)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::UpsertImportAttempt, attempt.AttemptId);
+    for (const SourceImportAttemptRow& row : _state.ImportAttempts)
+        if (row.AttemptId == attempt.AttemptId)
+            undo.Before.ImportAttempts.Add(row);
     for (SourceImportAttemptRow& current : _state.ImportAttempts)
     {
         if (current.AttemptId == attempt.AttemptId)
@@ -441,6 +617,11 @@ void AssetDatabaseTransaction::UpsertImportAttempt(const SourceImportAttemptRow&
 void AssetDatabaseTransaction::UpsertCustomDependency(const SourceCustomDependencyRow& dependency)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::UpsertCustomDependency, Guid::Empty, 0,
+        dependency.DependencyName);
+    for (const SourceCustomDependencyRow& row : _state.CustomDependencies)
+        if (row.DependencyName == dependency.DependencyName)
+            undo.Before.CustomDependencies.Add(row);
     SourceCustomDependencyRow value = dependency;
     if (value.ModifiedRevision == 0)
         value.ModifiedRevision = _baseRevision + 1;
@@ -468,6 +649,11 @@ void AssetDatabaseTransaction::UpsertCustomDependency(const SourceCustomDependen
 void AssetDatabaseTransaction::RemoveCustomDependency(const StringView& dependencyName)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::RemoveCustomDependency, Guid::Empty, 0,
+        dependencyName);
+    for (const SourceCustomDependencyRow& row : _state.CustomDependencies)
+        if (row.DependencyName == dependencyName)
+            undo.Before.CustomDependencies.Add(row);
     RemoveRows(_state.CustomDependencies, [&](const SourceCustomDependencyRow& value)
     {
         return value.DependencyName == dependencyName;
@@ -478,6 +664,8 @@ void AssetDatabaseTransaction::RemoveCustomDependency(const StringView& dependen
 void AssetDatabaseTransaction::ReplaceSnapshot(SourceAssetDatabaseState&& state, AssetChangeSet&& changes)
 {
     ASSERT(!_completed);
+    AssetDatabaseUndoEntry& undo = CaptureUndo(AssetDatabaseMutationKind::ReplaceSnapshot);
+    undo.Before = MoveTemp(_state);
     state.Database.CurrentRevision = _baseRevision + 1;
     state.Database.CleanShutdown = false;
     _state = MoveTemp(state);
@@ -505,7 +693,10 @@ bool AssetDatabaseTransaction::Commit(AssetPipelineDiagnostic& diagnostic)
 void AssetDatabaseTransaction::Rollback()
 {
     if (_owner && !_completed)
+    {
+        RestoreUndo();
         _owner->Rollback(*this);
+    }
     _completed = true;
     _owner = nullptr;
 }
