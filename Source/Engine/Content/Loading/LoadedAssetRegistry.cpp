@@ -62,10 +62,13 @@ LoadedAssetAcquireResult LoadedAssetRegistry::AcquireLoad(const Guid& object, Lo
         _locker.Unlock();
         return LoadedAssetAcquireResult::Joined;
     }
-    if (entry->Record.State == LoadedAssetState::Loaded)
+    if (entry->Record.State == LoadedAssetState::Loaded ||
+        entry->Record.State == LoadedAssetState::Failed || entry->Record.State == LoadedAssetState::Deleted)
     {
         record = entry->Record;
-        diagnostic = AssetPipelineDiagnostic();
+        diagnostic = record.State == LoadedAssetState::Loaded
+            ? AssetPipelineDiagnostic()
+            : record.Diagnostic;
         _locker.Unlock();
         return LoadedAssetAcquireResult::Ready;
     }
@@ -105,6 +108,11 @@ bool LoadedAssetRegistry::CompleteLoad(const LoadedAssetLoadTicket& ticket, void
         entry->Record.Revision = revision;
         entry->Record.Dependencies = dependencies;
         entry->Record.Diagnostic = AssetPipelineDiagnostic();
+        entry->Record.StaleInstance = nullptr;
+        entry->Record.StaleTypeName.Clear();
+        entry->Record.StaleContent = ContentHash();
+        entry->Record.StaleRevision = 0;
+        entry->Record.StaleDependencies.Clear();
     }
     else
     {
@@ -137,7 +145,8 @@ bool LoadedAssetRegistry::Remove(const Guid& object, void* instance)
 {
     ScopeLock lock(_locker);
     Entry** entry = _entries.TryGet(object);
-    if (!entry || (*entry)->Record.State == LoadedAssetState::Loading || (*entry)->Record.Instance != instance)
+    if (!entry || (*entry)->Record.State == LoadedAssetState::Loading ||
+        ((*entry)->Record.Instance != instance && (*entry)->Record.StaleInstance != instance))
         return true;
     Delete(*entry);
     _entries.Remove(object);
@@ -149,10 +158,11 @@ bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& repl
 {
     Array<Guid> removals;
     Array<LoadedAssetInvalidation> invalidations;
-    return PublishBatch(replacements, removals, swaps, invalidations, diagnostic);
+    return PublishBatch(replacements, removals, false, swaps, invalidations, diagnostic);
 }
 
 bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& replacements, const Array<Guid>& removals,
+    bool retainStale,
     Array<LoadedAssetSwap>& swaps, Array<LoadedAssetInvalidation>& invalidations,
     AssetPipelineDiagnostic& diagnostic)
 {
@@ -169,7 +179,8 @@ bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& repl
         Entry** entry = _entries.TryGet(replacement.Object);
         if (!replacement.Object.IsValid() || !replacement.Instance || replacement.TypeName.IsEmpty() ||
             replacement.Content.IsZero() || replacement.Revision == 0 ||
-            !objects.Add(replacement.Object) || !entry || (*entry)->Record.State != LoadedAssetState::Loaded)
+            !objects.Add(replacement.Object) || !entry ||
+            ((*entry)->Record.State != LoadedAssetState::Loaded && (*entry)->Record.State != LoadedAssetState::Failed))
         {
             _locker.Unlock();
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, replacement.Object,
@@ -199,10 +210,11 @@ bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& repl
         Entry* entry = *_entries.TryGet(replacement.Object);
         LoadedAssetSwap swap;
         swap.Object = replacement.Object;
-        swap.PreviousInstance = entry->Record.Instance;
-        swap.PreviousTypeName = entry->Record.TypeName;
-        swap.PreviousContent = entry->Record.Content;
-        swap.PreviousRevision = entry->Record.Revision;
+        const bool wasFailed = entry->Record.State == LoadedAssetState::Failed;
+        swap.PreviousInstance = wasFailed ? entry->Record.StaleInstance : entry->Record.Instance;
+        swap.PreviousTypeName = wasFailed ? entry->Record.StaleTypeName : entry->Record.TypeName;
+        swap.PreviousContent = wasFailed ? entry->Record.StaleContent : entry->Record.Content;
+        swap.PreviousRevision = wasFailed ? entry->Record.StaleRevision : entry->Record.Revision;
         swap.Instance = replacement.Instance;
         swap.TypeName = replacement.TypeName;
         swap.Content = replacement.Content;
@@ -214,6 +226,12 @@ bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& repl
         entry->Record.Revision = replacement.Revision;
         entry->Record.Dependencies = replacement.Dependencies;
         entry->Record.Diagnostic = AssetPipelineDiagnostic();
+        entry->Record.State = LoadedAssetState::Loaded;
+        entry->Record.StaleInstance = nullptr;
+        entry->Record.StaleTypeName.Clear();
+        entry->Record.StaleContent = ContentHash();
+        entry->Record.StaleRevision = 0;
+        entry->Record.StaleDependencies.Clear();
     }
     invalidations.EnsureCapacity(removals.Count());
     for (const Guid& removal : removals)
@@ -225,11 +243,83 @@ bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& repl
         invalidation.PreviousTypeName = entry->Record.TypeName;
         invalidation.PreviousContent = entry->Record.Content;
         invalidation.PreviousRevision = entry->Record.Revision;
+        invalidation.State = LoadedAssetState::Deleted;
+        invalidation.Diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        invalidation.Diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+        invalidation.Diagnostic.AssetGuid = removal;
+        invalidation.Diagnostic.Message = TEXT("Asset object was removed from the published source inventory.");
+        entry->Record.Diagnostic = invalidation.Diagnostic;
         invalidations.Add(MoveTemp(invalidation));
-        Delete(entry);
-        _entries.Remove(removal);
+        entry->Record.StaleInstance = retainStale ? entry->Record.Instance : nullptr;
+        entry->Record.StaleTypeName = retainStale ? entry->Record.TypeName : StringAnsi();
+        entry->Record.StaleContent = retainStale ? entry->Record.Content : ContentHash();
+        entry->Record.StaleRevision = retainStale ? entry->Record.Revision : 0;
+        entry->Record.StaleDependencies = retainStale ? entry->Record.Dependencies : Array<Guid>();
+        entry->Record.State = LoadedAssetState::Deleted;
+        entry->Record.Instance = nullptr;
+        entry->Record.TypeName.Clear();
+        entry->Record.Content = ContentHash();
+        entry->Record.Revision = 0;
+        entry->Record.Dependencies.Clear();
     }
     diagnostic = AssetPipelineDiagnostic();
+    _locker.Unlock();
+    return false;
+}
+
+bool LoadedAssetRegistry::TransitionBatch(const Array<LoadedAssetTransition>& transitions, bool retainStale,
+    Array<LoadedAssetInvalidation>& invalidations, AssetPipelineDiagnostic& diagnostic)
+{
+    invalidations.Clear();
+    if (transitions.IsEmpty())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
+            TEXT("Asset state transition batch cannot be empty."));
+
+    _locker.Lock();
+    HashSet<Guid> objects;
+    for (const LoadedAssetTransition& transition : transitions)
+    {
+        Entry** entry = _entries.TryGet(transition.Object);
+        if (!transition.Object.IsValid() ||
+            (transition.State != LoadedAssetState::Failed && transition.State != LoadedAssetState::Deleted) ||
+            transition.Diagnostic.Code == AssetPipelineDiagnosticCode::None || !objects.Add(transition.Object) ||
+            !entry || (*entry)->Record.State != LoadedAssetState::Loaded)
+        {
+            _locker.Unlock();
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, transition.Object,
+                TEXT("Asset state transition requires one unique, currently loaded object and a failure diagnostic."));
+        }
+    }
+
+    invalidations.EnsureCapacity(transitions.Count());
+    for (const LoadedAssetTransition& transition : transitions)
+    {
+        Entry* entry = *_entries.TryGet(transition.Object);
+        LoadedAssetInvalidation invalidation;
+        invalidation.Object = transition.Object;
+        invalidation.PreviousInstance = entry->Record.Instance;
+        invalidation.PreviousTypeName = entry->Record.TypeName;
+        invalidation.PreviousContent = entry->Record.Content;
+        invalidation.PreviousRevision = entry->Record.Revision;
+        invalidation.State = transition.State;
+        invalidation.Diagnostic = transition.Diagnostic;
+        invalidations.Add(MoveTemp(invalidation));
+
+        entry->Record.StaleInstance = retainStale ? entry->Record.Instance : nullptr;
+        entry->Record.StaleTypeName = retainStale ? entry->Record.TypeName : StringAnsi();
+        entry->Record.StaleContent = retainStale ? entry->Record.Content : ContentHash();
+        entry->Record.StaleRevision = retainStale ? entry->Record.Revision : 0;
+        entry->Record.StaleDependencies = retainStale ? entry->Record.Dependencies : Array<Guid>();
+        entry->Record.State = transition.State;
+        entry->Record.Instance = nullptr;
+        entry->Record.TypeName.Clear();
+        entry->Record.Content = ContentHash();
+        entry->Record.Revision = 0;
+        entry->Record.Dependencies.Clear();
+        entry->Record.Diagnostic = transition.Diagnostic;
+    }
+    diagnostic = AssetPipelineDiagnostic();
+    _changed.NotifyAll();
     _locker.Unlock();
     return false;
 }

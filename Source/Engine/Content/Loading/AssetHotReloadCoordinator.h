@@ -54,6 +54,8 @@ private:
 
     static bool BuildNotificationOrder(const Array<LoadedAssetReplacement>& replacements, Array<int32>& order,
         AssetPipelineDiagnostic& diagnostic);
+    bool TransitionUnavailable(const Array<Guid>& objects, LoadedAssetState directState,
+        const AssetPipelineDiagnostic& cause, AssetPipelineDiagnostic& diagnostic);
 
 public:
     AssetHotReloadCoordinator(LoadedAssetRegistry& registry, AssetObjectLoader& loader,
@@ -70,4 +72,11 @@ public:
 
     /// <summary>Applies a published inventory change, preserving retained GUIDs and precisely reloading loaded dependents.</summary>
     bool ReloadInventory(const AssetObjectInventoryChange& change, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Marks failed outputs and their exact loaded dependents unavailable as current data.</summary>
+    bool HandleImportFailure(const Array<Guid>& objects, const AssetPipelineDiagnostic& failure,
+        AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Marks deleted source objects deleted and their exact loaded dependents failed.</summary>
+    bool HandleSourceDeletion(const Array<Guid>& objects, AssetPipelineDiagnostic& diagnostic);
 };

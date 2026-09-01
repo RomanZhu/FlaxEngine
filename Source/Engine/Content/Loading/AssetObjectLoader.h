@@ -142,4 +142,10 @@ public:
         AssetPipelineDiagnostic& diagnostic);
 
     void DiscardInstance(void* instance);
+
+    /// <summary>True when explicitly stale last-good instances may remain visible to Editor tooling.</summary>
+    bool AllowsStaleContinuity() const
+    {
+        return _mode == AssetObjectLoadMode::Editor;
+    }
 };

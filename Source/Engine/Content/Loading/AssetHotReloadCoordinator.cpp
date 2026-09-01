@@ -90,6 +90,174 @@ bool AssetHotReloadCoordinator::BuildNotificationOrder(const Array<LoadedAssetRe
     return false;
 }
 
+bool AssetHotReloadCoordinator::TransitionUnavailable(const Array<Guid>& objects, LoadedAssetState directState,
+    const AssetPipelineDiagnostic& cause, AssetPipelineDiagnostic& diagnostic)
+{
+    if (objects.IsEmpty() || (directState != LoadedAssetState::Failed && directState != LoadedAssetState::Deleted))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
+            TEXT("Asset unavailability transition requires at least one failed or deleted object."));
+
+    HashSet<Guid> direct;
+    for (const Guid& object : objects)
+    {
+        if (!object.IsValid() || !direct.Add(object))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, object,
+                TEXT("Asset unavailability transition contains an invalid or duplicate object GUID."));
+    }
+    if (directState == LoadedAssetState::Failed && cause.Code == AssetPipelineDiagnosticCode::None)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
+            TEXT("Asset import failure transition requires a structured failure diagnostic."));
+
+    Array<LoadedAssetRecord> loaded;
+    _registry.GetLoadedRecords(loaded);
+    HashSet<Guid> affected;
+    for (const Guid& object : objects)
+        affected.Add(object);
+    bool addedDependent = true;
+    while (addedDependent)
+    {
+        addedDependent = false;
+        for (const LoadedAssetRecord& record : loaded)
+        {
+            if (affected.Contains(record.Object))
+                continue;
+            for (const Guid& dependency : record.Dependencies)
+            {
+                if (affected.Contains(dependency))
+                {
+                    affected.Add(record.Object);
+                    addedDependent = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    Array<int32> canonical;
+    for (int32 i = 0; i < loaded.Count(); i++)
+    {
+        if (affected.Contains(loaded[i].Object))
+            canonical.Add(i);
+    }
+    if (canonical.IsEmpty())
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+    if (canonical.Count() > 1)
+    {
+        std::sort(canonical.Get(), canonical.Get() + canonical.Count(), [&loaded](int32 a, int32 b)
+        {
+            return Less(loaded[a].Object, loaded[b].Object);
+        });
+    }
+
+    Array<byte> visitState;
+    visitState.Resize(loaded.Count());
+    Platform::MemoryClear(visitState.Get(), visitState.Count());
+    Array<int32> order;
+    std::function<void(int32)> visit = [&](int32 index)
+    {
+        if (visitState[index] == 2)
+            return;
+        if (visitState[index] == 1)
+            return;
+        visitState[index] = 1;
+        for (const Guid& dependency : loaded[index].Dependencies)
+        {
+            for (int32 candidate : canonical)
+            {
+                if (loaded[candidate].Object == dependency)
+                {
+                    visit(candidate);
+                    break;
+                }
+            }
+        }
+        visitState[index] = 2;
+        order.Add(index);
+    };
+    for (int32 index : canonical)
+        visit(index);
+
+    Array<LoadedAssetTransition> transitions;
+    transitions.EnsureCapacity(order.Count());
+    for (int32 index : order)
+    {
+        const LoadedAssetRecord& record = loaded[index];
+        LoadedAssetTransition transition;
+        transition.Object = record.Object;
+        transition.State = direct.Contains(record.Object) ? directState : LoadedAssetState::Failed;
+        if (transition.State == LoadedAssetState::Deleted)
+        {
+            transition.Diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+            transition.Diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+            transition.Diagnostic.AssetGuid = record.Object;
+            transition.Diagnostic.Message = TEXT("The source asset was deleted.");
+        }
+        else if (direct.Contains(record.Object))
+        {
+            transition.Diagnostic = cause;
+            transition.Diagnostic.AssetGuid = record.Object;
+        }
+        else
+        {
+            transition.Diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactRebuildRequired;
+            transition.Diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+            transition.Diagnostic.AssetGuid = record.Object;
+            transition.Diagnostic.Message = TEXT("A loaded asset dependency is unavailable.");
+            for (const Guid& dependency : record.Dependencies)
+            {
+                if (affected.Contains(dependency))
+                    transition.Diagnostic.Related.Add(dependency.ToString());
+            }
+        }
+        transitions.Add(MoveTemp(transition));
+    }
+
+    Array<LoadedAssetInvalidation> invalidations;
+    AssetPipelineDiagnostic transitionDiagnostic;
+    bool transitionFailed = false;
+    const bool dispatchFailed = _dispatcher.InvokeAndWait([&]()
+    {
+        transitionFailed = _registry.TransitionBatch(transitions, _loader.AllowsStaleContinuity(), invalidations,
+            transitionDiagnostic);
+        if (!transitionFailed)
+        {
+            for (const LoadedAssetInvalidation& invalidation : invalidations)
+                _listener.OnAssetObjectInvalidated(invalidation);
+            if (!_loader.AllowsStaleContinuity())
+            {
+                for (const LoadedAssetInvalidation& invalidation : invalidations)
+                    _loader.DiscardInstance(invalidation.PreviousInstance);
+            }
+        }
+    });
+    if (dispatchFailed)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
+            TEXT("Asset state transition could not run on the main thread."));
+    if (transitionFailed)
+    {
+        diagnostic = transitionDiagnostic;
+        return true;
+    }
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool AssetHotReloadCoordinator::HandleImportFailure(const Array<Guid>& objects,
+    const AssetPipelineDiagnostic& failure, AssetPipelineDiagnostic& diagnostic)
+{
+    return TransitionUnavailable(objects, LoadedAssetState::Failed, failure, diagnostic);
+}
+
+bool AssetHotReloadCoordinator::HandleSourceDeletion(const Array<Guid>& objects,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    const AssetPipelineDiagnostic cause;
+    return TransitionUnavailable(objects, LoadedAssetState::Deleted, cause, diagnostic);
+}
+
 bool AssetHotReloadCoordinator::Reload(const Array<AssetObjectRevision>& changes,
     AssetPipelineDiagnostic& diagnostic)
 {
@@ -310,7 +478,8 @@ bool AssetHotReloadCoordinator::ReloadInventory(const AssetObjectInventoryChange
     bool publicationFailed = false;
     const bool dispatchFailed = _dispatcher.InvokeAndWait([&]()
     {
-        publicationFailed = _registry.PublishBatch(replacements, loadedRemovals, swaps, invalidations,
+        publicationFailed = _registry.PublishBatch(replacements, loadedRemovals, _loader.AllowsStaleContinuity(),
+            swaps, invalidations,
             publicationDiagnostic);
         if (publicationFailed)
             return;
@@ -327,8 +496,11 @@ bool AssetHotReloadCoordinator::ReloadInventory(const AssetObjectInventoryChange
                 }
             }
         }
-        for (const LoadedAssetInvalidation& invalidation : invalidations)
-            _loader.DiscardInstance(invalidation.PreviousInstance);
+        if (!_loader.AllowsStaleContinuity())
+        {
+            for (const LoadedAssetInvalidation& invalidation : invalidations)
+                _loader.DiscardInstance(invalidation.PreviousInstance);
+        }
         for (const LoadedAssetSwap& swap : swaps)
             _loader.DiscardInstance(swap.PreviousInstance);
     });

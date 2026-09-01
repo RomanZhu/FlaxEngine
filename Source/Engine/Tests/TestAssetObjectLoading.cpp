@@ -154,6 +154,8 @@ namespace
         Array<ContentHash> Contents;
         Array<LoadedAssetRecord> PublishedRecords;
         Array<Guid> InvalidatedObjects;
+        Array<LoadedAssetState> InvalidatedStates;
+        Array<AssetPipelineDiagnostic> InvalidationDiagnostics;
         bool ObserveAtomicInventory = false;
         Array<Guid> ExpectedPublishedObjects;
 
@@ -177,10 +179,15 @@ namespace
         void OnAssetObjectInvalidated(const LoadedAssetInvalidation& invalidation) override
         {
             InvalidatedObjects.Add(invalidation.Object);
+            InvalidatedStates.Add(invalidation.State);
+            InvalidationDiagnostics.Add(invalidation.Diagnostic);
             if (Registry && ObserveAtomicInventory)
             {
                 LoadedAssetRecord record;
-                CHECK_FALSE(Registry->TryGet(invalidation.Object, record));
+                REQUIRE(Registry->TryGet(invalidation.Object, record));
+                CHECK(record.State == LoadedAssetState::Deleted);
+                CHECK(record.Instance == nullptr);
+                CHECK(record.StaleInstance == invalidation.PreviousInstance);
                 for (const Guid& object : ExpectedPublishedObjects)
                 {
                     REQUIRE(Registry->TryGet(object, record));
@@ -523,7 +530,10 @@ TEST_CASE("Hot reload publishes subasset removal and main-object changes atomica
     CHECK(listener.InvalidatedObjects[0] == removed);
     CHECK(listener.Objects.Count() == 3);
     LoadedAssetRecord record;
-    CHECK_FALSE(registry.TryGet(removed, record));
+    REQUIRE(registry.TryGet(removed, record));
+    CHECK(record.State == LoadedAssetState::Deleted);
+    CHECK(record.Instance == nullptr);
+    CHECK(record.StaleInstance != nullptr);
     CHECK_FALSE(registry.TryGet(added, record));
     REQUIRE(registry.TryGet(retained, record));
     CHECK(record.Instance == retainedInstance);
@@ -531,5 +541,137 @@ TEST_CASE("Hot reload publishes subasset removal and main-object changes atomica
     REQUIRE(registry.TryGet(dependent, record));
     CHECK(record.Revision == 2);
     CHECK(dispatcher.Calls == 1);
-    CHECK(factory.Destroys.load() == 4);
+    CHECK(factory.Destroys.load() == 3);
+}
+
+TEST_CASE("Import failure is current and last-good loaded data is explicitly stale")
+{
+    const Guid failed(112, 0, 0, 1);
+    const Guid dependent(112, 0, 0, 2);
+    const Guid unrelated(112, 0, 0, 3);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    resolver.Set(TestLocation(failed, 1));
+    AssetObjectLoadLocation dependentLocation = TestLocation(dependent, 1);
+    dependentLocation.Dependencies.Add(failed);
+    resolver.Set(dependentLocation);
+    resolver.Set(TestLocation(unrelated, 1));
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetPipelineDiagnostic diagnostic;
+    AssetObjectLoadResult loaded;
+    REQUIRE_FALSE(loader.Load(failed, loaded, diagnostic));
+    void* failedLastGood = loaded.Instance;
+    REQUIRE_FALSE(loader.Load(dependent, loaded, diagnostic));
+    void* dependentLastGood = loaded.Instance;
+    REQUIRE_FALSE(loader.Load(unrelated, loaded, diagnostic));
+
+    TestMainThreadDispatcher dispatcher;
+    TestReloadListener listener;
+    listener.Registry = &registry;
+    AssetHotReloadCoordinator coordinator(registry, loader, dispatcher, listener);
+    AssetPipelineDiagnostic importFailure;
+    importFailure.Code = AssetPipelineDiagnosticCode::BuildFailed;
+    importFailure.Stage = AssetPipelineDiagnosticStage::Build;
+    importFailure.Message = TEXT("Injected import failure.");
+    Array<Guid> failedObjects;
+    failedObjects.Add(failed);
+    REQUIRE_FALSE(coordinator.HandleImportFailure(failedObjects, importFailure, diagnostic));
+
+    REQUIRE(listener.InvalidatedObjects.Count() == 2);
+    CHECK(listener.InvalidatedObjects[0] == failed);
+    CHECK(listener.InvalidatedObjects[1] == dependent);
+    CHECK(listener.InvalidatedStates[0] == LoadedAssetState::Failed);
+    CHECK(listener.InvalidatedStates[1] == LoadedAssetState::Failed);
+    LoadedAssetRecord record;
+    REQUIRE(registry.TryGet(failed, record));
+    CHECK(record.State == LoadedAssetState::Failed);
+    CHECK(record.Instance == nullptr);
+    CHECK(record.StaleInstance == failedLastGood);
+    CHECK(record.StaleRevision == 1);
+    CHECK(record.Diagnostic.Code == AssetPipelineDiagnosticCode::BuildFailed);
+    REQUIRE(registry.TryGet(dependent, record));
+    CHECK(record.State == LoadedAssetState::Failed);
+    CHECK(record.Instance == nullptr);
+    CHECK(record.StaleInstance == dependentLastGood);
+    CHECK(record.Diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactRebuildRequired);
+    REQUIRE(record.Diagnostic.Related.Count() == 1);
+    CHECK(record.Diagnostic.Related[0] == failed.ToString());
+    REQUIRE(registry.TryGet(unrelated, record));
+    CHECK(record.State == LoadedAssetState::Loaded);
+
+    const int32 resolutionCalls = resolver.Calls.load();
+    CHECK(loader.Load(failed, loaded, diagnostic));
+    CHECK(loaded.Object == failed);
+    CHECK(loaded.State == LoadedAssetState::Failed);
+    CHECK(loaded.Instance == nullptr);
+    CHECK(resolver.Calls.load() == resolutionCalls);
+
+    resolver.Set(TestLocation(failed, 2));
+    dependentLocation.Revision = 2;
+    resolver.Set(dependentLocation);
+    Array<AssetObjectRevision> recovery;
+    recovery.Add({dependent, 2});
+    recovery.Add({failed, 2});
+    REQUIRE_FALSE(coordinator.Reload(recovery, diagnostic));
+    REQUIRE(registry.TryGet(failed, record));
+    CHECK(record.State == LoadedAssetState::Loaded);
+    CHECK(record.StaleInstance == nullptr);
+    REQUIRE(registry.TryGet(dependent, record));
+    CHECK(record.State == LoadedAssetState::Loaded);
+    CHECK(record.StaleInstance == nullptr);
+    CHECK(factory.Destroys.load() == 2);
+}
+
+TEST_CASE("Source deletion preserves unresolved GUIDs and fails only exact loaded dependents")
+{
+    const Guid deleted(113, 0, 0, 1);
+    const Guid dependent(113, 0, 0, 2);
+    const Guid unrelated(113, 0, 0, 3);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    resolver.Set(TestLocation(deleted, 1));
+    AssetObjectLoadLocation dependentLocation = TestLocation(dependent, 1);
+    dependentLocation.Dependencies.Add(deleted);
+    resolver.Set(dependentLocation);
+    resolver.Set(TestLocation(unrelated, 1));
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetPipelineDiagnostic diagnostic;
+    AssetObjectLoadResult loaded;
+    REQUIRE_FALSE(loader.Load(deleted, loaded, diagnostic));
+    void* deletedLastGood = loaded.Instance;
+    REQUIRE_FALSE(loader.Load(dependent, loaded, diagnostic));
+    REQUIRE_FALSE(loader.Load(unrelated, loaded, diagnostic));
+
+    TestMainThreadDispatcher dispatcher;
+    TestReloadListener listener;
+    listener.Registry = &registry;
+    AssetHotReloadCoordinator coordinator(registry, loader, dispatcher, listener);
+    Array<Guid> deletedObjects;
+    deletedObjects.Add(deleted);
+    REQUIRE_FALSE(coordinator.HandleSourceDeletion(deletedObjects, diagnostic));
+
+    REQUIRE(listener.InvalidatedObjects.Count() == 2);
+    CHECK(listener.InvalidatedObjects[0] == deleted);
+    CHECK(listener.InvalidatedObjects[1] == dependent);
+    CHECK(listener.InvalidatedStates[0] == LoadedAssetState::Deleted);
+    CHECK(listener.InvalidatedStates[1] == LoadedAssetState::Failed);
+    LoadedAssetRecord record;
+    REQUIRE(registry.TryGet(deleted, record));
+    CHECK(record.Object == deleted);
+    CHECK(record.State == LoadedAssetState::Deleted);
+    CHECK(record.Instance == nullptr);
+    CHECK(record.StaleInstance == deletedLastGood);
+    CHECK(record.Diagnostic.Code == AssetPipelineDiagnosticCode::SourceMissing);
+    REQUIRE(registry.TryGet(dependent, record));
+    CHECK(record.Object == dependent);
+    CHECK(record.State == LoadedAssetState::Failed);
+    CHECK(record.Instance == nullptr);
+    CHECK(record.Diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactRebuildRequired);
+    REQUIRE(record.Diagnostic.Related.Count() == 1);
+    CHECK(record.Diagnostic.Related[0] == deleted.ToString());
+    REQUIRE(registry.TryGet(unrelated, record));
+    CHECK(record.State == LoadedAssetState::Loaded);
+    CHECK(factory.Destroys.load() == 0);
 }

@@ -15,6 +15,8 @@ enum class LoadedAssetState : byte
     Unresolved,
     Loading,
     Loaded,
+    Failed,
+    Deleted,
 };
 
 /// <summary>Stable registry state for one exact asset object.</summary>
@@ -28,6 +30,12 @@ struct FLAXENGINE_API LoadedAssetRecord
     uint64 Revision = 0;
     Array<Guid> Dependencies;
     AssetPipelineDiagnostic Diagnostic;
+    /// <summary>Explicitly stale Editor continuity. Never represents the current object state.</summary>
+    void* StaleInstance = nullptr;
+    StringAnsi StaleTypeName;
+    ContentHash StaleContent;
+    uint64 StaleRevision = 0;
+    Array<Guid> StaleDependencies;
 };
 
 /// <summary>Opaque ownership token for one deduplicated load attempt.</summary>
@@ -78,6 +86,16 @@ struct FLAXENGINE_API LoadedAssetInvalidation
     StringAnsi PreviousTypeName;
     ContentHash PreviousContent;
     uint64 PreviousRevision = 0;
+    LoadedAssetState State = LoadedAssetState::Unresolved;
+    AssetPipelineDiagnostic Diagnostic;
+};
+
+/// <summary>A loaded object becoming unavailable as current data.</summary>
+struct FLAXENGINE_API LoadedAssetTransition
+{
+    Guid Object = Guid::Empty;
+    LoadedAssetState State = LoadedAssetState::Unresolved;
+    AssetPipelineDiagnostic Diagnostic;
 };
 
 /// <summary>Thread-safe object-level registry used to deduplicate loads and publish hot-reload swaps.</summary>
@@ -120,8 +138,13 @@ public:
     /// <summary>Atomically replaces retained objects and removes inventory entries.</summary>
     /// <returns>True on invalid, duplicate, missing, or stale inputs.</returns>
     bool PublishBatch(const Array<LoadedAssetReplacement>& replacements, const Array<Guid>& removals,
+        bool retainStale,
         Array<LoadedAssetSwap>& swaps, Array<LoadedAssetInvalidation>& invalidations,
         AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Atomically marks loaded objects failed or deleted while retaining only explicit stale continuity.</summary>
+    bool TransitionBatch(const Array<LoadedAssetTransition>& transitions, bool retainStale,
+        Array<LoadedAssetInvalidation>& invalidations, AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Copies all currently loaded records for dependency analysis.</summary>
     void GetLoadedRecords(Array<LoadedAssetRecord>& records) const;
