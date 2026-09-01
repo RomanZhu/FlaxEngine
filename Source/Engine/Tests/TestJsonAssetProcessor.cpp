@@ -6,6 +6,7 @@
 #include "Engine/Content/Build/PrepareAssetContext.h"
 #include "Engine/Content/Build/RuntimeDependencyClosure.h"
 #include "Engine/Core/ScopeExit.h"
+#include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
