@@ -446,8 +446,17 @@ bool SourceAssetDatabase::Commit(AssetDatabaseTransaction& transaction, AssetPip
     _locker.Lock();
     if (!_open || !_transactionActive || _recoveryRequired || transaction._owner != this || transaction._baseRevision != _revision)
     {
+        const Char* message = !_open
+            ? TEXT("Source asset database is closed during transaction commit.")
+            : !_transactionActive
+                ? TEXT("Source asset database transaction is no longer active during commit.")
+                : _recoveryRequired
+                    ? TEXT("Source asset database requires recovery before transaction commit.")
+                    : transaction._owner != this
+                        ? TEXT("Source asset database transaction belongs to another database.")
+                        : TEXT("Source asset database transaction conflicts with a newer revision.");
         _locker.Unlock();
-        return Fail(diagnostic, _manifestPath, TEXT("Source asset database transaction conflicts with a newer revision."));
+        return Fail(diagnostic, _manifestPath, message);
     }
     transaction._changes.Revision = transaction._baseRevision + 1;
     transaction._state.Database.CurrentRevision = transaction._changes.Revision;
