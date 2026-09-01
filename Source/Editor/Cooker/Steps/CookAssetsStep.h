@@ -36,9 +36,9 @@ public:
     struct FLAXENGINE_API CacheEntry
     {
         /// <summary>
-        /// The asset identifier.
+        /// The exact persistent asset object identifier.
         /// </summary>
-        Guid ID;
+        AssetObjectId ObjectID;
 
         /// <summary>
         /// The stored data full typename. Used to recognize asset type.
@@ -101,7 +101,7 @@ public:
             {
                 bool ShadersNoOptimize;
                 bool ShadersGenerateDebugData;
-                Guid StreamingSettingsAssetId;
+                AssetObjectId StreamingSettingsObject;
                 int32 ShadersVersion;
                 int32 MaterialGraphVersion;
                 int32 ParticleGraphVersion;
@@ -111,18 +111,19 @@ public:
         /// <summary>
         /// The cached entries.
         /// </summary>
-        Dictionary<Guid, CacheEntry> Entries;
+        Dictionary<AssetObjectId, CacheEntry> Entries;
 
     public:
 
         /// <summary>
         /// Gets the path to the asset of the given id (file may be missing).
         /// </summary>
-        /// <param name="id">The asset id.</param>
+        /// <param name="objectId">The exact persistent asset object id.</param>
         /// <param name="cachedFilePath">The cached file path to use for creating cache storage.</param>
-        void GetFilePath(const Guid& id, String& cachedFilePath) const
+        void GetFilePath(const AssetObjectId& objectId, String& cachedFilePath) const
         {
-            cachedFilePath = CacheFolder / id.ToString(Guid::FormatType::N);
+            cachedFilePath = CacheFolder / String::Format(TEXT("{0}_{1}"),
+                objectId.Asset.Value.ToString(Guid::FormatType::N), objectId.LocalId);
         }
 
         /// <summary>
