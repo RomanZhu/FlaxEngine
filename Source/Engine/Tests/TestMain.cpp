@@ -46,6 +46,14 @@ void TestsRunnerService::Update()
         return;
     }
 
+    // Headless test runs have no focused main window to trigger the normal auto-compile path.
+    // A generated project file notification can arrive just after startup compilation completes.
+    if (ScriptsBuilder::IsSourceDirty() && !ScriptsBuilder::IsCompiling())
+    {
+        ScriptsBuilder::CheckForCompile();
+        return;
+    }
+
     // Wait for Editor to be ready for running tests (eg. scripting loaded)
     if (!ScriptsBuilder::IsReady() ||
         !Scripting::IsEveryAssemblyLoaded() ||

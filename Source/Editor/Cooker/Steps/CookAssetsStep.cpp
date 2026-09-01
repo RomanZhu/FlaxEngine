@@ -1298,16 +1298,21 @@ bool CookAssetsStep::Perform(CookingData& data)
         e.Info.ID = assetId;
         e.Info.ObjectID = objectId;
 
-        // Converted imported sources are already target-processed compatibility assets. Resolve exact bytes and
-        // feed them directly to the existing package writer instead of cooking the host-editor artifact.
+        // Canonical sources are already target-processed artifacts. Resolve exact bytes and feed them
+        // directly to the existing package writer instead of cooking a host-editor object.
         const AssetRecord* const* canonicalRecordPtr = frozenRecords.TryGet(objectId);
         const bool foundCanonical = canonicalRecordPtr != nullptr;
         AssetRecord canonicalRecord;
         if (foundCanonical)
             canonicalRecord = **canonicalRecordPtr;
-        const bool hasGeneratedCanonicalRecord = foundCanonical && canonicalRecord.SourceKind != AssetSourceKind::Folder;
-        if (hasGeneratedCanonicalRecord)
+        if (foundCanonical)
         {
+            if (canonicalRecord.SourceKind == AssetSourceKind::Folder)
+            {
+                data.Error(String::Format(TEXT("Canonical folder object {0} cannot be included as a runtime asset."),
+                    objectId.ToString()));
+                return true;
+            }
             AssetRecord currentRecord;
             if (!AssetDatabase::Get().TryGetRecord(objectId, currentRecord) || currentRecord.Status != canonicalRecord.Status ||
                 !currentRecord.HasSameIdentityAndContent(canonicalRecord))
@@ -1324,7 +1329,7 @@ bool CookAssetsStep::Perform(CookingData& data)
             ResolvedArtifact artifact;
             AssetPipelineDiagnostic diagnostic;
             const bool resolveFailed = ArtifactResolver::Get().Resolve(request, artifact, diagnostic);
-            if (resolveFailed || !artifact.IsExact || !artifact.IsGenerated())
+            if (resolveFailed || !artifact.IsExact || artifact.IsLastGood || !artifact.IsGenerated())
             {
                 LOG(Error, "Failed to resolve exact canonical artifact {0} for cook target {1}: {2}", objectId.ToString(),
                     String(cookArtifactTarget.BuildKey(ArtifactTargetDimension::All).ToString()), diagnostic.Message);
@@ -1548,7 +1553,20 @@ bool CookAssetsStep::Perform(CookingData& data)
     for (auto i = data.Assets.Begin(); i.IsNotEnd(); ++i)
     {
         const bool isBuiltin = data.BuiltinRootAssets.Contains(i->Item);
-        if (isBuiltin ? Content::GetRuntimeAssetInfo(i->Item.ToRuntimeObjectGuid(), assetInfo) : Content::GetAssetInfo(i->Item, assetInfo))
+        const AssetRecord* const* frozen = frozenRecords.TryGet(i->Item);
+        bool hasAssetInfo;
+        if (frozen)
+        {
+            assetInfo = (**frozen).ToAssetInfo();
+            hasAssetInfo = true;
+        }
+        else
+        {
+            hasAssetInfo = isBuiltin
+                ? Content::GetRuntimeAssetInfo(i->Item.ToRuntimeObjectGuid(), assetInfo)
+                : Content::GetAssetInfo(i->Item, assetInfo);
+        }
+        if (hasAssetInfo)
         {
             // Use local path relative to the game dir (assets cache is converting them to absolute paths because RelativePaths flag is set)
             String localPath;
@@ -1709,6 +1727,11 @@ bool CookAssetsStep::Perform(CookingData& data)
         AssetBuildSnapshotArtifact snapshotArtifact;
         snapshotArtifact.Object = object;
         const ArtifactKey* pinnedArtifact = pinnedArtifactKeys.TryGet(object);
+        if (frozenRecords.ContainsKey(object) && !pinnedArtifact)
+        {
+            data.Error(String::Format(TEXT("Canonical runtime object {0} has no pinned exact target artifact."), object.ToString()));
+            return true;
+        }
         snapshotArtifact.Manifest = pinnedArtifact ? *pinnedArtifact : ArtifactKey(contentHash);
         snapshotArtifact.ObjectContent = contentHash;
         buildSnapshot.Artifacts.Add(MoveTemp(snapshotArtifact));
