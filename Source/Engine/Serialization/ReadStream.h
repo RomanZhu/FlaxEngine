@@ -132,7 +132,7 @@ public:
     {
         AssetObjectId id;
         Read(id);
-        data = (T*)::LoadRuntimeAsset(id, T::TypeInitializer);
+        data = (T*)::LoadAsset(id, T::TypeInitializer);
     }
 
     template<typename T>
