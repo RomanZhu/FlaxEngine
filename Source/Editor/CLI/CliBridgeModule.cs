@@ -298,7 +298,7 @@ namespace FlaxEditor
                     await pipe.WaitForConnectionAsync(_shutdown.Token).ConfigureAwait(false);
                     var connectedPipe = pipe;
                     pipe = null;
-                    _ = Task.Run(() => HandleConnection(connectedPipe), _shutdown.Token);
+                    _ = HandleConnectionSafely(connectedPipe);
                 }
                 catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
                 {
@@ -328,7 +328,7 @@ namespace FlaxEditor
                 while (!_shutdown.IsCancellationRequested)
                 {
                     var socket = await _unixListener.AcceptAsync(_shutdown.Token).ConfigureAwait(false);
-                    _ = Task.Run(() => HandleConnection(new NetworkStream(socket, true)), _shutdown.Token);
+                    _ = HandleConnectionSafely(new NetworkStream(socket, true));
                 }
             }
             catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
@@ -341,6 +341,30 @@ namespace FlaxEditor
             {
                 if (!_shutdown.IsCancellationRequested)
                     FlaxEditor.Editor.LogWarning("Flax CLI Unix-socket listener failed: " + ex.Message);
+            }
+        }
+
+        private async Task HandleConnectionSafely(Stream stream)
+        {
+            try
+            {
+                await HandleConnection(stream).ConfigureAwait(false);
+            }
+            catch (IOException)
+            {
+                // The client can disconnect after submitting a valid request.
+            }
+            catch (ObjectDisposedException)
+            {
+                // The bridge or client closed the transport while I/O was pending.
+            }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (!_shutdown.IsCancellationRequested)
+                    FlaxEditor.Editor.LogWarning("Flax CLI connection failed: " + ex.Message);
             }
         }
 

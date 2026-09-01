@@ -226,6 +226,10 @@ namespace FlaxEditor
             private bool _importCompleted;
             private bool _importFailed;
             private bool _cancelled;
+            private AssetVerification _pendingVerification;
+            private AssetItem _pendingVerificationItem;
+            private Asset _pendingVerificationAsset;
+            private bool _pendingVerificationIsAction;
 
             public AssetBatchOperation(CliCommandContext context, CliAssetOperationOptions[] operations, bool continueOnError, bool verifyReload, bool single)
             {
@@ -261,6 +265,12 @@ namespace FlaxEditor
                     return;
                 }
 
+                if (_pendingVerificationAsset != null)
+                {
+                    CompleteVerificationIfReady();
+                    return;
+                }
+
                 if (_index < _operations.Length)
                 {
                     ExecuteNext();
@@ -282,6 +292,9 @@ namespace FlaxEditor
                     return;
                 _cancelled = true;
                 DetachImportEvents();
+                _pendingVerification = null;
+                _pendingVerificationItem = null;
+                _pendingVerificationAsset = null;
             }
 
             private void ExecuteNext()
@@ -297,6 +310,7 @@ namespace FlaxEditor
                     case "list": data = ListAssets(operation); break;
                     case "types": data = ListAssetTypes(operation); break;
                     case "info": data = DescribeAsset(RequireItem(operation.Path)); break;
+                    case "select": data = SelectAsset(operation); break;
                     case "create": data = CreateAsset(operation); break;
                     case "mkdir": data = CreateFolder(operation); break;
                     case "import": BeginImport(operation, false); return;
@@ -309,7 +323,7 @@ namespace FlaxEditor
                     case "set": data = SetAssetProperty(operation); break;
                     case "save": data = SaveAsset(operation); break;
                     case "refresh": data = RefreshContent(operation); break;
-                    case "verify": data = VerifyAsset(operation.Path, true); break;
+                    case "verify": BeginVerification(new AssetVerification { Path = operation.Path }, true); return;
                     case "material-instance": data = ConfigureMaterialInstance(operation); break;
                     default: throw new InvalidOperationException($"Unsupported asset action '{operation.Action}'.");
                     }
@@ -380,6 +394,14 @@ namespace FlaxEditor
                     .Select(x => new { name = x.Name, extension = x.FileExtension, defaultName = x.NewItemName })
                     .OrderBy(x => x.name, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
+            }
+
+            private static object SelectAsset(CliAssetOperationOptions options)
+            {
+                var item = RequireItem(options.Path) as AssetItem
+                           ?? throw new InvalidOperationException($"Content item '{options.Path}' is not an asset.");
+                Editor.Instance.Windows.ContentWin.Select(item, true);
+                return DescribeAsset(item);
             }
 
             private object CreateAsset(CliAssetOperationOptions options)
@@ -756,42 +778,83 @@ namespace FlaxEditor
                 var verification = _verifications[_verifyIndex];
                 try
                 {
-                    VerifyAsset(verification.Path, true);
-                    if (verification.PropertyPath != null)
-                    {
-                        var asset = LoadAsset(verification.Path);
-                        var value = GetMemberPathValue(asset, verification.PropertyPath);
-                        var actual = value == null ? JValue.CreateNull() : JToken.Parse(FlaxJsonSerializer.Serialize(value));
-                        if (!JToken.DeepEquals(actual, verification.ExpectedValue))
-                            throw new InvalidOperationException($"Asset property '{verification.PropertyPath}' did not persist. Expected {verification.ExpectedValue}, reloaded {actual}.");
-                    }
-                    _verifyIndex++;
-                    _context.ReportProgress($"Verified {_verifyIndex}/{_verifications.Count} assets", _operations.Length == 0 ? 1.0f : 0.9f + 0.1f * _verifyIndex / _verifications.Count);
+                    BeginVerification(verification, false);
                 }
                 catch (Exception ex)
                 {
-                    _results.Add(new { index = _operations.Length + _verifyIndex, action = "verify", success = false, error = new { code = "FLX-ASSET-VERIFY-0006", message = ex.Message }, path = verification.Path, property = verification.PropertyPath });
-                    _failed++;
-                    _verifyIndex++;
-                    if (!_continueOnError)
-                        Complete();
+                    RecordVerificationFailure(verification, ex);
                 }
             }
 
-            private object VerifyAsset(string path, bool reload)
+            private void BeginVerification(AssetVerification verification, bool isAction)
             {
-                path = RequireProjectContentPath(path);
+                var path = RequireProjectContentPath(verification.Path);
                 RefreshPath(path, false);
                 var item = RequireItem(path) as AssetItem
                            ?? throw new InvalidOperationException($"Content item '{path}' is not an asset.");
                 if (!File.Exists(item.Path))
                     throw new FileNotFoundException($"Asset '{item.Path}' was not persisted.", item.Path);
-                if (reload)
-                    item.Reload();
+                item.Reload();
                 var asset = item.LoadAsync();
-                if (asset == null || asset.WaitForLoaded())
+                if (asset == null)
                     throw new InvalidOperationException($"Asset '{item.Path}' failed to reload from disk.");
-                return new { path = item.Path, id = item.ID, type = item.TypeName, persisted = true, reloaded = reload };
+                _pendingVerification = verification;
+                _pendingVerificationItem = item;
+                _pendingVerificationAsset = asset;
+                _pendingVerificationIsAction = isAction;
+            }
+
+            private void CompleteVerificationIfReady()
+            {
+                var asset = _pendingVerificationAsset;
+                if (!asset.IsLoaded && !asset.LastLoadFailed)
+                    return;
+
+                var verification = _pendingVerification;
+                var item = _pendingVerificationItem;
+                var isAction = _pendingVerificationIsAction;
+                _pendingVerification = null;
+                _pendingVerificationItem = null;
+                _pendingVerificationAsset = null;
+                _pendingVerificationIsAction = false;
+                try
+                {
+                    if (asset.LastLoadFailed)
+                        throw new InvalidOperationException($"Asset '{item.Path}' failed to reload from disk.");
+                    if (verification.PropertyPath != null)
+                    {
+                        var value = GetMemberPathValue(asset, verification.PropertyPath);
+                        var actual = value == null ? JValue.CreateNull() : JToken.Parse(FlaxJsonSerializer.Serialize(value));
+                        if (!JToken.DeepEquals(actual, verification.ExpectedValue))
+                            throw new InvalidOperationException($"Asset property '{verification.PropertyPath}' did not persist. Expected {verification.ExpectedValue}, reloaded {actual}.");
+                    }
+                    var data = new { path = item.Path, id = item.ID, type = item.TypeName, persisted = true, reloaded = true };
+                    if (isAction)
+                    {
+                        RecordSuccess("verify", data);
+                    }
+                    else
+                    {
+                        _verifyIndex++;
+                        _context.ReportProgress($"Verified {_verifyIndex}/{_verifications.Count} assets", _operations.Length == 0 ? 1.0f : 0.9f + 0.1f * _verifyIndex / _verifications.Count);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (isAction)
+                        RecordFailure("verify", ex);
+                    else
+                        RecordVerificationFailure(verification, ex);
+                }
+            }
+
+            private void RecordVerificationFailure(AssetVerification verification, Exception exception)
+            {
+                _results.Add(new { index = _operations.Length + _verifyIndex, action = "verify", success = false, error = new { code = "FLX-ASSET-VERIFY-0006", message = exception.Message }, path = verification.Path, property = verification.PropertyPath });
+                _failed++;
+                _verifyIndex++;
+                if (!_continueOnError)
+                    Complete();
             }
 
             private void TrackVerification(string path)
