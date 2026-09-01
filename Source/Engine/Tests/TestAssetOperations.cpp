@@ -389,6 +389,9 @@ TEST_CASE("Asset operations atomically copy mixed flattened Content batches")
     REQUIRE(database.LastCommits.Count() == 4);
     for (const AssetOperationCommit& commit : database.LastCommits)
         CHECK(commit.TransactionId == database.LastCommits[0].TransactionId);
+    CHECK(database.LastCommits[1].SelfWrites.IsEmpty());
+    CHECK(database.LastCommits[2].SelfWrites.Count() == 1);
+    CHECK(database.LastCommits[3].SelfWrites.Count() == 1);
 }
 
 TEST_CASE("Asset operations roll back mixed flattened copy failures")

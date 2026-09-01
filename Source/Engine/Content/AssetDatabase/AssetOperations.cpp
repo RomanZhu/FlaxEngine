@@ -1861,7 +1861,8 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
             commit.AssetGuid = copiedGuid;
             commit.SourcePath = source;
             commit.DestinationPath = destinations[i];
-            AddSelfWrite(commit, destinations[i]);
+            if (!isDirectory)
+                AddSelfWrite(commit, destinations[i]);
         }
         commit.TransactionId = journal.TransactionId;
         for (AssetOperationSelfWrite& write : commit.SelfWrites)
