@@ -464,8 +464,9 @@ namespace FlaxEditor
                 var createResult = Editor.Instance.ContentDatabase.CreatePath(path, true, () => Directory.CreateDirectory(path));
                 if (!createResult.Succeeded)
                     throw new InvalidOperationException(createResult.Message ?? $"Failed to create folder '{path}'.");
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ImportRecursive);
                 Editor.Instance.ContentDatabase.RefreshFolder(parent, true);
-                return DescribePath(path, "Folder");
+                return DescribeAsset(RequireFolder(path));
             }
 
             private void BeginImport(CliAssetOperationOptions options, bool reimport)
