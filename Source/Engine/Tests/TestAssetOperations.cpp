@@ -8,6 +8,9 @@
 #include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/StringUtils.h"
+#include "Engine/Serialization/JsonTools.h"
+#include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Utilities/Crc.h"
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -137,6 +140,27 @@ namespace
         return left.Length() == right.Length() &&
             Platform::MemoryCompare(left.Get(), right.Get(), left.Length()) == 0;
     }
+
+    bool WriteOperationSceneFragments(const StringView& projectRoot, const Guid& sceneGuid,
+        const Array<SceneFragmentWrite>& writes, String& error)
+    {
+        SceneFragmentSavePlan plan;
+        if (SceneFragmentStore::PrepareSave(sceneGuid, writes, plan, error))
+            return true;
+        const String sceneDirectory = SceneFragmentStore::GetScenePath(projectRoot, sceneGuid);
+        if (FileSystem::CreateDirectory(sceneDirectory) ||
+            File::WriteAllBytes(sceneDirectory / TEXT("scene-fragments.index"), plan.IndexData.Get(), plan.IndexData.Count()))
+            return true;
+        for (const PreparedSceneFragment& fragment : plan.Fragments)
+        {
+            const String path = sceneDirectory / fragment.RelativePhysicalPath;
+            const String parent = StringUtils::GetDirectoryName(path);
+            if ((!FileSystem::DirectoryExists(parent) && FileSystem::CreateDirectory(parent)) ||
+                File::WriteAllBytes(path, fragment.Data.Get(), fragment.Data.Count()))
+                return true;
+        }
+        return false;
+    }
 }
 
 TEST_CASE("Asset operations preserve exact identity and clone copy object mappings")
@@ -227,6 +251,179 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     Array<AssetPipelineDiagnostic> recoveryDiagnostics;
     CHECK_FALSE(operations.RecoverIncompleteTransactions(recoveryDiagnostics));
     CHECK(recoveryDiagnostics.IsEmpty());
+}
+
+TEST_CASE("Asset operations atomically remap external-actors scene copies")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("ExternalActorCopy-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    AssetMeta sourceMeta = MakeOperationMeta();
+    sourceMeta.AssetType = TEXT("FlaxEngine.SceneAsset");
+    sourceMeta.SourceKind = AssetSourceKind::TextDocument;
+    sourceMeta.Processor.ID = TEXT("Flax.JsonDocument");
+    const Guid foreignGuid = Guid::New();
+    const String sourceGuidText = sourceMeta.ID.ToString(Guid::FormatType::N).ToLower();
+    const String foreignGuidText = foreignGuid.ToString(Guid::FormatType::N).ToLower();
+    const StringAnsi sourceGuidAnsi(sourceGuidText);
+    const StringAnsi foreignGuidAnsi(foreignGuidText);
+    rapidjson_flax::StringBuffer sourceBuffer;
+    PrettyJsonWriter sourceWriter(sourceBuffer);
+    sourceWriter.StartObject();
+    sourceWriter.JKEY("sceneVersion");
+    sourceWriter.Int(4);
+    sourceWriter.JKEY("externalActors");
+    sourceWriter.Bool(true);
+    sourceWriter.JKEY("selfSceneGuid");
+    sourceWriter.String(sourceGuidAnsi.Get(), sourceGuidAnsi.Length());
+    sourceWriter.JKEY("foreignGuid");
+    sourceWriter.String(foreignGuidAnsi.Get(), foreignGuidAnsi.Length());
+    sourceWriter.JKEY("rootActorLocalId");
+    sourceWriter.Int64(4201);
+    sourceWriter.JKEY("objects");
+    sourceWriter.StartArray();
+    sourceWriter.EndArray(0);
+    sourceWriter.EndObject();
+
+    const String source = content / TEXT("Source.scene");
+    REQUIRE_FALSE(operations.CreateAsset(source,
+        Span<byte>(reinterpret_cast<byte*>(const_cast<char*>(sourceBuffer.GetString())),
+            static_cast<int32>(sourceBuffer.GetSize())), sourceMeta, diagnostic));
+    rapidjson_flax::StringBuffer payloadBuffer;
+    PrettyJsonWriter payloadWriter(payloadBuffer);
+    payloadWriter.StartArray();
+    payloadWriter.StartObject();
+    payloadWriter.JKEY("ID");
+    payloadWriter.String(sourceGuidAnsi.Get(), sourceGuidAnsi.Length());
+    payloadWriter.JKEY("sceneReference");
+    payloadWriter.String(sourceGuidAnsi.Get(), sourceGuidAnsi.Length());
+    payloadWriter.JKEY("foreignReference");
+    payloadWriter.String(foreignGuidAnsi.Get(), foreignGuidAnsi.Length());
+    payloadWriter.JKEY("localId");
+    payloadWriter.Int64(4201);
+    payloadWriter.EndObject();
+    payloadWriter.EndArray(1);
+    SceneFragmentWrite fragmentWrite;
+    fragmentWrite.RootActorLocalId = 4201;
+    fragmentWrite.ContainedLocalIds.Add(4201);
+    fragmentWrite.Payload.Set(reinterpret_cast<const byte*>(payloadBuffer.GetString()),
+        static_cast<int32>(payloadBuffer.GetSize()));
+    Array<SceneFragmentWrite> fragmentWrites;
+    fragmentWrites.Add(MoveTemp(fragmentWrite));
+    String fragmentError;
+    REQUIRE_FALSE(WriteOperationSceneFragments(root, sourceMeta.ID, fragmentWrites, fragmentError));
+
+    const String sourceFragment = SceneFragmentStore::GetScenePath(root, sourceMeta.ID) /
+        SceneFragmentStore::GetRelativeFragmentPath(4201);
+    BytesContainer originalSourceBytes;
+    BytesContainer originalFragmentBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(source, originalSourceBytes));
+    REQUIRE_FALSE(File::ReadAllBytes(sourceFragment, originalFragmentBytes));
+
+    AssetOperationTarget target;
+    target.SourcePath = source;
+    target.ExpectedGuid = sourceMeta.ID;
+    const String copied = content / TEXT("Copied.scene");
+    Guid copiedGuid;
+    REQUIRE_FALSE(operations.CopyAsset(target, copied, copiedGuid, diagnostic));
+    REQUIRE(copiedGuid.IsValid());
+    CHECK(copiedGuid != sourceMeta.ID);
+
+    BytesContainer currentSourceBytes;
+    BytesContainer currentFragmentBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(source, currentSourceBytes));
+    REQUIRE_FALSE(File::ReadAllBytes(sourceFragment, currentFragmentBytes));
+    CHECK(EqualBytes(currentSourceBytes, originalSourceBytes));
+    CHECK(EqualBytes(currentFragmentBytes, originalFragmentBytes));
+
+    BytesContainer copiedSourceBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(copied, copiedSourceBytes));
+    rapidjson_flax::Document copiedDocument;
+    copiedDocument.Parse(copiedSourceBytes.Get<char>(), copiedSourceBytes.Length());
+    REQUIRE_FALSE(copiedDocument.HasParseError());
+    CHECK(JsonTools::GetGuid(copiedDocument, "selfSceneGuid") == copiedGuid);
+    CHECK(JsonTools::GetGuid(copiedDocument, "foreignGuid") == foreignGuid);
+    REQUIRE(copiedDocument.HasMember("rootActorLocalId"));
+    CHECK(copiedDocument["rootActorLocalId"].GetInt64() == 4201);
+
+    const String copiedFragments = SceneFragmentStore::GetScenePath(root, copiedGuid);
+    BytesContainer copiedFragmentBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(copiedFragments / SceneFragmentStore::GetRelativeFragmentPath(4201),
+        copiedFragmentBytes));
+    rapidjson_flax::Document copiedFragment;
+    copiedFragment.Parse(copiedFragmentBytes.Get<char>(), copiedFragmentBytes.Length());
+    REQUIRE_FALSE(copiedFragment.HasParseError());
+    CHECK(JsonTools::GetGuid(copiedFragment, "ownerSceneGuid") == copiedGuid);
+    REQUIRE(copiedFragment.HasMember("rootActorLocalId"));
+    CHECK(copiedFragment["rootActorLocalId"].GetInt64() == 4201);
+    const auto payload = copiedFragment.FindMember("payload");
+    REQUIRE(payload != copiedFragment.MemberEnd());
+    REQUIRE(payload->value.IsArray());
+    REQUIRE(payload->value.Size() == 1);
+    CHECK(JsonTools::GetGuid(payload->value[0], "ID") == copiedGuid);
+    CHECK(JsonTools::GetGuid(payload->value[0], "sceneReference") == copiedGuid);
+    CHECK(JsonTools::GetGuid(payload->value[0], "foreignReference") == foreignGuid);
+    REQUIRE(payload->value[0].HasMember("localId"));
+    CHECK(payload->value[0]["localId"].GetInt64() == 4201);
+
+    AssetMeta copiedMeta;
+    REQUIRE_FALSE(AssetMeta::Load(copied + TEXT(".meta"), copiedMeta, diagnostic));
+    CHECK(copiedMeta.ID == copiedGuid);
+    CHECK(FileSystem::FileExists(copiedFragments / TEXT("scene-fragments.index")));
+
+    const String fragmentsRoot = SceneFragmentStore::GetRootPath(root);
+    Array<String> expectedFragmentDirectories;
+    REQUIRE_FALSE(FileSystem::GetChildDirectories(expectedFragmentDirectories, fragmentsRoot));
+    REQUIRE(expectedFragmentDirectories.Count() == 2);
+
+    const String collision = content / TEXT("Collision.scene");
+    const byte collisionBytes[] = { 7, 8, 9, 10 };
+    REQUIRE_FALSE(File::WriteAllBytes(collision, collisionBytes, ARRAY_COUNT(collisionBytes)));
+    Guid rejectedGuid;
+    CHECK(operations.CopyAsset(target, collision, rejectedGuid, diagnostic));
+    CHECK_FALSE(rejectedGuid.IsValid());
+    CHECK_FALSE(FileSystem::FileExists(collision + TEXT(".meta")));
+    BytesContainer preservedCollisionBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(collision, preservedCollisionBytes));
+    REQUIRE(preservedCollisionBytes.Length() == ARRAY_COUNT(collisionBytes));
+    CHECK(Platform::MemoryCompare(preservedCollisionBytes.Get(), collisionBytes,
+        ARRAY_COUNT(collisionBytes)) == 0);
+    Array<String> collisionFragmentDirectories;
+    REQUIRE_FALSE(FileSystem::GetChildDirectories(collisionFragmentDirectories, fragmentsRoot));
+    CHECK(collisionFragmentDirectories.Count() == expectedFragmentDirectories.Count());
+    for (const String& directory : expectedFragmentDirectories)
+        CHECK(collisionFragmentDirectories.Contains(directory));
+
+    const byte malformedSource[] = { '{', '"', 'e', 'x', 't', 'e', 'r', 'n', 'a', 'l', 'A', 'c', 't', 'o', 'r', 's', '"', ':', 't' };
+    REQUIRE_FALSE(File::WriteAllBytes(source, malformedSource, ARRAY_COUNT(malformedSource)));
+    const String failedCopy = content / TEXT("Malformed Copy.scene");
+    Guid failedGuid;
+    CHECK(operations.CopyAsset(target, failedCopy, failedGuid, diagnostic));
+    CHECK_FALSE(failedGuid.IsValid());
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::LibraryCreationFailed);
+    CHECK_FALSE(FileSystem::FileExists(failedCopy));
+    CHECK_FALSE(FileSystem::FileExists(failedCopy + TEXT(".meta")));
+    BytesContainer preservedMalformedSource;
+    REQUIRE_FALSE(File::ReadAllBytes(source, preservedMalformedSource));
+    REQUIRE(preservedMalformedSource.Length() == ARRAY_COUNT(malformedSource));
+    CHECK(Platform::MemoryCompare(preservedMalformedSource.Get(), malformedSource,
+        ARRAY_COUNT(malformedSource)) == 0);
+    REQUIRE_FALSE(File::ReadAllBytes(sourceFragment, currentFragmentBytes));
+    CHECK(EqualBytes(currentFragmentBytes, originalFragmentBytes));
+    Array<String> failedFragmentDirectories;
+    REQUIRE_FALSE(FileSystem::GetChildDirectories(failedFragmentDirectories, fragmentsRoot));
+    CHECK(failedFragmentDirectories.Count() == expectedFragmentDirectories.Count());
+    for (const String& directory : expectedFragmentDirectories)
+        CHECK(failedFragmentDirectories.Contains(directory));
 }
 
 TEST_CASE("Default metadata batches roll back and recover native staged publication")

@@ -12,6 +12,8 @@
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
+#include "Engine/Serialization/JsonTools.h"
+#include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Utilities/Crc.h"
 #include <algorithm>
 #if PLATFORM_WINDOWS
@@ -120,6 +122,51 @@ namespace
     bool FlushFile(const StringView& path)
     {
         return DurableAssetFileSystem::FlushFile(path);
+    }
+
+    bool PrepareRemappedSceneSource(const StringView& sourcePath, const StringView& stagingPath,
+        const Guid& sourceSceneGuid, const Guid& destinationSceneGuid, String& error)
+    {
+        BytesContainer sourceBytes;
+        if (File::ReadAllBytes(sourcePath, sourceBytes))
+        {
+            error = TEXT("Cannot read the external-actors scene source for cloning.");
+            return true;
+        }
+        rapidjson_flax::Document document;
+        document.Parse(sourceBytes.Get<char>(), sourceBytes.Length());
+        CanonicalJsonError jsonError;
+        if (document.HasParseError() || !document.IsObject())
+        {
+            error = TEXT("External-actors scene source is malformed or does not declare external actor storage.");
+            return true;
+        }
+        const auto externalActors = document.FindMember("externalActors");
+        if (externalActors == document.MemberEnd() || !externalActors->value.IsBool() ||
+            !externalActors->value.GetBool() || CanonicalJsonWriter::Validate(document, jsonError))
+        {
+            error = TEXT("External-actors scene source is malformed or does not declare external actor storage.");
+            return true;
+        }
+
+        Dictionary<Guid, Guid> remap;
+        remap.Add(sourceSceneGuid, destinationSceneGuid);
+        JsonTools::ChangeIds(document, remap);
+        if (CanonicalJsonWriter::Validate(document, jsonError))
+        {
+            error = TEXT("Remapped external-actors scene source failed JSON validation.");
+            return true;
+        }
+        rapidjson_flax::StringBuffer buffer;
+        PrettyJsonWriter writer(buffer);
+        document.Accept(writer.GetWriter());
+        if (File::WriteAllBytes(stagingPath, buffer.GetString(), static_cast<int32>(buffer.GetSize())) ||
+            FlushFile(stagingPath))
+        {
+            error = TEXT("Cannot write or flush the remapped external-actors scene source staging file.");
+            return true;
+        }
+        return false;
     }
 
     bool DurableMove(const StringView& destination, const StringView& source, bool overwrite)
@@ -1445,7 +1492,10 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
     if (SaveJournal(transactionDirectory, journal, diagnostic) ||
         (hasFragments && SceneFragmentStore::PrepareCloneDirectory(_projectRoot, currentMeta.ID, copiedMeta.ID,
             journal.StageFragmentsPath, fragmentError)) ||
-        FileSystem::CopyFile(journal.StageSourcePath, source.AbsolutePath) || FlushFile(journal.StageSourcePath) ||
+        (hasFragments
+            ? PrepareRemappedSceneSource(source.AbsolutePath, journal.StageSourcePath, currentMeta.ID,
+                copiedMeta.ID, fragmentError)
+            : FileSystem::CopyFile(journal.StageSourcePath, source.AbsolutePath) || FlushFile(journal.StageSourcePath)) ||
         AssetMeta::SaveAtomic(journal.StageMetaPath, copiedMeta, diagnostic) ||
         DurableMove(destinationPath.AbsolutePath, journal.StageSourcePath, false) ||
         DurableMove(destinationMeta, journal.StageMetaPath, false) ||
