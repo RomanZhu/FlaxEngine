@@ -3,14 +3,13 @@
 #include "Texture.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
-#include "Engine/Content/Upgraders/TextureAssetUpgrader.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Graphics/Textures/TextureData.h"
 #include "Engine/Scripting/Internal/MainThreadManagedInvokeAction.h"
 #include "Engine/Tools/TextureTool/TextureTool.h"
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(Texture, "FlaxEngine.Texture", TextureAssetUpgrader, true);
+REGISTER_BINARY_ASSET(Texture, "FlaxEngine.Texture", true);
 
 Texture::Texture(const SpawnParams& params, const AssetInfo* info)
     : TextureBase(params, info)

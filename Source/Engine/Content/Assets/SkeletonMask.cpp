@@ -5,10 +5,9 @@
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
-#include "Engine/Content/Upgraders/SkeletonMaskUpgrader.h"
 #include "Engine/Threading/Threading.h"
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(SkeletonMask, "FlaxEngine.SkeletonMask", SkeletonMaskUpgrader, true);
+REGISTER_BINARY_ASSET(SkeletonMask, "FlaxEngine.SkeletonMask", true);
 
 SkeletonMask::SkeletonMask(const SpawnParams& params, const AssetInfo* info)
     : BinaryAsset(params, info)

@@ -1,7 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
-#include "Engine/Content/Build/AssetProcessorSettings.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
@@ -27,16 +26,6 @@ namespace
         return meta;
     }
 
-    bool UpgradeTestSettings(int32 fromVersion, const StringAnsiView& input, StringAnsi& output, AssetPipelineDiagnostic& diagnostic)
-    {
-        if (!input.Contains("\"unknown\": 7"))
-        {
-            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
-            return true;
-        }
-        output = fromVersion == 1 ? "{\"unknown\":7,\"middle\":1}" : "{\"unknown\":7,\"new\":true}";
-        return false;
-    }
 }
 
 TEST_CASE("Asset meta parses canonicalizes and preserves unknown fields")
@@ -192,45 +181,6 @@ TEST_CASE("Asset meta strictly rejects unsupported and non-canonical identity fo
 
     CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36F15F0C-4B35-4AF8-8BA2-F72F6CB82E22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
     CHECK(AssetMeta::Parse("{\"fileFormatVersion\":2,\"guid\":\"36f15f0c4b354af88ba2f72f6cb82e22\",\"folderAsset\":false,\"importer\":{\"id\":\"Flax.T\",\"version\":1,\"settings\":{}},\"objectIds\":{\"main\":{\"fileId\":1,\"type\":\"T\"},\"mesh:A\":{\"fileId\":7,\"collisionSalt\":0,\"type\":\"T\"}},\"labels\":[]}", path, meta, diagnostic));
-}
-
-TEST_CASE("Processor settings upgrades are staged and independent from implementation versions")
-{
-    AssetMeta meta = MakeMeta();
-    meta.Processor.ID = TEXT("Flax.Test");
-    meta.Processor.SettingsVersion = 1;
-    meta.Processor.SettingsJson = "{\"old\":true,\"unknown\":7}";
-    AssetProcessorSettingsSchema schema;
-    schema.ProcessorID = TEXT("Flax.Test");
-    schema.CurrentVersion = 3;
-    schema.NormalizedDefaults = "{\"newDefault\":99}";
-    schema.ImplementationVersion = TEXT("implementation-a");
-    schema.Upgrade = UpgradeTestSettings;
-
-    AssetMeta staged;
-    AssetPipelineDiagnostic diagnostic;
-    CHECK(schema.PreviewUpgrade(meta, false, staged, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::MetaUpgradeRequired);
-    CHECK(staged.Processor.SettingsVersion == 1);
-    REQUIRE_FALSE(schema.PreviewUpgrade(meta, true, staged, diagnostic));
-    CHECK(staged.Processor.SettingsVersion == 3);
-    CHECK(staged.Processor.SettingsJson.Contains("\"unknown\": 7"));
-    CHECK(staged.Processor.SettingsJson.Contains("\"new\": true"));
-
-    StringAnsi before;
-    REQUIRE_FALSE(staged.ToJson(before, diagnostic));
-    schema.ImplementationVersion = TEXT("implementation-b");
-    schema.NormalizedDefaults = "{\"newDefault\":12345}";
-    AssetMeta unchanged;
-    REQUIRE_FALSE(schema.PreviewUpgrade(staged, true, unchanged, diagnostic));
-    StringAnsi after;
-    REQUIRE_FALSE(unchanged.ToJson(after, diagnostic));
-    CHECK(after == before);
-
-    AssetMeta created = MakeMeta();
-    REQUIRE_FALSE(schema.InitializeNewMeta(created, diagnostic));
-    CHECK(created.Processor.SettingsVersion == 3);
-    CHECK(created.Processor.SettingsJson.Contains("12345"));
 }
 
 TEST_CASE("Asset metadata clone regenerates every GUID and preserves reconciliation metadata")

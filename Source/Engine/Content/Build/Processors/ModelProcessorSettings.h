@@ -31,7 +31,6 @@ struct FLAXENGINE_API ModelProcessorSettings
     bool Validate(AssetPipelineDiagnostic& diagnostic) const;
 
     static ModelProcessorSettings FromLegacyOptions(const ModelTool::Options& options);
-    static bool Upgrade(int32 fromVersion, const StringAnsiView& input, StringAnsi& output, AssetPipelineDiagnostic& diagnostic);
 };
 
 #endif

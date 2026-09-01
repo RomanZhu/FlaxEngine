@@ -8,7 +8,6 @@
 struct AssetInfo;
 struct AssetLoadLocation;
 class Asset;
-class IAssetUpgrader;
 
 /// <summary>
 /// The asset objects factory.
@@ -55,12 +54,4 @@ public:
     /// <returns>Created asset object.</returns>
     virtual Asset* NewVirtual(const AssetInfo& info) = 0;
 
-    /// <summary>
-    /// Gets the asset upgrader.
-    /// </summary>
-    /// <returns>Asset upgrader, or null if not used.</returns>
-    virtual IAssetUpgrader* GetUpgrader() const
-    {
-        return nullptr;
-    }
 };

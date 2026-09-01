@@ -4,7 +4,6 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Content/Deprecated.h"
-#include "Engine/Content/Upgraders/ShaderAssetUpgrader.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Graphics/Materials/MaterialShader.h"
@@ -29,7 +28,7 @@
 /// </summary>
 #define MATERIAL_AUTO_GENERATE_MISSING_SOURCE (USE_EDITOR)
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(Material, "FlaxEngine.Material", ShaderAssetUpgrader, false);
+REGISTER_BINARY_ASSET(Material, "FlaxEngine.Material", false);
 
 Material::Material(const SpawnParams& params, const AssetInfo* info)
     : ShaderAssetTypeBase<MaterialBase>(params, info)

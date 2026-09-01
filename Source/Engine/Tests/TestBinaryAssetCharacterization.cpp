@@ -12,7 +12,6 @@
 #include "Engine/Content/Loading/ContentLoadTask.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
-#include "Engine/Content/Upgraders/BinaryAssetUpgrader.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/ObjectsRemovalService.h"
@@ -58,24 +57,6 @@ namespace
         FileSystem::DeleteFile(path);
     }
 
-    bool CopyUpgrade(AssetMigrationContext& context)
-    {
-        return BinaryAssetUpgrader::CopyChunks(context);
-    }
-
-    class CharacterizationUpgrader : public BinaryAssetUpgrader
-    {
-    public:
-        CharacterizationUpgrader()
-        {
-            static const Upgrader Steps[] =
-            {
-                { 1, 2, CopyUpgrade },
-                { 2, 3, CopyUpgrade },
-            };
-            setup(Steps, ARRAY_COUNT(Steps));
-        }
-    };
 }
 
 TEST_CASE("Binary asset factory load streaming and reload")
@@ -512,28 +493,6 @@ TEST_CASE("Runtime packages persist and resolve exact composite object entries")
     AssetInitData secondData;
     REQUIRE_FALSE(storage->LoadAssetHeader(secondObject, secondData));
     CHECK(secondData.Header.ID == secondInstance);
-}
-
-TEST_CASE("Binary asset upgrader chains preserve chunks")
-{
-    CharacterizationUpgrader upgrader;
-    CHECK(upgrader.ShouldUpgrade(1));
-    CHECK(upgrader.ShouldUpgrade(2));
-    CHECK_FALSE(upgrader.ShouldUpgrade(3));
-
-    const byte payload[] = { 9, 7, 5, 3, 1 };
-    FlaxChunk inputChunk;
-    inputChunk.Data.Copy(payload, ARRAY_COUNT(payload));
-    AssetMigrationContext context;
-    context.Input.SerializedVersion = 1;
-    context.Input.Header.Chunks[0] = &inputChunk;
-
-    REQUIRE_FALSE(upgrader.Upgrade(context.Input.SerializedVersion, context));
-    CHECK(context.Output.SerializedVersion == 2);
-    REQUIRE(context.Output.Header.Chunks[0]);
-    REQUIRE(context.Output.Header.Chunks[0]->Data.Length() == ARRAY_COUNT(payload));
-    CHECK(Platform::MemoryCompare(context.Output.Header.Chunks[0]->Data.Get(), payload, ARRAY_COUNT(payload)) == 0);
-    context.Output.Header.DeleteChunks();
 }
 
 #endif

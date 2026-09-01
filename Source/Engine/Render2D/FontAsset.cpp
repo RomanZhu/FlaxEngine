@@ -6,7 +6,6 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
-#include "Engine/Content/Upgraders/FontAssetUpgrader.h"
 #include "Engine/Engine/Engine.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Threading/Threading.h"
@@ -15,7 +14,7 @@
 #include "Engine/Platform/FileSystem.h"
 #endif
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(FontAsset, "FlaxEngine.FontAsset", FontAssetUpgrader, true);
+REGISTER_BINARY_ASSET(FontAsset, "FlaxEngine.FontAsset", true);
 
 FontAsset::FontAsset(const SpawnParams& params, const AssetInfo* info)
     : BinaryAsset(params, info)

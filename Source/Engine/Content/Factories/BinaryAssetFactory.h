@@ -3,15 +3,11 @@
 #pragma once
 
 #include "IAssetFactory.h"
-#if USE_EDITOR
-#include "Engine/Content/Upgraders/BinaryAssetUpgrader.h"
-#endif
 #include "Engine/Content/AssetInfo.h"
 #include "Engine/Content/Artifacts/ResolvedArtifact.h"
 #include "Engine/Scripting/ScriptingObject.h"
 
 class BinaryAsset;
-class FlaxStorage;
 
 /// <summary>
 /// The binary assets factory base class.
@@ -30,9 +26,6 @@ public:
 protected:
     virtual BinaryAsset* Create(const AssetInfo& info) = 0;
     virtual bool IsVersionSupported(uint32 serializedVersion) const = 0;
-#if USE_EDITOR
-    bool UpgradeAsset(const AssetInfo& info, FlaxStorage* storage, AssetMigrationContext& context);
-#endif
 
 public:
     // [IAssetFactory]
@@ -73,21 +66,3 @@ protected:
 		bool SupportsVirtualAssets() const override { return supportsVirtualAssets; } \
 	}; \
 	static CONCAT_MACROS(Factory, type) CONCAT_MACROS(CFactory, type)
-
-#if USE_EDITOR
-#define REGISTER_BINARY_ASSET_WITH_UPGRADER(type, typeName, upgrader, supportsVirtualAssets) \
-	const String type::TypeName = TEXT(typeName); \
-	class CONCAT_MACROS(Factory, type) : public BinaryAssetFactory<type> \
-	{ \
-		private: \
-		IAssetUpgrader* _upgrader = ::New<upgrader>(); \
-		public: \
-		CONCAT_MACROS(Factory, type)() { IAssetFactory::Get().Add(type::TypeName, this); } \
-		~CONCAT_MACROS(Factory, type)() { Delete(_upgrader); IAssetFactory::Get().Remove(type::TypeName); } \
-		bool SupportsVirtualAssets() const override { return supportsVirtualAssets; } \
-		IAssetUpgrader* GetUpgrader() const override { return _upgrader; } \
-	}; \
-	static CONCAT_MACROS(Factory, type) CONCAT_MACROS(CFactory, type)
-#else
-#define REGISTER_BINARY_ASSET_WITH_UPGRADER(type, typeName, upgrader, supportsVirtualAssets) REGISTER_BINARY_ASSET(type, typeName, supportsVirtualAssets)
-#endif

@@ -4,7 +4,6 @@
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Types/Variant.h"
 #include "Engine/Content/Content.h"
-#include "Engine/Content/Upgraders/MaterialInstanceUpgrader.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Threading/Threading.h"
@@ -12,7 +11,7 @@
 #include "Engine/Serialization/MemoryWriteStream.h"
 #endif
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(MaterialInstance, "FlaxEngine.MaterialInstance", MaterialInstanceUpgrader, true);
+REGISTER_BINARY_ASSET(MaterialInstance, "FlaxEngine.MaterialInstance", true);
 
 MaterialInstance::MaterialInstance(const SpawnParams& params, const AssetInfo* info)
     : MaterialBase(params, info)

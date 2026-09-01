@@ -6,13 +6,12 @@
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
 #include "Engine/Content/Loading/Tasks/LoadAssetDataTask.h"
-#include "Engine/Content/Upgraders/TextureAssetUpgrader.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Graphics/GPUDevice.h"
 
 const SpriteHandle SpriteHandle::Invalid = { nullptr, INVALID_INDEX };
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(SpriteAtlas, "FlaxEngine.SpriteAtlas", TextureAssetUpgrader, true);
+REGISTER_BINARY_ASSET(SpriteAtlas, "FlaxEngine.SpriteAtlas", true);
 
 bool SpriteHandle::GetSprite(Sprite* result) const
 {

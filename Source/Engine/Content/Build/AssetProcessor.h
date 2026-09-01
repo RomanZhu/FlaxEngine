@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include "AssetProcessorSettings.h"
 #include "Engine/Content/Artifacts/ArtifactTarget.h"
 #include "Engine/Content/AssetDatabase/AssetDependency.h"
 
@@ -72,7 +71,6 @@ struct FLAXENGINE_API AssetProcessorDescriptor
     StringAnsi MaxParallelismClass = "default";
     uint64 MemoryEstimate = 0;
     bool UsesExternalProcess = false;
-    AssetProcessorSettingsUpgradeCallback UpgradeSettings = nullptr;
     AssetProcessorPrepareCallback Prepare;
     AssetProcessorBuildCallback Build;
     AssetSemanticInterfaceExtractor ExtractSemanticInterface;

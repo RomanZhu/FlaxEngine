@@ -2,9 +2,8 @@
 
 #include "IESProfile.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
-#include "Engine/Content/Upgraders/TextureAssetUpgrader.h"
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(IESProfile, "FlaxEngine.IESProfile", TextureAssetUpgrader, false);
+REGISTER_BINARY_ASSET(IESProfile, "FlaxEngine.IESProfile", false);
 
 IESProfile::IESProfile(const SpawnParams& params, const AssetInfo* info)
     : TextureBase(params, info)

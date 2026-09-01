@@ -39,7 +39,5 @@ public class Content : EngineModule
         files.AddRange(Directory.GetFiles(Path.Combine(FolderPath, "Cache"), "*.h", SearchOption.TopDirectoryOnly));
         files.AddRange(Directory.GetFiles(Path.Combine(FolderPath, "Factories"), "*.h", SearchOption.TopDirectoryOnly));
         files.AddRange(Directory.GetFiles(Path.Combine(FolderPath, "Storage"), "*.h", SearchOption.TopDirectoryOnly));
-        files.Add(Path.Combine(FolderPath, "Upgraders/BinaryAssetUpgrader.h"));
-        files.Add(Path.Combine(FolderPath, "Upgraders/IAssetUpgrader.h"));
     }
 }

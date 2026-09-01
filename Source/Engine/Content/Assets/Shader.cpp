@@ -7,11 +7,10 @@
 #if GPU_ENABLE_RESOURCE_NAMING && !USE_EDITOR
 #include "Engine/Content/Content.h"
 #endif
-#include "Engine/Content/Upgraders/ShaderAssetUpgrader.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(Shader, "FlaxEngine.Shader", ShaderAssetUpgrader, false);
+REGISTER_BINARY_ASSET(Shader, "FlaxEngine.Shader", false);
 
 Shader::Shader(const SpawnParams& params, const AssetInfo* info)
     : ShaderAssetTypeBase<BinaryAsset>(params, info)

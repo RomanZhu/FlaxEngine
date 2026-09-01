@@ -147,41 +147,17 @@ TEST_CASE("Texture processor settings accept Stone meta and preserve explicit de
     const StringAnsi persistedDefaults = created.Processor.SettingsJson;
     CHECK(created.Processor.SettingsVersion == TextureProcessorSettings::CurrentVersion);
     schema.NormalizedDefaults = "{\"changedDefault\":true}";
-    AssetMeta unchanged;
-    REQUIRE_FALSE(schema.PreviewUpgrade(created, true, unchanged, diagnostic));
-    CHECK(unchanged.Processor.SettingsJson == persistedDefaults);
+    CHECK(created.Processor.SettingsJson == persistedDefaults);
 
     Array<TextureProcessorSettingDescriptor> descriptors;
     TextureProcessorSettings::GetInspectorDescriptors(descriptors);
     CHECK(descriptors.Count() >= 25);
 }
 
-TEST_CASE("Texture processor settings migrate embedded legacy option names and reject invalid values")
+TEST_CASE("Texture processor settings reject invalid values")
 {
-    const StringAnsi legacy = R"({
-        "Type":2,"IsAtlas":false,"NeverStream":true,"Compress":false,
-        "IndependentChannels":true,"sRGB":true,"AlphaSource":1,
-        "AlphaIsTransparency":true,"GenerateMipMaps":false,"FlipY":true,"FlipX":true,
-        "InvertRedChannel":true,"InvertGreenChannel":false,"InvertBlueChannel":true,
-        "InvertAlphaChannel":false,"ReconstructZChannel":true,"Resize":true,
-        "KeepAspectRatio":true,"PreserveAlphaCoverage":true,"PreserveAlphaCoverageReference":0.4,
-        "TextureGroup":2,"Scale":0.5,"MaxSize":2048,"SizeX":320,"SizeY":240,
-        "Sprites":[{"Position":{"X":0,"Y":0},"Size":{"X":1,"Y":1},"Name":"Whole"}]})";
     AssetPipelineDiagnostic diagnostic;
-    StringAnsi upgraded;
-    REQUIRE_FALSE(TextureProcessorSettings::Upgrade(1, legacy, upgraded, diagnostic));
     TextureProcessorSettings parsed;
-    REQUIRE_FALSE(TextureProcessorSettings::Parse(upgraded, TextureProcessorSettings::CurrentVersion, parsed, diagnostic));
-    CHECK(parsed.Import.Type == TextureFormatType::ColorRGBA);
-    CHECK(parsed.Import.NeverStream);
-    CHECK_FALSE(parsed.Import.Compress);
-    CHECK(parsed.Import.IndependentChannels);
-    CHECK(parsed.Import.Resize);
-    CHECK(parsed.Import.SizeX == 320);
-    CHECK(parsed.Import.SizeY == 240);
-    REQUIRE(parsed.Import.Sprites.Count() == 1);
-    CHECK(parsed.Import.Sprites[0].Name == TEXT("Whole"));
-
     TextureProcessorSettings invalid = TextureProcessorSettings::Defaults();
     invalid.Import.MaxSize = 0;
     CHECK(invalid.Validate(diagnostic));

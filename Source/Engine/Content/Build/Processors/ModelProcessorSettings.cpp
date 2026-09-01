@@ -175,8 +175,6 @@ AssetProcessorSettingsSchema ModelProcessorSettings::Schema()
     AssetProcessorSettingsSchema schema;
     schema.ProcessorID = ProcessorID();
     schema.CurrentVersion = CurrentVersion;
-    schema.ImplementationVersion = TEXT("model-settings-v1");
-    schema.Upgrade = &Upgrade;
     AssetPipelineDiagnostic diagnostic;
     Defaults().ToJson(schema.NormalizedDefaults, diagnostic);
     ASSERT(diagnostic.Code == AssetPipelineDiagnosticCode::None);
@@ -260,16 +258,6 @@ ModelProcessorSettings ModelProcessorSettings::FromLegacyOptions(const ModelTool
     result.Import.Cached = nullptr;
     result.Import.ImportTypes = ImportDataTypes::None;
     return result;
-}
-
-bool ModelProcessorSettings::Upgrade(int32 fromVersion, const StringAnsiView& input, StringAnsi& output, AssetPipelineDiagnostic& diagnostic)
-{
-    if (fromVersion != CurrentVersion)
-        return Fail(diagnostic, TEXT("No implicit model settings migration is available for this schema version."));
-    ModelProcessorSettings settings;
-    if (Parse(input, CurrentVersion, settings, diagnostic))
-        return true;
-    return settings.ToJson(output, diagnostic);
 }
 
 #endif

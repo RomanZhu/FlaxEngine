@@ -5,7 +5,6 @@
 #include "AudioSource.h"
 #include "AudioBackend.h"
 #include "Engine/Core/Log.h"
-#include "Engine/Content/Upgraders/AudioClipUpgrader.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Scripting/ManagedCLR/MUtils.h"
@@ -16,7 +15,7 @@
 #include "Engine/Tools/AudioTool/AudioTool.h"
 #include "Engine/Threading/Threading.h"
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(AudioClip, "FlaxEngine.AudioClip", AudioClipUpgrader, false);
+REGISTER_BINARY_ASSET(AudioClip, "FlaxEngine.AudioClip", false);
 
 AudioClip::StreamingTask::StreamingTask(AudioClip* asset)
     : _asset(asset)

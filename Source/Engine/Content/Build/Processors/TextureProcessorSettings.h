@@ -57,9 +57,6 @@ struct FLAXENGINE_API TextureProcessorSettings
     /// <summary>Applies a matching platform override to a copy of the legacy importer options.</summary>
     TextureTool::Options ToImportOptions(const StringAnsiView& platform) const;
 
-    /// <summary>Upgrades one settings version for AssetProcessorSettingsSchema.</summary>
-    static bool Upgrade(int32 fromVersion, const StringAnsiView& input, StringAnsi& output, AssetPipelineDiagnostic& diagnostic);
-
     static void GetInspectorDescriptors(Array<TextureProcessorSettingDescriptor>& descriptors);
 };
 

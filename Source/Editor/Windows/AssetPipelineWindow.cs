@@ -71,7 +71,7 @@ namespace FlaxEditor.Windows
                 Parent = toolbar,
                 Text = "Inventory",
                 Width = 100,
-                TooltipText = "Build a read-only mixed-mode migration inventory.",
+                TooltipText = "Refresh and display the current asset database inventory.",
             };
             inventory.Clicked += () =>
             {

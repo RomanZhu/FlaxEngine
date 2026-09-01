@@ -16,7 +16,6 @@
 #include "Engine/Graphics/Shaders/GPUVertexLayout.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
-#include "Engine/Content/Upgraders/SkinnedModelAssetUpgrader.h"
 #include "Engine/Debug/Exceptions/ArgumentOutOfRangeException.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Profiler/ProfilerMemory.h"
@@ -26,7 +25,7 @@
 #include "Engine/Serialization/MemoryWriteStream.h"
 #endif
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(SkinnedModel, "FlaxEngine.SkinnedModel", SkinnedModelAssetUpgrader, true);
+REGISTER_BINARY_ASSET(SkinnedModel, "FlaxEngine.SkinnedModel", true);
 
 SkinnedModel::SkinnedModel(const SpawnParams& params, const AssetInfo* info)
     : ModelBase(params, info, StreamingGroups::Instance()->SkinnedModels())

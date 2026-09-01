@@ -545,7 +545,6 @@ AssetProcessorDescriptor TextureProcessor::CreateDescriptor()
     descriptor.InterfaceVersion = 1;
     descriptor.MaxParallelismClass = "texture";
     descriptor.MemoryEstimate = 64ull * 1024ull * 1024ull;
-    descriptor.UpgradeSettings = &TextureProcessorSettings::Upgrade;
     descriptor.Prepare = &TextureProcessor::Prepare;
     descriptor.Build = &TextureProcessor::Build;
 

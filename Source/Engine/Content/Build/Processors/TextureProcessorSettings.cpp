@@ -172,8 +172,6 @@ AssetProcessorSettingsSchema TextureProcessorSettings::Schema()
     AssetProcessorSettingsSchema schema;
     schema.ProcessorID = ProcessorID();
     schema.CurrentVersion = CurrentVersion;
-    schema.ImplementationVersion = TEXT("texture-settings-v2");
-    schema.Upgrade = &Upgrade;
     AssetPipelineDiagnostic diagnostic;
     Defaults().ToJson(schema.NormalizedDefaults, diagnostic);
     ASSERT(diagnostic.Code == AssetPipelineDiagnosticCode::None);
@@ -417,47 +415,6 @@ bool TextureProcessorSettings::Parse(const StringAnsiView& json, int32 version, 
         result.UnknownFields.Add(StringAnsi(name), MoveTemp(fragment));
     }
     return result.Validate(diagnostic);
-}
-
-bool TextureProcessorSettings::Upgrade(int32 fromVersion, const StringAnsiView& input, StringAnsi& output, AssetPipelineDiagnostic& diagnostic)
-{
-    output.Clear();
-    diagnostic = AssetPipelineDiagnostic();
-    if (fromVersion != 1)
-        return SettingsFail(diagnostic, TEXT("Texture settings have no deterministic migration from this version."));
-    JsonDocument document;
-    document.Parse(input.Get(), input.Length());
-    CanonicalJsonError error;
-    if (document.HasParseError() || !document.IsObject() || CanonicalJsonWriter::Validate(document, error))
-        return SettingsFail(diagnostic, TEXT("Legacy texture settings are malformed."));
-
-    if (document.HasMember("Type") || document.HasMember("Compress") || document.HasMember("GenerateMipMaps"))
-    {
-        const auto sprites = document.FindMember("Sprites");
-        if (sprites != document.MemberEnd())
-        {
-            if (!sprites->value.IsArray() || sprites->value.Size() > 4096)
-                return SettingsFail(diagnostic, TEXT("Legacy texture sprite settings are invalid."));
-            for (const JsonValue& sprite : sprites->value.GetArray())
-            {
-                if (!sprite.IsObject())
-                    return SettingsFail(diagnostic, TEXT("Legacy texture sprite settings are invalid."));
-                const auto position = sprite.FindMember("Position");
-                const auto size = sprite.FindMember("Size");
-                if (position == sprite.MemberEnd() || !position->value.IsObject() ||
-                    size == sprite.MemberEnd() || !size->value.IsObject())
-                    return SettingsFail(diagnostic, TEXT("Legacy texture sprite settings are invalid."));
-            }
-        }
-        TextureTool::Options legacy;
-        legacy.Deserialize(document, nullptr);
-        TextureProcessorSettings settings = FromLegacyOptions(legacy);
-        return settings.ToJson(output, diagnostic);
-    }
-    TextureProcessorSettings settings;
-    if (Parse(input, CurrentVersion, settings, diagnostic))
-        return true;
-    return settings.ToJson(output, diagnostic);
 }
 
 bool TextureProcessorSettings::ToJson(StringAnsi& json, AssetPipelineDiagnostic& diagnostic) const

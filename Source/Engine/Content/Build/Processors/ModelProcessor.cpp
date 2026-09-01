@@ -603,7 +603,6 @@ AssetProcessorDescriptor ModelProcessor::CreateDescriptor()
     descriptor.InterfaceVersion = 1;
     descriptor.MaxParallelismClass = "model";
     descriptor.MemoryEstimate = 512ull * 1024ull * 1024ull;
-    descriptor.UpgradeSettings = &ModelProcessorSettings::Upgrade;
     descriptor.Prepare = &ModelProcessor::Prepare;
     descriptor.Build = &ModelProcessor::Build;
     AssetPipelineDiagnostic diagnostic;

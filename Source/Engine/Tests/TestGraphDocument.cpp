@@ -170,27 +170,6 @@ TEST_CASE("Graph documents decode asset references as assets")
     CHECK(snapshot.Document.Parameters[0].Default.AsAsset == referencedAsset);
 }
 
-TEST_CASE("Graph document migrations refuse silent upgrades and newer versions")
-{
-    GraphDocument document;
-    AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(GraphDocumentCodec::CreateStarter(MaterialFunction::TypeName, document, diagnostic));
-    StringAnsi json;
-    REQUIRE_FALSE(GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic));
-
-    GraphDocumentCodec codec;
-    AssetDocumentSnapshot snapshot;
-    REQUIRE_FALSE(codec.Decode(json, snapshot, diagnostic));
-    GraphDocumentMigrator migrator;
-    StringAnsi migrated;
-    REQUIRE_FALSE(migrator.Migrate(snapshot, GraphDocumentCodec::CurrentDocumentVersion, migrated, diagnostic));
-    CHECK(migrated == snapshot.CanonicalText);
-
-    snapshot.DocumentVersion = GraphDocumentCodec::CurrentDocumentVersion + 1;
-    CHECK(migrator.Migrate(snapshot, GraphDocumentCodec::CurrentDocumentVersion, migrated, diagnostic));
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::MigrationFailed);
-}
-
 TEST_CASE("Graph validation reports dangling connections and unique identities")
 {
     GraphDocument document;

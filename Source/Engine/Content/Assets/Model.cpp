@@ -5,7 +5,6 @@
 #include "Engine/Engine/Engine.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Content/WeakAssetReference.h"
-#include "Engine/Content/Upgraders/ModelAssetUpgrader.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Graphics/RenderTask.h"
@@ -69,7 +68,7 @@ public:
     }
 };
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(Model, "FlaxEngine.Model", ModelAssetUpgrader, true);
+REGISTER_BINARY_ASSET(Model, "FlaxEngine.Model", true);
 
 static byte EnableModelSDF = 0;
 #if !USE_EDITOR

@@ -143,13 +143,6 @@ public:
     static bool ValidateDocument(const GraphDocument& document, AssetPipelineDiagnostic& diagnostic);
 };
 
-/// <summary>Ordered migration entry point. Version one currently needs no rewrite.</summary>
-class FLAXENGINE_API GraphDocumentMigrator : public IAssetDocumentMigrator
-{
-public:
-    bool Migrate(const AssetDocumentSnapshot& source, int32 targetVersion, StringAnsi& canonicalText, AssetPipelineDiagnostic& diagnostic) const override;
-};
-
 /// <summary>Compatibility compiler that emits the current Visject surface payload.</summary>
 class FLAXENGINE_API GraphDocumentCompiler : public IAssetDocumentCompiler
 {

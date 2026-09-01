@@ -6,7 +6,6 @@
 #include "Particles.h"
 #include "Engine/Content/Deprecated.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
-#include "Engine/Content/Upgraders/ShaderAssetUpgrader.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Graphics/Shaders/Cache/ShaderCacheManager.h"
@@ -35,7 +34,7 @@
 #include "Engine/Utilities/Encryption.h"
 #endif
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(ParticleEmitter, "FlaxEngine.ParticleEmitter", ShaderAssetUpgrader, false);
+REGISTER_BINARY_ASSET(ParticleEmitter, "FlaxEngine.ParticleEmitter", false);
 
 ParticleEmitter::ParticleEmitter(const SpawnParams& params, const AssetInfo* info)
     : ShaderAssetTypeBase<BinaryAsset>(params, info)

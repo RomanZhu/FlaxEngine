@@ -2532,17 +2532,6 @@ bool GraphDocumentValidator::Validate(const AssetDocumentSnapshot& snapshot, Ass
     return false;
 }
 
-bool GraphDocumentMigrator::Migrate(const AssetDocumentSnapshot& source, int32 targetVersion, StringAnsi& canonicalText, AssetPipelineDiagnostic& diagnostic) const
-{
-    if (source.DocumentVersion > targetVersion)
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, AssetPipelineDiagnosticStage::Migration, TEXT("Newer unsupported graph documents are never downgraded."));
-    if (source.DocumentVersion != targetVersion || targetVersion != GraphDocumentCodec::CurrentDocumentVersion)
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, AssetPipelineDiagnosticStage::Migration, TEXT("No ordered graph migration is registered for the requested version range."));
-    canonicalText = source.CanonicalText;
-    diagnostic = AssetPipelineDiagnostic();
-    return false;
-}
-
 bool GraphDocumentCompiler::Compile(const AssetDocumentSnapshot& snapshot, Array<byte>& output, AssetPipelineDiagnostic& diagnostic) const
 {
     GraphDocumentCodec codec;
