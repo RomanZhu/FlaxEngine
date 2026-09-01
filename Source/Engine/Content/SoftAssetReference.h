@@ -41,11 +41,6 @@ public:
         return _id;
     }
 
-    FORCE_INLINE Guid GetRuntimeInstanceId() const
-    {
-        return _asset ? _asset->GetRuntimeInstanceId() : Guid::Empty;
-    }
-
     /// <summary>
     /// Gets the asset property value as string.
     /// </summary>

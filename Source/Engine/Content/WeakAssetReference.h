@@ -44,11 +44,6 @@ public:
         return _objectId;
     }
 
-    FORCE_INLINE Guid GetRuntimeInstanceId() const
-    {
-        return _asset ? _asset->GetRuntimeInstanceId() : Guid::Empty;
-    }
-
     /// <summary>
     /// Gets managed instance object (or null if no asset set).
     /// </summary>

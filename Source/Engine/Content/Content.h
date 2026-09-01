@@ -159,22 +159,6 @@ public:
     /// <returns>The collection of assets.</returns>
     static const Dictionary<Guid, Asset*, HeapAllocation>& GetAssetsRaw();
 
-    /// <summary>
-    /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
-    /// </summary>
-    /// <param name="runtimeId">Runtime object ID.</param>
-    /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
-    /// <returns>Loaded asset or null if cannot</returns>
-    API_FUNCTION() static Asset* LoadRuntimeObjectAsync(const Guid& runtimeId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
-
-    /// <summary>
-    /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
-    /// </summary>
-    /// <param name="runtimeId">Runtime object ID.</param>
-    /// <param name="type">The asset type. If loaded object has different type (excluding types derived from the given) the loading fails.</param>
-    /// <returns>Loaded asset or null if cannot</returns>
-    static Asset* LoadRuntimeObjectAsync(const Guid& runtimeId, const ScriptingTypeHandle& type);
-
     /// <summary>Loads one persistent asset object by GUID.</summary>
     API_FUNCTION() static Asset* LoadAssetAsync(const Guid& objectId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
 
@@ -203,18 +187,6 @@ public:
 
     /// <summary>Loads an exact asset object for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
     static Asset* LoadAsyncPreview(const Guid& objectId, const ScriptingTypeHandle& type);
-
-    /// <summary>
-    /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
-    /// </summary>
-    /// <param name="runtimeId">Runtime object ID.</param>
-    /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
-    /// <returns>Loaded asset or null if cannot</returns>
-    template<typename T>
-    FORCE_INLINE static T* LoadRuntimeObjectAsync(const Guid& runtimeId)
-    {
-        return static_cast<T*>(LoadRuntimeObjectAsync(runtimeId, T::TypeInitializer));
-    }
 
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
@@ -277,23 +249,6 @@ public:
     FORCE_INLINE static T* LoadAsyncInternal(const Char* internalPath)
     {
         return static_cast<T*>(LoadAsyncInternal(internalPath, T::TypeInitializer));
-    }
-
-    /// <summary>
-    /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
-    /// Waits until asset will be loaded. It's equivalent to LoadAsync + WaitForLoaded.
-    /// </summary>
-    /// <param name="id">Asset unique ID.</param>
-    /// <param name="timeoutInMilliseconds">Custom timeout value in milliseconds.</param>
-    /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
-    /// <returns>Asset instance if loaded, null otherwise.</returns>
-    template<typename T>
-    static T* LoadRuntimeObject(const Guid& runtimeId, double timeoutInMilliseconds = 30000.0)
-    {
-        auto asset = LoadRuntimeObjectAsync<T>(runtimeId);
-        if (asset && !asset->WaitForLoaded(timeoutInMilliseconds))
-            return asset;
-        return nullptr;
     }
 
     /// <summary>Loads and waits for one persistent asset object by GUID.</summary>

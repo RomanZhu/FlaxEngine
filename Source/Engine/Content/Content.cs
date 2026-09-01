@@ -35,28 +35,6 @@ namespace FlaxEngine
             count = buffer.Length;
         }
 
-        /// <summary>
-        /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
-        /// </summary>
-        /// <param name="id">Asset unique ID.</param>
-        /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
-        /// <returns>Asset instance if loaded, null otherwise.</returns>
-        public static T LoadRuntimeObjectAsync<T>(Guid id) where T : Asset
-        {
-            return (T)LoadRuntimeObjectAsync(id, typeof(T));
-        }
-
-        /// <summary>
-        /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
-        /// </summary>
-        /// <param name="id">Asset unique ID.</param>
-        /// <returns>Asset instance if loaded, null otherwise</returns>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Asset LoadRuntimeObjectAsync(Guid id)
-        {
-            return LoadRuntimeObjectAsync<Asset>(id);
-        }
-
         /// <summary>Loads one persistent asset object by its GUID.</summary>
         public static T LoadAssetAsync<T>(Guid id) where T : Asset
         {
@@ -134,19 +112,6 @@ namespace FlaxEngine
         /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async. The current thread execution is blocked until asset is loaded.
         /// Waits until asset will be loaded. It's equivalent to LoadAsync + WaitForLoaded.
         /// </summary>
-        /// <param name="id">Asset unique ID.</param>
-        /// <param name="timeoutInMilliseconds">Custom timeout value in milliseconds.</param>
-        /// <returns>Asset instance if loaded, null otherwise</returns>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Asset LoadRuntimeObject(Guid id, double timeoutInMilliseconds = 30000.0)
-        {
-            return LoadRuntimeObject<Asset>(id, timeoutInMilliseconds);
-        }
-
-        /// <summary>
-        /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async. The current thread execution is blocked until asset is loaded.
-        /// Waits until asset will be loaded. It's equivalent to LoadAsync + WaitForLoaded.
-        /// </summary>
         /// <param name="path">Path to the asset.</param>
         /// <param name="timeoutInMilliseconds">Custom timeout value in milliseconds.</param>
         /// <returns>Asset instance if loaded, null otherwise</returns>
@@ -168,22 +133,6 @@ namespace FlaxEngine
         public static Asset LoadInternal(string internalPath, double timeoutInMilliseconds = 30000.0)
         {
             return LoadInternal<Asset>(internalPath, timeoutInMilliseconds);
-        }
-
-        /// <summary>
-        /// Loads asset to the Content Pool and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
-        /// Waits until asset will be loaded. It's equivalent to LoadAsync + WaitForLoaded.
-        /// </summary>
-        /// <param name="id">Asset unique ID.</param>
-        /// <param name="timeoutInMilliseconds">Custom timeout value in milliseconds.</param>
-        /// <typeparam name="T">Type of the asset to load. Includes any asset types derived from the type.</typeparam>
-        /// <returns>Asset instance if loaded, null otherwise</returns>
-        public static T LoadRuntimeObject<T>(Guid id, double timeoutInMilliseconds = 30000.0) where T : Asset
-        {
-            var asset = LoadRuntimeObjectAsync<T>(id);
-            if (asset && asset.WaitForLoaded(timeoutInMilliseconds) == false)
-                return asset;
-            return null;
         }
 
         /// <summary>

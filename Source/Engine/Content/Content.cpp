@@ -955,11 +955,6 @@ Asset* Content::LoadAsyncInternal(const Char* internalPath, const ScriptingTypeH
     return LoadAsyncInternal(StringView(internalPath), type);
 }
 
-FLAXENGINE_API Asset* LoadRuntimeAsset(const Guid& runtimeId, const ScriptingTypeHandle& type)
-{
-    return Content::LoadRuntimeObjectAsync(runtimeId, type);
-}
-
 FLAXENGINE_API Asset* LoadAsset(const Guid& id, const ScriptingTypeHandle& type)
 {
     return Content::LoadAssetAsync(id, type);
@@ -1054,16 +1049,6 @@ const Dictionary<Guid, Asset*>& Content::GetAssetsRaw()
     AssetsLocker.Lock();
     AssetsLocker.Unlock();
     return Assets;
-}
-
-Asset* Content::LoadRuntimeObjectAsync(const Guid& runtimeId, const MClass* type)
-{
-    CHECK_RETURN(type, nullptr);
-    const auto scriptingType = Scripting::FindScriptingType(type->GetFullName());
-    if (scriptingType)
-        return LoadRuntimeObjectAsync(runtimeId, scriptingType);
-    LOG(Error, "Failed to find asset type '{0}'.", String(type->GetFullName()));
-    return nullptr;
 }
 
 Asset* Content::GetAsset(const StringView& outputPath)
@@ -2060,11 +2045,6 @@ Asset* Content::LoadAsyncPreview(const Guid& objectId, const ScriptingTypeHandle
     Asset* result = LoadAssetAsync(objectId, type);
     EndPassiveLoad();
     return result;
-}
-
-Asset* Content::LoadRuntimeObjectAsync(const Guid& runtimeId, const ScriptingTypeHandle& type)
-{
-    return LoadAssetAsync(runtimeId, type);
 }
 
 Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
