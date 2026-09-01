@@ -42,6 +42,7 @@ public:
     AssetInfo()
     {
         ID = Guid::Empty;
+        ObjectID = Guid::Empty;
     }
 
     /// <summary>
