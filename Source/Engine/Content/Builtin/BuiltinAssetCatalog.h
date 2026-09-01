@@ -24,7 +24,6 @@ private:
     Array<BuiltinAssetCatalogEntry> _entries;
     Array<String> _roots;
     Dictionary<AssetObjectId, int32> _byObject;
-    Dictionary<Guid, int32> _byRuntimeId;
     Dictionary<String, int32> _byPath;
     Dictionary<String, int32> _byUri;
     int32 _prebuiltRoots = 0;
@@ -43,7 +42,7 @@ public:
     bool TryGet(const Guid& runtimeId, AssetInfo& info) const;
     bool TryGetByPath(const StringView& pathOrUri, AssetInfo& info) const;
     bool IsReadOnlyPath(const StringView& pathOrUri) const;
-    StringView GetStoragePath(const Guid& runtimeId) const;
+    StringView GetStoragePath(const AssetObjectId& objectId) const;
     StringView GetUri(const AssetObjectId& objectId) const;
     void GetAll(Array<Guid>& result) const;
     void GetAllByTypeName(const StringView& typeName, Array<Guid>& result) const;

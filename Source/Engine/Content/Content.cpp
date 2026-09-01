@@ -937,7 +937,7 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 StringView Content::GetEditorAssetPath(const AssetObjectId& objectId)
 {
 #if USE_EDITOR
-    const StringView builtinPath = BuiltinAssetCatalog::Get().GetStoragePath(objectId.ToRuntimeObjectGuid());
+    const StringView builtinPath = BuiltinAssetCatalog::Get().GetStoragePath(objectId);
     if (builtinPath.HasChars())
         return builtinPath;
 #endif
