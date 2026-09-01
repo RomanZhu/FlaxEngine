@@ -8,7 +8,6 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Tasks;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Documents;
@@ -1501,8 +1500,9 @@ namespace FlaxEngine.Tests
         private static AssetItem AssertAuthoredEditorRoute(string path, Guid id, string typeName, string processor,
             string itemType, string proxyType, Type windowType)
         {
-            Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record));
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(id, out var record), "Missing database record for " + id);
             Assert.AreEqual(id, record.ID);
+            StringAssert.AreEqualIgnoringCase(Path.GetFullPath(path), Path.GetFullPath(record.SourcePath));
             Assert.AreEqual(typeName, record.TypeName);
             Assert.AreEqual(processor, record.ProcessorID);
             Assert.AreEqual(AssetSourceKind.TextDocument, record.SourceKind);
@@ -1513,7 +1513,7 @@ namespace FlaxEngine.Tests
             Assert.NotNull(item);
             Assert.AreEqual(itemType, item.GetType().Name);
             Assert.AreEqual(typeName, item.TypeName);
-            Assert.IsTrue(item.IsCanonicalSource);
+            Assert.IsTrue(item.IsCanonicalSource, "Project item is not canonical for " + path);
             var proxy = workspace.GetProxy(item);
             Assert.NotNull(proxy);
             Assert.AreEqual(proxyType, proxy.GetType().Name);
@@ -1552,26 +1552,41 @@ namespace FlaxEngine.Tests
             var emitterPath = Path.Combine(root, "Emitter.particleemitter");
             var systemPath = Path.Combine(root, "System.particlesystem");
             var collisionPath = Path.Combine(root, "Collision.collisiondata");
+            var modelPath = Path.Combine(root, "Triangle.gltf");
             var consoleDiagnostics = new List<string>();
+            var lifecycleStage = "setup";
             LogMessageDelegate captureConsoleDiagnostic = (level, message, stackTrace, threadId) =>
             {
                 if (level == LogType.Warning || level == LogType.Error || level == LogType.Fatal)
                 {
                     lock (consoleDiagnostics)
-                        consoleDiagnostics.Add(level + ": " + message);
+                        consoleDiagnostics.Add("[" + lifecycleStage + "] " + level + ": " + message);
                 }
             };
             Debug.LogMessageReceived += captureConsoleDiagnostic;
             try
             {
                 Directory.CreateDirectory(root);
+                File.WriteAllText(modelPath, "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":44,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAA=\"}],\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36,\"target\":34962},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6,\"target\":34963}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1,1,0],\"min\":[0,0,0]},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],\"nodes\":[{\"mesh\":0}],\"scenes\":[{\"nodes\":[0]}],\"scene\":0}");
+                lifecycleStage = "model metadata";
+                var modelId = ModelImporterService.CreateDefaultMetadata(modelPath);
+                lifecycleStage = "emitter create";
                 var emitterId = AssetDocumentRegistry.CreateGraph(emitterPath, typeof(ParticleEmitter).FullName);
+                lifecycleStage = "system create";
                 var systemId = AuthoredAssetDocumentService.Create(systemPath, typeof(ParticleSystem).FullName);
+                lifecycleStage = "collision create";
                 var collisionId = AuthoredAssetDocumentService.Create(collisionPath, typeof(CollisionData).FullName);
                 Assert.AreNotEqual(Guid.Empty, emitterId);
                 Assert.AreNotEqual(Guid.Empty, systemId);
                 Assert.AreNotEqual(Guid.Empty, collisionId);
+                Assert.AreNotEqual(Guid.Empty, modelId, string.Join(Environment.NewLine,
+                    AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
+                lifecycleStage = "initial refresh";
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { modelPath, emitterPath, systemPath, collisionPath }));
+                lifecycleStage = "model foreground build";
+                Assert.IsFalse(AssetPipelineService.BuildAssetForeground(modelId));
 
+                lifecycleStage = "editor routes";
                 var emitterItem = AssertAuthoredEditorRoute(emitterPath, emitterId, typeof(ParticleEmitter).FullName,
                     "Flax.GraphDocument", "BinaryAssetItem", "ParticleEmitterProxy", typeof(ParticleEmitterWindow));
                 var systemItem = AssertAuthoredEditorRoute(systemPath, systemId, typeof(ParticleSystem).FullName,
@@ -1579,6 +1594,7 @@ namespace FlaxEngine.Tests
                 AssertAuthoredEditorRoute(collisionPath, collisionId, typeof(CollisionData).FullName,
                     "Flax.CollisionData", "CollisionDataItem", "CollisionDataProxy", typeof(CollisionDataWindow));
 
+                lifecycleStage = "emitter edit";
                 var emitter = AssetDocumentRegistry.OpenGraph<ParticleEmitter>(emitterItem, out var emitterSession);
                 try
                 {
@@ -1587,30 +1603,33 @@ namespace FlaxEngine.Tests
                     emitterSession.SetGraphSurface((byte[])emitterSession.GetGraphSurface().Clone());
                     Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
                     Assert.IsFalse(emitterSession.IsDirty);
-                    Assert.IsTrue(emitterSession.ReloadFromDisk());
+                    Assert.IsTrue(emitterSession.ReloadFromDisk(), "Emitter graph session did not reload from disk.");
                 }
                 finally
                 {
                     AssetDocumentRegistry.Close(emitterItem, ref emitterSession);
                 }
 
+                lifecycleStage = "timeline and collision save";
                 var timeline = AuthoredAssetDocumentService.LoadParticleSystemTimeline(systemPath);
                 Assert.IsFalse(FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(systemPath,
                     () => AuthoredAssetDocumentService.SaveParticleSystemTimeline(systemPath, timeline)));
 
-                var cube = FlaxEngine.Content.LoadAsyncInternal<Model>("Editor/Primitives/Cube");
-                Assert.NotNull(cube);
-                Assert.IsFalse(cube.WaitForLoaded());
-                var collisionFailed = Task.Run(() => FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(collisionPath,
-                    () => FlaxEditor.Editor.CookMeshCollision(collisionPath, CollisionDataType.TriangleMesh, cube))).GetAwaiter().GetResult();
-                Assert.IsFalse(collisionFailed);
+                var collisionFailed = AuthoredAssetDocumentService.SaveCollisionData(collisionPath,
+                    CollisionDataType.TriangleMesh, modelId, 0, uint.MaxValue, ConvexMeshGenerationFlags.None, 255);
+                var collisionDiagnostics = AssetDatabaseQueryService.GetDiagnostics();
+                lock (consoleDiagnostics)
+                    Assert.IsFalse(collisionFailed, string.Join(Environment.NewLine,
+                        consoleDiagnostics.Concat(collisionDiagnostics.Select(x => x.Code + ": " + x.Message))));
 
+                lifecycleStage = "builds";
                 foreach (var id in new[] { emitterId, systemId, collisionId })
                 {
                     Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
-                    Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(id));
+                    Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(id), "Artifact was not current for " + id);
                 }
 
+                lifecycleStage = "runtime reload";
                 var system = FlaxEngine.Content.LoadAssetAsync<ParticleSystem>(systemId);
                 var collision = FlaxEngine.Content.LoadAssetAsync<CollisionData>(collisionId);
                 Assert.NotNull(system);
@@ -1622,6 +1641,7 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(system.WaitForLoaded());
                 Assert.IsFalse(collision.WaitForLoaded());
 
+                lifecycleStage = "refresh routes";
                 AssetPipelineService.RefreshSources(new[] { emitterPath, systemPath, collisionPath });
                 emitterItem = AssertAuthoredEditorRoute(emitterPath, emitterId, typeof(ParticleEmitter).FullName,
                     "Flax.GraphDocument", "BinaryAssetItem", "ParticleEmitterProxy", typeof(ParticleEmitterWindow));
@@ -1633,9 +1653,9 @@ namespace FlaxEngine.Tests
                 Assert.AreEqual(Path.GetFullPath(emitterPath), Path.GetFullPath(restartedEmitterSession.SourcePath));
                 AssetDocumentRegistry.Close(emitterItem, ref restartedEmitterSession);
                 Assert.IsTrue(FlaxEditor.Editor.GetCollisionDataOptions(collisionPath, out var collisionType, out var sourceModel,
-                    out _, out _, out _, out _));
+                    out _, out _, out _, out _), "Collision options were not readable after reload.");
                 Assert.AreEqual(CollisionDataType.TriangleMesh, collisionType);
-                Assert.AreEqual(cube.ID, sourceModel);
+                Assert.AreEqual(modelId, sourceModel);
 
                 AssertAuthoredText(emitterPath, typeof(ParticleEmitter).FullName);
                 AssertAuthoredText(systemPath, typeof(ParticleSystem).FullName);
@@ -1647,12 +1667,14 @@ namespace FlaxEngine.Tests
                     (ids.Contains(x.AssetGuid) || paths.Any(path => string.Equals(path, x.SourcePath, StringComparison.OrdinalIgnoreCase)))).ToArray();
                 Assert.IsEmpty(diagnostics, string.Join(Environment.NewLine, diagnostics.Select(x => x.Code + ": " + x.Message)));
                 lock (consoleDiagnostics)
-                    Assert.IsEmpty(consoleDiagnostics, string.Join(Environment.NewLine, consoleDiagnostics));
+                    Assert.IsEmpty(consoleDiagnostics, "emitter=" + emitterId + ", system=" + systemId +
+                        ", collision=" + collisionId + ", model=" + modelId + Environment.NewLine +
+                        string.Join(Environment.NewLine, consoleDiagnostics));
             }
             finally
             {
                 Debug.LogMessageReceived -= captureConsoleDiagnostic;
-                foreach (var path in new[] { emitterPath, systemPath, collisionPath })
+                foreach (var path in new[] { emitterPath, systemPath, collisionPath, modelPath })
                     CleanupCanonicalCopyAsset(path);
                 if (Directory.Exists(root))
                     Directory.Delete(root, true);

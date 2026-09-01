@@ -336,7 +336,7 @@ public:
     API_FUNCTION() static bool SaveSceneAnimationTimeline(const StringView& path, const BytesContainer& timeline);
     API_FUNCTION() static BytesContainer LoadParticleSystemTimeline(const StringView& path);
     API_FUNCTION() static bool SaveParticleSystemTimeline(const StringView& path, const BytesContainer& timeline);
-    static bool SaveCollisionData(const StringView& path, CollisionDataType type, const Guid& model, int32 modelLodIndex,
+    API_FUNCTION() static bool SaveCollisionData(const StringView& path, CollisionDataType type, const Guid& model, int32 modelLodIndex,
         uint32 materialSlotsMask, ConvexMeshGenerationFlags convexFlags, int32 convexVertexLimit);
     static bool LoadCollisionData(const StringView& path, CollisionData::SerializedOptions& options);
     API_FUNCTION() static Guid CreateMetadata(const StringView& sourcePath);
