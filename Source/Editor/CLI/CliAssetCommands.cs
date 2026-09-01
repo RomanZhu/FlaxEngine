@@ -844,7 +844,7 @@ namespace FlaxEditor
                     var asset = _pendingVerificationAsset;
                     if (asset == null)
                     {
-                        var hasRecord = AssetDatabaseQueryService.TryGetMainRecordAtPath(item.Path, out var record);
+                        var hasRecord = AssetDatabaseQueryService.TryGetRecord(item.ObjectID, out var record);
                         if (item.IsCanonicalSource && !hasRecord)
                             return;
                         var requiresBuild = item.IsCanonicalSource && record.SourceKind != AssetSourceKind.Folder;
