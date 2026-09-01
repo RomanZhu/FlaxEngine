@@ -295,6 +295,13 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     CHECK(FileSystem::FileExists(moved));
     CHECK_FALSE(FileSystem::FileExists(trash.TrashSourcePath));
 
+#if PLATFORM_WINDOWS
+    const String caseRenamed = content / TEXT("Moved/robot.gltf");
+    REQUIRE_FALSE(operations.MoveAsset(movedTarget, caseRenamed, diagnostic));
+    CHECK(FileSystem::FileExists(caseRenamed));
+    CHECK(FileSystem::FileExists(caseRenamed + TEXT(".meta")));
+#endif
+
     Array<AssetOperationSelfWrite> writes;
     operations.DrainSelfWrites(writes);
     CHECK(writes.Count() >= 8);
@@ -638,6 +645,23 @@ TEST_CASE("Project panel routes canonical multi-copy through native batch")
     MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestEditorUtils");
     REQUIRE(testClass);
     MMethod* testMethod = testClass->GetMethod("RunMultiCopyRoutesCanonicalSourcesThroughNativeBatch", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestEditorUtils"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
+}
+
+TEST_CASE("Project panel and scripting route single canonical pairs through native mutations")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestEditorUtils");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunSingleCanonicalPairMutationRoutes", 0);
     REQUIRE(testMethod);
     MObject* exception = nullptr;
     MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);

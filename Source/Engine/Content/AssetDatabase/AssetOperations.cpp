@@ -1360,7 +1360,14 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     {
         destinationAbsolute = destinationPath.AbsolutePath;
     }
-    if (source.AbsolutePath.Compare(destinationAbsolute, StringSearchCase::IgnoreCase) == 0)
+    const bool pathsEqualIgnoringCase = source.AbsolutePath.Compare(destinationAbsolute, StringSearchCase::IgnoreCase) == 0;
+#if PLATFORM_WINDOWS
+    const bool caseOnlyRename = pathsEqualIgnoringCase && source.AbsolutePath != destinationAbsolute &&
+        (kind == AssetOperationKind::Move || kind == AssetOperationKind::Rename);
+#else
+    const bool caseOnlyRename = false;
+#endif
+    if (pathsEqualIgnoringCase && !caseOnlyRename)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destinationAbsolute,
             TEXT("Asset move source and destination are the same exact path."));
     const String sourceMeta = MetaPath(source.AbsolutePath);
@@ -1394,8 +1401,8 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     if (hasFragments != (sourceFragments.HasChars() && FileSystem::DirectoryExists(sourceFragments)))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, sourceFragments,
             TEXT("Private scene fragments changed during move preparation."));
-    if (FileSystem::FileExists(destinationAbsolute) || FileSystem::FileExists(destinationMeta) ||
-        FileSystem::DirectoryExists(destinationAbsolute) ||
+    if ((!caseOnlyRename && (FileSystem::FileExists(destinationAbsolute) || FileSystem::FileExists(destinationMeta) ||
+        FileSystem::DirectoryExists(destinationAbsolute))) ||
         (hasFragments && (FileSystem::FileExists(destinationFragments) || FileSystem::DirectoryExists(destinationFragments))) ||
         EnsureParent(destinationAbsolute))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destinationAbsolute,

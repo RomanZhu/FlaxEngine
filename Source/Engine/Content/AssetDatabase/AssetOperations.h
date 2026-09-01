@@ -68,16 +68,18 @@ enum class AssetDefaultMetadataBatchFailurePoint : byte
 };
 
 /// <summary>Recoverable trash location returned by delete/trash operations.</summary>
-struct FLAXENGINE_API AssetTrashRecord
+API_STRUCT() struct FLAXENGINE_API AssetTrashRecord
 {
-    Guid TransactionId;
-    Guid AssetGuid;
-    String OriginalSourcePath;
-    String OriginalMetaPath;
-    String TrashSourcePath;
-    String TrashMetaPath;
-    String OriginalFragmentsPath;
-    String TrashFragmentsPath;
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetTrashRecord);
+
+    API_FIELD() Guid TransactionId = Guid::Empty;
+    API_FIELD() Guid AssetGuid = Guid::Empty;
+    API_FIELD() String OriginalSourcePath;
+    API_FIELD() String OriginalMetaPath;
+    API_FIELD() String TrashSourcePath;
+    API_FIELD() String TrashMetaPath;
+    API_FIELD() String OriginalFragmentsPath;
+    API_FIELD() String TrashFragmentsPath;
 };
 
 /// <summary>One exact canonical Content entry selected for recoverable trash staging.</summary>

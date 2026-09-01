@@ -261,6 +261,8 @@ public:
     API_FUNCTION() static bool CopyAssets(const Array<AssetCopyEntryRequest>& entries,
         API_PARAM(Out) Array<Guid>& copiedGuids);
     API_FUNCTION() static bool DeleteAsset(const StringView& sourcePath);
+    API_FUNCTION() static bool TrashAsset(const StringView& sourcePath, API_PARAM(Out) AssetTrashRecord& trash);
+    API_FUNCTION() static bool RestoreAsset(const AssetTrashRecord& trash);
     API_FUNCTION() static bool TrashEntries(const Array<AssetTrashEntryRequest>& entries,
         API_PARAM(Out) AssetTrashBatch& trash);
     API_FUNCTION() static bool RestoreEntries(const AssetTrashBatch& trash);

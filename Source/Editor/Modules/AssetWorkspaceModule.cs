@@ -1112,14 +1112,17 @@ namespace FlaxEditor.Modules
                 return ContentMutationResult.Prepared(requestedMoves[0].Item?.Path, requestedMoves[0].Destination);
 
             var operation = moves.Count == 1 && moves[0].OldParent == moves[0].NewParent ? ContentMutationOperationKind.Rename : ContentMutationOperationKind.Move;
-            var useNativeTransaction = moves.Count == 1 && CanUseNativeAssetTransaction(moves[0].Item, moves[0].Source, moves[0].Destination) &&
-                                       !ContentMutationPathUtils.IsCaseOnlyRename(moves[0].Source, moves[0].Destination);
+            var useNativeTransaction = moves.Count == 1 &&
+                                       CanUseNativeAssetTransaction(moves[0].Item, moves[0].Source, moves[0].Destination);
             ContentMutationPlan plan = null;
             ContentMutationResult result;
             if (useNativeTransaction)
             {
                 var move = moves[0];
                 ContentMutationDiagnostics.Log("mutation.move.begin", $"operation={operation}; items=1; native=true");
+#if FLAX_TESTS
+                CanonicalMoveObserver?.Invoke(move.Source, move.Destination);
+#endif
                 result = AssetOperationService.MoveAsset(move.Source, move.Destination)
                     ? ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, move.Source, move.Destination, "The native asset move transaction failed.")
                     : ContentMutationResult.Success(move.Source, move.Destination);
@@ -1876,6 +1879,7 @@ namespace FlaxEditor.Modules
 
 #if FLAX_TESTS
         internal static Action<string, string> CanonicalCopyObserver;
+        internal static Action<string, string> CanonicalMoveObserver;
         internal static Action<string> CanonicalDeleteObserver;
         internal static Action<AssetCopyEntryRequest[]> NativeCopyBatchObserver;
 #endif

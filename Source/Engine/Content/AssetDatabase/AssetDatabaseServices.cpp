@@ -2865,6 +2865,58 @@ bool AssetOperationService::DeleteAsset(const StringView& sourcePath)
 #endif
 }
 
+bool AssetOperationService::TrashAsset(const StringView& sourcePath, AssetTrashRecord& trash)
+{
+    trash = AssetTrashRecord();
+#if USE_EDITOR
+    if (AssetPipelineService::Initialize() || !Operations)
+        return true;
+    const String resolved = ResolveFacadeAssetPath(sourcePath);
+    AssetOperationTarget target;
+    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+    for (const AssetRecord& record : snapshot.Records)
+    {
+        if (record.IsMainAsset() && FileSystem::AreFilePathsEqual(record.SourcePath.Get(), resolved))
+        {
+            target.SourcePath = record.SourcePath.Get();
+            target.ExpectedGuid = record.SourceAssetID;
+            break;
+        }
+    }
+    AssetPipelineDiagnostic diagnostic;
+    if (!target.ExpectedGuid.IsValid())
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.SourcePath = resolved;
+        diagnostic.Message = TEXT("Canonical trash source is not registered as a main source asset.");
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+        return true;
+    }
+    const bool failed = Operations->TrashAsset(target, trash, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetOperationService::RestoreAsset(const AssetTrashRecord& trash)
+{
+#if USE_EDITOR
+    if (AssetPipelineService::Initialize() || !Operations)
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = Operations->RestoreAsset(trash, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
 bool AssetOperationService::TrashEntries(const Array<AssetTrashEntryRequest>& entries, AssetTrashBatch& trash)
 {
     trash = AssetTrashBatch();

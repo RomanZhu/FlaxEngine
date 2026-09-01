@@ -384,6 +384,100 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestSingleCanonicalPairMutationRoutes()
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var sourcePath = Path.Combine(Globals.ProjectContentFolder, "__SinglePairSource_" + token + ".txt");
+            var projectCopyPath = Path.Combine(Globals.ProjectContentFolder, "__SinglePairProjectCopy_" + token + ".txt");
+            var projectMovePath = Path.Combine(Globals.ProjectContentFolder, "__SinglePairProjectMove_" + token + ".txt");
+            var apiCopyPath = Path.Combine(Globals.ProjectContentFolder, "__SinglePairApiCopy_" + token + ".txt");
+            var apiMovePath = Path.Combine(Globals.ProjectContentFolder, "__SinglePairApiMove_" + token + ".txt");
+            ContentItemFilesystemAction deleteAction = null;
+            int nativeProjectMoves = 0;
+            try
+            {
+                var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
+                var contentFolder = workspace.Find(Globals.ProjectContentFolder) as ContentFolder;
+                Assert.NotNull(contentFolder);
+                var sourceItem = CreateCanonicalTextItem(sourcePath, contentFolder, out var sourceId);
+
+                var copyResult = workspace.Copy(sourceItem, projectCopyPath);
+                Assert.IsTrue(copyResult.Succeeded, copyResult.Message);
+                Assert.IsTrue(File.Exists(projectCopyPath));
+                Assert.IsTrue(File.Exists(projectCopyPath + ".meta"));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectCopyPath, out var projectCopyRecord));
+                Assert.AreNotEqual(sourceId, projectCopyRecord.SourceAssetID);
+
+                var projectCopyItem = workspace.FindAsset(projectCopyRecord.SourceAssetID);
+                Assert.NotNull(projectCopyItem);
+                AssetWorkspaceModule.CanonicalMoveObserver = (source, destination) =>
+                {
+                    Assert.AreEqual(Path.GetFullPath(projectCopyPath), Path.GetFullPath(source));
+                    Assert.AreEqual(Path.GetFullPath(projectMovePath), Path.GetFullPath(destination));
+                    nativeProjectMoves++;
+                };
+                var moveResult = workspace.TryMove(new[] { (Item: (ContentItem)projectCopyItem, Destination: projectMovePath) });
+                Assert.IsTrue(moveResult.Succeeded, moveResult.Message);
+                Assert.AreEqual(1, nativeProjectMoves);
+                Assert.IsFalse(File.Exists(projectCopyPath));
+                Assert.IsFalse(File.Exists(projectCopyPath + ".meta"));
+                Assert.IsTrue(File.Exists(projectMovePath));
+                Assert.IsTrue(File.Exists(projectMovePath + ".meta"));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var projectMoveRecord));
+                Assert.AreEqual(projectCopyRecord.SourceAssetID, projectMoveRecord.SourceAssetID);
+
+                var projectMoveItem = workspace.FindAsset(projectMoveRecord.SourceAssetID);
+                Assert.NotNull(projectMoveItem);
+                deleteAction = ContentItemFilesystemAction.Delete(FlaxEditor.Editor.Instance,
+                    new List<ContentItem> { projectMoveItem });
+                Assert.NotNull(deleteAction);
+                Assert.IsFalse(File.Exists(projectMovePath));
+                Assert.IsFalse(File.Exists(projectMovePath + ".meta"));
+                Assert.IsTrue(deleteAction.TryUndo(), "Project delete restore failed.");
+                Assert.IsTrue(File.Exists(projectMovePath));
+                Assert.IsTrue(File.Exists(projectMovePath + ".meta"));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var restoredProjectRecord));
+                Assert.AreEqual(projectMoveRecord.SourceAssetID, restoredProjectRecord.SourceAssetID);
+
+                Assert.IsFalse(AssetOperationService.CopyAsset(sourcePath, apiCopyPath, out var apiCopyId));
+                Assert.AreNotEqual(Guid.Empty, apiCopyId);
+                Assert.AreNotEqual(sourceId, apiCopyId);
+                Assert.IsTrue(File.Exists(apiCopyPath));
+                Assert.IsTrue(File.Exists(apiCopyPath + ".meta"));
+                Assert.IsFalse(AssetOperationService.MoveAsset(apiCopyPath, apiMovePath));
+                Assert.IsFalse(File.Exists(apiCopyPath));
+                Assert.IsFalse(File.Exists(apiCopyPath + ".meta"));
+                Assert.IsTrue(File.Exists(apiMovePath));
+                Assert.IsTrue(File.Exists(apiMovePath + ".meta"));
+                Assert.IsFalse(AssetOperationService.TrashAsset(apiMovePath, out var trash));
+                Assert.AreEqual(apiCopyId, trash.AssetGuid);
+                Assert.IsFalse(File.Exists(apiMovePath));
+                Assert.IsFalse(File.Exists(apiMovePath + ".meta"));
+                Assert.IsTrue(File.Exists(trash.TrashSourcePath));
+                Assert.IsTrue(File.Exists(trash.TrashMetaPath));
+                Assert.IsFalse(AssetOperationService.RestoreAsset(trash));
+                Assert.IsTrue(File.Exists(apiMovePath));
+                Assert.IsTrue(File.Exists(apiMovePath + ".meta"));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(apiMovePath, out var apiRestoredRecord));
+                Assert.AreEqual(apiCopyId, apiRestoredRecord.SourceAssetID);
+            }
+            finally
+            {
+                AssetWorkspaceModule.CanonicalMoveObserver = null;
+                deleteAction?.Dispose();
+                foreach (var path in new[] { projectCopyPath, projectMovePath, apiCopyPath, apiMovePath, sourcePath })
+                    CleanupCanonicalCopyAsset(path);
+                AssetPipelineService.RefreshSources(new[] { sourcePath, projectCopyPath, projectMovePath, apiCopyPath, apiMovePath });
+            }
+        }
+
+        public static int RunSingleCanonicalPairMutationRoutes()
+        {
+            new TestEditorUtils().TestSingleCanonicalPairMutationRoutes();
+            return 0;
+        }
+
+        [Test]
         public void TestMixedFolderCopyUsesOneOrderedNativeBatch()
         {
             var root = Path.Combine(Globals.ProjectContentFolder, "__MixedFolderCopy_" + Guid.NewGuid().ToString("N"));
