@@ -129,7 +129,7 @@ TEST_CASE("Texture processor settings accept Stone meta and preserve explicit de
             "type":"NormalMap","srgb":false,"generateMipMaps":true,"maxSize":4096,
             "compression":"Default","platformOverrides":{}}},
         "objectIds":{"main":{"fileId":1,"type":"FlaxEngine.Texture"}},
-        "labels":["environment","stone"]})";
+        "labels":["environment","stone"],"userData":{}})";
     AssetPipelineDiagnostic diagnostic;
     AssetMeta meta;
     REQUIRE_FALSE(AssetMeta::Parse(stoneMeta, TEXT("Stone.png.meta"), meta, diagnostic));

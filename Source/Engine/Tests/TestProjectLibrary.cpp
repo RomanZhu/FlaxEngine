@@ -69,12 +69,12 @@ TEST_CASE("Project Library recovery and clean stay contained")
     CHECK_FALSE(FileSystem::DirectoryExists(interrupted));
 
     ArtifactLease lease = ArtifactLease::Acquire(leasedPath);
-    CHECK(ArtifactStore::CleanEntireLibrary(diagnostic));
+    CHECK(ArtifactStore::CleanEntireLibrary(project, content, library, diagnostic));
     CHECK(FileSystem::FileExists(leasedPath));
     CHECK(FileSystem::FileExists(contentSentinel));
     lease.Reset();
 
-    CHECK_FALSE(ArtifactStore::CleanEntireLibrary(diagnostic));
+    CHECK_FALSE(ArtifactStore::CleanEntireLibrary(project, content, library, diagnostic));
     CHECK_FALSE(FileSystem::FileExists(leasedPath));
     CHECK(FileSystem::FileExists(contentSentinel));
     CHECK(FileSystem::DirectoryExists(ArtifactStore::GetArtifactsPath(library)));

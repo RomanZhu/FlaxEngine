@@ -281,10 +281,20 @@ bool ArtifactStore::Recover(const StringView& libraryRoot, AssetPipelineDiagnost
 bool ArtifactStore::CleanEntireLibrary(AssetPipelineDiagnostic& diagnostic)
 {
 #if USE_EDITOR
+    return CleanEntireLibrary(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, diagnostic);
+#else
+    return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryPathInvalid, StringView::Empty, TEXT("Project Library is available only in editor and cooker builds."));
+#endif
+}
+
+bool ArtifactStore::CleanEntireLibrary(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
+    AssetPipelineDiagnostic& diagnostic)
+{
+#if USE_EDITOR
     String normalized;
-    if (ProjectLibrary::ValidateRoot(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, normalized, diagnostic))
+    if (ProjectLibrary::ValidateRoot(projectRoot, contentRoot, libraryRoot, normalized, diagnostic))
         return true;
-    if (!FileSystem::AreFilePathsEquivalent(normalized, Globals::ProjectLibraryFolder) || IsReparsePoint(normalized))
+    if (!FileSystem::AreFilePathsEquivalent(normalized, libraryRoot) || IsReparsePoint(normalized))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryPathInvalid, normalized, TEXT("Refusing to clean an unconfigured or linked Project Library root."));
     if (ArtifactLease::HasLeaseWithin(normalized))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, normalized, TEXT("Project Library contains artifacts that are currently leased."));

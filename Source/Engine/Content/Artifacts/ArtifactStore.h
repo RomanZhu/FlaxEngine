@@ -27,6 +27,11 @@ public:
     /// <returns>True on failure.</returns>
     static bool CleanEntireLibrary(AssetPipelineDiagnostic& diagnostic);
 
+    /// <summary>Deletes and recreates the validated Library for the specified project roots. Active leases block cleaning.</summary>
+    /// <returns>True on failure.</returns>
+    static bool CleanEntireLibrary(const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
+        AssetPipelineDiagnostic& diagnostic);
+
     static String GetArtifactsPath(const StringView& libraryRoot);
     static String GetManifestsPath(const StringView& libraryRoot);
     static String GetTemporaryPath(const StringView& libraryRoot);
