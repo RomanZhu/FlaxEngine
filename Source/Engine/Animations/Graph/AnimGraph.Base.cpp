@@ -168,12 +168,12 @@ bool AnimGraphBase::onNodeLoaded(Node* n)
         case 2:
             ADD_BUCKET(AnimationBucketInit);
             n->Assets.Resize(1);
-            n->Assets[0] = (Asset*)Content::LoadRuntimeObjectAsync<Animation>((Guid)n->Values[0]);
+            n->Assets[0] = (Asset*)Content::LoadAssetAsync<Animation>((Guid)n->Values[0]);
             break;
         // Blend with Mask
         case 11:
             n->Assets.Resize(1);
-            n->Assets[0] = (Asset*)Content::LoadRuntimeObjectAsync<SkeletonMask>((Guid)n->Values[1]);
+            n->Assets[0] = (Asset*)Content::LoadAssetAsync<SkeletonMask>((Guid)n->Values[1]);
             break;
         // Multi Blend 1D
         case 12:
@@ -184,7 +184,7 @@ bool AnimGraphBase::onNodeLoaded(Node* n)
             n->Assets.Resize(n->Data.MultiBlend1D.Count);
             for (int32 i = 0; i < n->Data.MultiBlend1D.Count; i++)
             {
-                n->Assets[i] = Content::LoadRuntimeObjectAsync<Animation>((Guid)n->Values[i * 2 + 5]);
+                n->Assets[i] = Content::LoadAssetAsync<Animation>((Guid)n->Values[i * 2 + 5]);
                 n->Data.MultiBlend1D.IndicesSorted[i] = (ANIM_GRAPH_MULTI_BLEND_INDEX)(n->Assets[i] ? i : ANIM_GRAPH_MULTI_BLEND_INVALID);
             }
             Sorting::SortArray(n->Data.MultiBlend1D.IndicesSorted, n->Data.MultiBlend1D.Count, &SortMultiBlend1D, n);
@@ -202,7 +202,7 @@ bool AnimGraphBase::onNodeLoaded(Node* n)
             n->Assets.Resize(n->Data.MultiBlend1D.Count);
             for (int32 i = 0; i < n->Data.MultiBlend1D.Count; i++)
             {
-                n->Assets[i] = Content::LoadRuntimeObjectAsync<Animation>((Guid)n->Values[i * 2 + 5]);
+                n->Assets[i] = Content::LoadAssetAsync<Animation>((Guid)n->Values[i * 2 + 5]);
                 if (n->Assets[i])
                 {
                     vertices.Add(Float2(n->Values[i * 2 + 4].AsFloat4()));
@@ -302,7 +302,7 @@ bool AnimGraphBase::onNodeLoaded(Node* n)
             auto& data = n->Data.AnimationGraphFunction;
 
             // Load function asset
-            const auto function = Content::LoadRuntimeObjectAsync<AnimationGraphFunction>((Guid)n->Values[0]);
+            const auto function = Content::LoadAssetAsync<AnimationGraphFunction>((Guid)n->Values[0]);
             if (!function || function->WaitForLoaded())
             {
                 data.Graph = nullptr;

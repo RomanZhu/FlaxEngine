@@ -69,7 +69,7 @@ bool AudioPhysics::PlayRule(const AudioPhysicsRule& rule, const AudioImpactConte
     if (rule.Events.IsEmpty())
         return false;
     const int32 eventIndex = (int32)(pairKey % (uint64)rule.Events.Count());
-    const auto reference = Content::LoadRuntimeObjectAsync<JsonAsset>(rule.Events[eventIndex]);
+    const auto reference = Content::LoadAssetAsync<JsonAsset>(rule.Events[eventIndex]);
     if (!reference || reference->WaitForLoaded())
     {
         LastExplanation = TEXT("selected event asset is missing or failed to load");

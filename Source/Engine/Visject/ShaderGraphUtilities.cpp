@@ -65,7 +65,7 @@ void ShaderGraphUtilities::GenerateShaderConstantBuffer(TextWriterUnicode& write
             break;
         case MaterialParameterType::GameplayGlobal:
         {
-            auto asset = Content::LoadRuntimeObjectAsync<GameplayGlobals>(param.AsGuid);
+            auto asset = Content::LoadAssetAsync<GameplayGlobals>(param.AsGuid);
             if (!asset || asset->WaitForLoaded())
                 break;
             GameplayGlobals::Variable variable;
@@ -176,7 +176,7 @@ const Char* ShaderGraphUtilities::GenerateShaderResources(TextWriterUnicode& wri
             break;
         case MaterialParameterType::GameplayGlobal:
         {
-            auto asset = Content::LoadRuntimeObjectAsync<GameplayGlobals>(param.AsGuid);
+            auto asset = Content::LoadAssetAsync<GameplayGlobals>(param.AsGuid);
             if (!asset || asset->WaitForLoaded())
                 break;
             GameplayGlobals::Variable variable;
