@@ -317,6 +317,130 @@ TEST_CASE("Asset operations publish canonical copy batches once")
     CHECK(database.LastCommits[0].TransactionId == database.LastCommits[1].TransactionId);
 }
 
+TEST_CASE("Asset operations atomically copy mixed flattened Content batches")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetMixedCopyBatch-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    const byte assetBytes[] = { 1, 3, 5 };
+    const AssetMeta assetMeta = MakeOperationMeta();
+    const String assetSource = content / TEXT("Asset.bin");
+    REQUIRE_FALSE(operations.CreateAsset(assetSource,
+        Span<byte>(const_cast<byte*>(assetBytes), ARRAY_COUNT(assetBytes)), assetMeta, diagnostic));
+    const String sourceFolder = content / TEXT("Source Folder");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(sourceFolder));
+    const byte noteBytes[] = { 2, 4, 6, 8 };
+    const String noteSource = sourceFolder / TEXT("Note.txt");
+    REQUIRE_FALSE(File::WriteAllBytes(noteSource, noteBytes, ARRAY_COUNT(noteBytes)));
+    const AssetMeta folderMeta = MakeOperationMeta();
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(sourceFolder + TEXT(".meta"), folderMeta, diagnostic));
+    const int32 baselineRefreshCalls = database.RefreshCalls;
+
+    const String destinationFolder = content / TEXT("Folder Copy");
+    Array<AssetCopyEntryRequest> requests;
+    AssetCopyEntryRequest& asset = requests.AddOne();
+    asset.SourcePath = assetSource;
+    asset.DestinationPath = content / TEXT("Asset Copy.bin");
+    asset.ExpectedAssetGuid = assetMeta.ID;
+    AssetCopyEntryRequest& directory = requests.AddOne();
+    directory.SourcePath = sourceFolder;
+    directory.DestinationPath = destinationFolder;
+    directory.Kind = AssetCopyEntryKind::Directory;
+    AssetCopyEntryRequest& metadata = requests.AddOne();
+    metadata.SourcePath = sourceFolder + TEXT(".meta");
+    metadata.DestinationPath = destinationFolder + TEXT(".meta");
+    metadata.Kind = AssetCopyEntryKind::MetadataSidecar;
+    AssetCopyEntryRequest& note = requests.AddOne();
+    note.SourcePath = noteSource;
+    note.DestinationPath = destinationFolder / TEXT("Note.txt");
+    note.Kind = AssetCopyEntryKind::File;
+    Array<Guid> copiedGuids;
+
+    REQUIRE_FALSE(operations.CopyAssets(requests, copiedGuids, diagnostic));
+    REQUIRE(copiedGuids.Count() == 4);
+    CHECK(copiedGuids[0].IsValid());
+    CHECK_FALSE(copiedGuids[1].IsValid());
+    CHECK(copiedGuids[2].IsValid());
+    CHECK_FALSE(copiedGuids[3].IsValid());
+    CHECK(copiedGuids[0] != assetMeta.ID);
+    CHECK(copiedGuids[2] != folderMeta.ID);
+    CHECK(FileSystem::FileExists(asset.DestinationPath));
+    CHECK(FileSystem::DirectoryExists(destinationFolder));
+    CHECK(FileSystem::FileExists(metadata.DestinationPath));
+    CHECK(FileSystem::FileExists(note.DestinationPath));
+    AssetMeta copiedFolderMeta;
+    REQUIRE_FALSE(AssetMeta::Load(metadata.DestinationPath, copiedFolderMeta, diagnostic));
+    CHECK(copiedFolderMeta.ID == copiedGuids[2]);
+    BytesContainer copiedNote;
+    REQUIRE_FALSE(File::ReadAllBytes(note.DestinationPath, copiedNote));
+    CHECK(copiedNote.Length() == ARRAY_COUNT(noteBytes));
+    CHECK(Platform::MemoryCompare(copiedNote.Get(), noteBytes, ARRAY_COUNT(noteBytes)) == 0);
+    CHECK(database.RefreshCalls == baselineRefreshCalls + 1);
+    REQUIRE(database.LastCommits.Count() == 4);
+    for (const AssetOperationCommit& commit : database.LastCommits)
+        CHECK(commit.TransactionId == database.LastCommits[0].TransactionId);
+}
+
+TEST_CASE("Asset operations roll back mixed flattened copy failures")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetMixedCopyRollback-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    const byte sourceBytes[] = { 9, 7, 5 };
+    const AssetMeta assetMeta = MakeOperationMeta();
+    const String assetSource = content / TEXT("Asset.bin");
+    REQUIRE_FALSE(operations.CreateAsset(assetSource,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), assetMeta, diagnostic));
+    const String sourceFolder = content / TEXT("Source Folder");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(sourceFolder));
+    const String noteSource = sourceFolder / TEXT("Note.txt");
+    REQUIRE_FALSE(File::WriteAllBytes(noteSource, sourceBytes, ARRAY_COUNT(sourceBytes)));
+    const int32 baselineRefreshCalls = database.RefreshCalls;
+    database.FailClearOnCall = database.ClearCalls + 1;
+
+    const String destinationFolder = content / TEXT("Folder Copy");
+    Array<AssetCopyEntryRequest> requests;
+    AssetCopyEntryRequest& directory = requests.AddOne();
+    directory.SourcePath = sourceFolder;
+    directory.DestinationPath = destinationFolder;
+    directory.Kind = AssetCopyEntryKind::Directory;
+    AssetCopyEntryRequest& note = requests.AddOne();
+    note.SourcePath = noteSource;
+    note.DestinationPath = destinationFolder / TEXT("Note.txt");
+    note.Kind = AssetCopyEntryKind::File;
+    AssetCopyEntryRequest& asset = requests.AddOne();
+    asset.SourcePath = assetSource;
+    asset.DestinationPath = content / TEXT("Asset Copy.bin");
+    asset.ExpectedAssetGuid = assetMeta.ID;
+    Array<Guid> copiedGuids;
+
+    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic));
+    CHECK(copiedGuids.IsEmpty());
+    CHECK_FALSE(FileSystem::DirectoryExists(destinationFolder));
+    CHECK_FALSE(FileSystem::FileExists(note.DestinationPath));
+    CHECK_FALSE(FileSystem::FileExists(asset.DestinationPath));
+    CHECK_FALSE(FileSystem::FileExists(asset.DestinationPath + TEXT(".meta")));
+    CHECK(FileSystem::FileExists(noteSource));
+    CHECK(FileSystem::FileExists(assetSource));
+    CHECK(database.RefreshCalls == baselineRefreshCalls);
+}
+
 TEST_CASE("Asset operations roll back canonical copy batch failures")
 {
     const String root = Globals::TemporaryFolder / (TEXT("AssetCopyBatchRollback-") + Guid::New().ToString(Guid::FormatType::N));

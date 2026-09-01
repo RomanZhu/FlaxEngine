@@ -2472,6 +2472,21 @@ bool AssetOperationService::CopyAssets(const Array<AssetCopyEntryRequest>& entri
         AssetCopyEntryRequest resolvedEntry = entry;
         resolvedEntry.SourcePath = ResolveFacadeAssetPath(entry.SourcePath);
         resolvedEntry.DestinationPath = ResolveFacadeAssetPath(entry.DestinationPath);
+        if (entry.Kind != AssetCopyEntryKind::CanonicalAsset)
+        {
+            if (entry.ExpectedAssetGuid.IsValid())
+            {
+                AssetPipelineDiagnostic diagnostic;
+                diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+                diagnostic.SourcePath = resolvedEntry.SourcePath;
+                diagnostic.Message = TEXT("Only canonical copy entries may specify an expected asset GUID.");
+                SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+                return true;
+            }
+            resolvedEntries.Add(MoveTemp(resolvedEntry));
+            continue;
+        }
         bool found = false;
         for (const AssetRecord& record : snapshot.Records)
         {

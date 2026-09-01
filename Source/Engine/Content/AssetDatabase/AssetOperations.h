@@ -90,7 +90,16 @@ API_STRUCT() struct FLAXENGINE_API AssetTrashEntryRequest
     API_FIELD() bool IsFolder = false;
 };
 
-/// <summary>One exact canonical source copy in an all-or-none native batch.</summary>
+/// <summary>Exact copy behavior for one native batch entry.</summary>
+API_ENUM() enum class AssetCopyEntryKind : byte
+{
+    CanonicalAsset,
+    File,
+    Directory,
+    MetadataSidecar,
+};
+
+/// <summary>One exact source copy in an all-or-none native batch. Directory entries must precede their descendants.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetCopyEntryRequest
 {
     DECLARE_SCRIPTING_TYPE_MINIMAL(AssetCopyEntryRequest);
@@ -98,6 +107,7 @@ API_STRUCT() struct FLAXENGINE_API AssetCopyEntryRequest
     API_FIELD() String SourcePath;
     API_FIELD() String DestinationPath;
     API_FIELD() Guid ExpectedAssetGuid = Guid::Empty;
+    API_FIELD() AssetCopyEntryKind Kind = AssetCopyEntryKind::CanonicalAsset;
 };
 
 /// <summary>Exact native-owned recovery paths for one staged Content entry.</summary>

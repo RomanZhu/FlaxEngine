@@ -27,7 +27,7 @@ namespace
     constexpr uint32 JournalMagic = 0x4A504F41; // AOPJ
     constexpr uint32 JournalVersion = 2;
     constexpr uint32 BatchJournalMagic = 0x42504F41; // AOPB
-    constexpr uint32 BatchJournalVersion = 2;
+    constexpr uint32 BatchJournalVersion = 3;
     constexpr uint32 MetadataBatchJournalMagic = 0x4D504F41; // AOPM
     constexpr uint32 MetadataBatchJournalVersion = 1;
     constexpr int32 MaximumTrashEntries = 4096;
@@ -63,6 +63,7 @@ namespace
         Restore,
         Discard,
         Copy,
+        ContentCopy,
     };
 
     struct BatchOperationJournal
@@ -106,6 +107,11 @@ namespace
     String MetaPath(const StringView& source)
     {
         return String(source) + TEXT(".meta");
+    }
+
+    bool IsMetaPath(const StringView& path)
+    {
+        return path.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase);
     }
 
     bool EnsureDirectory(const StringView& path)
@@ -416,11 +422,12 @@ namespace
             reader.GuidValue(journal.TransactionId) || reader.GuidValue(journal.Trash.TransactionId) ||
             reader.StringValue(journal.TrashRoot) ||
             reader.StringValue(journal.DiscardStageRoot) || reader.UInt32(entryCount) ||
-            magic != BatchJournalMagic || (version != 1 && version != BatchJournalVersion) ||
+            magic != BatchJournalMagic || version < 1 || version > BatchJournalVersion ||
             !journal.TransactionId.IsValid() ||
             !journal.Trash.TransactionId.IsValid() ||
-            kind > static_cast<byte>(BatchJournalKind::Copy) ||
+            kind > static_cast<byte>(BatchJournalKind::ContentCopy) ||
             (version < 2 && kind == static_cast<byte>(BatchJournalKind::Copy)) ||
+            (version < 3 && kind == static_cast<byte>(BatchJournalKind::ContentCopy)) ||
             phase > static_cast<byte>(JournalPhase::Committed) || entryCount == 0 || entryCount > MaximumTrashEntries)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
                 TEXT("Batch asset operation journal is malformed or unsupported."));
@@ -699,6 +706,23 @@ namespace
         return FileSystem::FileExists(entry.TrashMetaPath) && DurableDeleteFile(entry.TrashMetaPath);
     }
 
+    bool RollbackContentCopyEntry(const AssetTrashEntry& entry)
+    {
+        bool failed = false;
+        for (int32 i = entry.Fragments.Count() - 1; i >= 0; i--)
+        {
+            if (FileSystem::DirectoryExists(entry.Fragments[i].TrashPath))
+                failed |= DurableDeleteDirectory(entry.Fragments[i].TrashPath);
+        }
+        if (entry.IsFolder && FileSystem::DirectoryExists(entry.TrashPath))
+            failed |= DurableDeleteDirectory(entry.TrashPath);
+        else if (FileSystem::FileExists(entry.TrashPath))
+            failed |= DurableDeleteFile(entry.TrashPath);
+        if (FileSystem::FileExists(entry.TrashMetaPath))
+            failed |= DurableDeleteFile(entry.TrashMetaPath);
+        return failed;
+    }
+
     bool RollbackBatchJournal(const BatchOperationJournal& journal)
     {
         if (journal.Kind == BatchJournalKind::Discard)
@@ -712,6 +736,8 @@ namespace
         {
             if (journal.Kind == BatchJournalKind::Copy)
                 failed |= RollbackCopiedEntry(journal.Trash.Entries[i]);
+            else if (journal.Kind == BatchJournalKind::ContentCopy)
+                failed |= RollbackContentCopyEntry(journal.Trash.Entries[i]);
             else
                 failed |= RollbackMovedEntry(journal.Trash.Entries[i], journal.Kind == BatchJournalKind::Trash);
         }
@@ -1604,18 +1630,36 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
     copiedGuids.Clear();
     if (requests.IsEmpty() || requests.Count() > MaximumTrashEntries)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, StringView::Empty,
-            TEXT("A canonical copy batch must contain a bounded non-empty entry set."));
+            TEXT("A native copy batch must contain a bounded non-empty entry set."));
 
     Array<AssetOperationTarget> targets;
     Array<String> destinations;
     Array<Guid> plannedGuids;
+    Array<AssetMeta> metadataClones;
+    Array<uint64> sourceSizes;
+    Array<int64> sourceWriteTicks;
+    Array<String> reservedDestinations;
     targets.EnsureCapacity(requests.Count());
     destinations.EnsureCapacity(requests.Count());
     plannedGuids.EnsureCapacity(requests.Count());
+    metadataClones.EnsureCapacity(requests.Count());
+    sourceSizes.EnsureCapacity(requests.Count());
+    sourceWriteTicks.EnsureCapacity(requests.Count());
     BatchOperationJournal journal;
     journal.TransactionId = Guid::New();
     journal.Kind = BatchJournalKind::Copy;
     journal.Trash.TransactionId = journal.TransactionId;
+    const auto reserveDestination = [this, &reservedDestinations, &diagnostic](const StringView& path)
+    {
+        for (const String& previous : reservedDestinations)
+        {
+            if (FileSystem::AreFilePathsEquivalent(previous, path))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, path,
+                    TEXT("A native copy batch repeats a destination path."));
+        }
+        reservedDestinations.Add(String(path));
+        return false;
+    };
     for (int32 i = 0; i < requests.Count(); i++)
     {
         const AssetCopyEntryRequest& request = requests[i];
@@ -1625,36 +1669,102 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         AssetPathPolicy::ProjectPath source;
         AssetPathPolicy::ProjectPath destination;
         AssetMeta sourceMeta;
-        if (ValidateExisting(target, source, sourceMeta, diagnostic) ||
-            NormalizeSource(request.DestinationPath, destination, diagnostic))
+        AssetMeta metadataClone;
+        Guid copiedGuid = Guid::Empty;
+        String sourceFragments;
+        String destinationFragments;
+        bool hasFragments = false;
+        uint64 sourceSize = 0;
+        int64 sourceWriteTime = 0;
+        if (NormalizeSource(request.DestinationPath, destination, diagnostic))
             return true;
-        const Guid copiedGuid = Guid::New();
-        const String sourceFragments = SceneFragmentStore::GetScenePath(_projectRoot, sourceMeta.ID);
-        const String destinationFragments = SceneFragmentStore::GetScenePath(_projectRoot, copiedGuid);
-        const bool hasFragments = FileSystem::DirectoryExists(sourceFragments);
-        if (!FileSystem::DirectoryExists(StringUtils::GetDirectoryName(destination.AbsolutePath)))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, destination.AbsolutePath,
-                TEXT("A canonical copy batch requires an existing destination folder."));
-        if (PathExists(destination.AbsolutePath) || PathExists(MetaPath(destination.AbsolutePath)) ||
-            (hasFragments && PathExists(destinationFragments)))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destination.AbsolutePath,
-                TEXT("A canonical copy batch destination is not empty."));
-        for (const String& previous : destinations)
+
+        if (request.Kind == AssetCopyEntryKind::CanonicalAsset)
         {
-            if (FileSystem::AreFilePathsEquivalent(previous, destination.AbsolutePath))
+            if (ValidateExisting(target, source, sourceMeta, diagnostic))
+                return true;
+            copiedGuid = Guid::New();
+            sourceFragments = SceneFragmentStore::GetScenePath(_projectRoot, sourceMeta.ID);
+            destinationFragments = SceneFragmentStore::GetScenePath(_projectRoot, copiedGuid);
+            hasFragments = FileSystem::DirectoryExists(sourceFragments);
+            if (PathExists(destination.AbsolutePath) || PathExists(MetaPath(destination.AbsolutePath)) ||
+                (hasFragments && PathExists(destinationFragments)))
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destination.AbsolutePath,
-                    TEXT("A canonical copy batch repeats a destination path."));
+                    TEXT("A canonical copy destination is not empty."));
+            if (reserveDestination(destination.AbsolutePath) || reserveDestination(MetaPath(destination.AbsolutePath)) ||
+                (hasFragments && reserveDestination(destinationFragments)))
+                return true;
         }
+        else
+        {
+            journal.Kind = BatchJournalKind::ContentCopy;
+            if (request.Kind != AssetCopyEntryKind::File && request.Kind != AssetCopyEntryKind::Directory &&
+                request.Kind != AssetCopyEntryKind::MetadataSidecar)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, request.SourcePath,
+                    TEXT("A native copy entry kind is unsupported."));
+            if (request.ExpectedAssetGuid.IsValid())
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, request.SourcePath,
+                    TEXT("Only canonical copy entries may specify an expected asset GUID."));
+            if (NormalizeSource(request.SourcePath, source, diagnostic))
+                return true;
+            const bool isDirectory = request.Kind == AssetCopyEntryKind::Directory;
+            if (isDirectory ? !FileSystem::DirectoryExists(source.AbsolutePath) : !FileSystem::FileExists(source.AbsolutePath))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, source.AbsolutePath,
+                    TEXT("A native copy source is missing or has the wrong filesystem type."));
+            if (ContainsFileSystemLink(source.AbsolutePath, isDirectory))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, source.AbsolutePath,
+                    TEXT("Native copy batches reject filesystem links."));
+            if (isDirectory && AssetPathPolicy::IsSameOrChild(destination.AbsolutePath, source.AbsolutePath))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destination.AbsolutePath,
+                    TEXT("A folder cannot be copied into itself or a descendant."));
+            if (PathExists(destination.AbsolutePath) || reserveDestination(destination.AbsolutePath))
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destination.AbsolutePath,
+                    TEXT("A native copy destination is not empty."));
+            if (request.Kind == AssetCopyEntryKind::MetadataSidecar)
+            {
+                if (!IsMetaPath(source.AbsolutePath) || !IsMetaPath(destination.AbsolutePath) ||
+                    AssetMeta::Load(source.AbsolutePath, sourceMeta, diagnostic))
+                    return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, source.AbsolutePath,
+                        TEXT("A metadata copy entry must name a valid source and destination sidecar."));
+                metadataClone = sourceMeta.CloneWithNewIdentities();
+                copiedGuid = metadataClone.ID;
+            }
+            sourceSize = isDirectory ? 0 : FileSystem::GetFileSize(source.AbsolutePath);
+            sourceWriteTime = FileSystem::GetFileLastEditTime(source.AbsolutePath).Ticks;
+            target.SourcePath = source.AbsolutePath;
+            target.ExpectedGuid = sourceMeta.ID;
+            if (_modificationProcessor.ValidateOperation(AssetOperationKind::Copy, target,
+                destination.AbsolutePath, diagnostic))
+                return true;
+        }
+
+        const String destinationParent = StringUtils::GetDirectoryName(destination.AbsolutePath);
+        bool destinationParentExists = FileSystem::DirectoryExists(destinationParent);
+        for (int32 j = 0; !destinationParentExists && j < destinations.Count(); j++)
+        {
+            destinationParentExists = requests[j].Kind == AssetCopyEntryKind::Directory &&
+                FileSystem::AreFilePathsEquivalent(destinations[j], destinationParent);
+        }
+        if (!destinationParentExists)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, destination.AbsolutePath,
+                TEXT("Native copy entries require an existing or earlier planned destination folder."));
 
         targets.Add(MoveTemp(target));
         destinations.Add(destination.AbsolutePath);
         plannedGuids.Add(copiedGuid);
+        metadataClones.Add(MoveTemp(metadataClone));
+        sourceSizes.Add(sourceSize);
+        sourceWriteTicks.Add(sourceWriteTime);
         AssetTrashEntry& entry = journal.Trash.Entries.AddOne();
         entry.AssetGuid = copiedGuid;
         entry.OriginalPath = source.AbsolutePath;
         entry.TrashPath = destination.AbsolutePath;
-        entry.OriginalMetaPath = MetaPath(source.AbsolutePath);
-        entry.TrashMetaPath = MetaPath(destination.AbsolutePath);
+        entry.IsFolder = request.Kind == AssetCopyEntryKind::Directory;
+        if (request.Kind == AssetCopyEntryKind::CanonicalAsset)
+        {
+            entry.OriginalMetaPath = MetaPath(source.AbsolutePath);
+            entry.TrashMetaPath = MetaPath(destination.AbsolutePath);
+        }
         if (hasFragments)
         {
             AssetTrashFragment& fragment = entry.Fragments.AddOne();
@@ -1705,13 +1815,53 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
 
     for (int32 i = 0; i < requests.Count(); i++)
     {
-        Guid copiedGuid;
+        Guid copiedGuid = Guid::Empty;
         AssetOperationCommit commit;
-        if (CopyAssetInternal(targets[i], destinations[i], copiedGuid, diagnostic, &commit, plannedGuids[i]) ||
-            copiedGuid != plannedGuids[i])
+        if (requests[i].Kind == AssetCopyEntryKind::CanonicalAsset)
         {
-            const AssetPipelineDiagnostic failure = diagnostic;
-            return failAndRollback(failure);
+            if (CopyAssetInternal(targets[i], destinations[i], copiedGuid, diagnostic, &commit, plannedGuids[i]) ||
+                copiedGuid != plannedGuids[i])
+            {
+                const AssetPipelineDiagnostic failure = diagnostic;
+                return failAndRollback(failure);
+            }
+        }
+        else
+        {
+            const bool isDirectory = requests[i].Kind == AssetCopyEntryKind::Directory;
+            const String& source = journal.Trash.Entries[i].OriginalPath;
+            if ((isDirectory ? !FileSystem::DirectoryExists(source) : !FileSystem::FileExists(source)) ||
+                PathExists(destinations[i]) ||
+                FileSystem::GetFileLastEditTime(source).Ticks != sourceWriteTicks[i] ||
+                (!isDirectory && FileSystem::GetFileSize(source) != sourceSizes[i]))
+            {
+                Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, source,
+                    TEXT("A native copy source or destination changed after preflight."));
+                const AssetPipelineDiagnostic failure = diagnostic;
+                return failAndRollback(failure);
+            }
+            bool copyFailed = false;
+            if (isDirectory)
+                copyFailed = EnsureDirectory(destinations[i]);
+            else if (requests[i].Kind == AssetCopyEntryKind::MetadataSidecar)
+                copyFailed = AssetMeta::SaveAtomic(destinations[i], metadataClones[i], diagnostic);
+            else
+                copyFailed = FileSystem::CopyFile(destinations[i], source) || FlushFile(destinations[i]) ||
+                    DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(destinations[i]));
+            if (copyFailed)
+            {
+                if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                    Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, destinations[i],
+                        TEXT("A native copy batch entry could not be committed."));
+                const AssetPipelineDiagnostic failure = diagnostic;
+                return failAndRollback(failure);
+            }
+            copiedGuid = plannedGuids[i];
+            commit.Kind = AssetOperationKind::Copy;
+            commit.AssetGuid = copiedGuid;
+            commit.SourcePath = source;
+            commit.DestinationPath = destinations[i];
+            AddSelfWrite(commit, destinations[i]);
         }
         commit.TransactionId = journal.TransactionId;
         for (AssetOperationSelfWrite& write : commit.SelfWrites)
@@ -2781,7 +2931,7 @@ bool AssetOperations::RecoverIncompleteTransactions(Array<AssetPipelineDiagnosti
                     !FileSystem::AreFilePathsEquivalent(batch.DiscardStageRoot,
                         String(directory) / TEXT("discard.stage"))) ||
                 (batch.Kind != BatchJournalKind::Discard && batch.DiscardStageRoot.HasChars());
-            if (batch.Kind == BatchJournalKind::Copy)
+            if (batch.Kind == BatchJournalKind::Copy || batch.Kind == BatchJournalKind::ContentCopy)
                 unsafe |= batch.TransactionId != batch.Trash.TransactionId || batch.TrashRoot.HasChars();
             else
                 unsafe |= !FileSystem::AreFilePathsEquivalent(batch.TrashRoot, expectedTrashRoot);
@@ -2826,6 +2976,46 @@ bool AssetOperations::RecoverIncompleteTransactions(Array<AssetPipelineDiagnosti
                     }
                     continue;
                 }
+                if (batch.Kind == BatchJournalKind::ContentCopy)
+                {
+                    AssetPathPolicy::ProjectPath destination;
+                    const bool hasMetadataPair = entry.OriginalMetaPath.HasChars() || entry.TrashMetaPath.HasChars();
+                    unsafe |= NormalizeSource(entry.TrashPath, destination, diagnostic) ||
+                        !FileSystem::AreFilePathsEquivalent(destination.AbsolutePath, entry.TrashPath) ||
+                        FileSystem::AreFilePathsEquivalent(destination.AbsolutePath, _contentRoot) ||
+                        FileSystem::AreFilePathsEquivalent(entry.OriginalPath, entry.TrashPath) ||
+                        entry.Fragments.Count() > 1 ||
+                        entry.OriginalMetaPath.HasChars() != entry.TrashMetaPath.HasChars() ||
+                        (entry.IsFolder && (entry.AssetGuid.IsValid() || hasMetadataPair || entry.Fragments.HasItems())) ||
+                        (!entry.IsFolder && !hasMetadataPair && entry.AssetGuid.IsValid() &&
+                            (!IsMetaPath(entry.OriginalPath) || !IsMetaPath(entry.TrashPath)));
+                    if (hasMetadataPair)
+                    {
+                        unsafe |= entry.IsFolder || !entry.AssetGuid.IsValid() ||
+                            !FileSystem::AreFilePathsEquivalent(entry.OriginalMetaPath, MetaPath(entry.OriginalPath)) ||
+                            !FileSystem::AreFilePathsEquivalent(entry.TrashMetaPath, MetaPath(entry.TrashPath));
+                    }
+                    AssetMeta sourceMeta;
+                    if (entry.AssetGuid.IsValid() && batch.Phase != JournalPhase::Committed)
+                    {
+                        AssetPipelineDiagnostic sourceDiagnostic;
+                        const String& sourceMetaPath = hasMetadataPair ? entry.OriginalMetaPath : entry.OriginalPath;
+                        unsafe |= AssetMeta::Load(sourceMetaPath, sourceMeta, sourceDiagnostic) ||
+                            sourceMeta.ID == entry.AssetGuid;
+                    }
+                    if (entry.Fragments.HasItems())
+                    {
+                        unsafe |= !entry.AssetGuid.IsValid() || !hasMetadataPair ||
+                            !FileSystem::AreFilePathsEquivalent(entry.Fragments[0].TrashPath,
+                                SceneFragmentStore::GetScenePath(_projectRoot, entry.AssetGuid)) ||
+                            !AssetPathPolicy::IsSameOrChild(entry.Fragments[0].OriginalPath, fragmentsRoot) ||
+                            FileSystem::AreFilePathsEquivalent(entry.Fragments[0].OriginalPath, fragmentsRoot);
+                        if (batch.Phase != JournalPhase::Committed)
+                            unsafe |= !FileSystem::AreFilePathsEquivalent(entry.Fragments[0].OriginalPath,
+                                SceneFragmentStore::GetScenePath(_projectRoot, sourceMeta.ID));
+                    }
+                    continue;
+                }
                 unsafe |= !AssetPathPolicy::IsSameOrChild(entry.TrashPath, batch.TrashRoot) ||
                     FileSystem::AreFilePathsEquivalent(entry.TrashPath, batch.TrashRoot) ||
                     (entry.OriginalMetaPath.HasChars() &&
@@ -2841,15 +3031,22 @@ bool AssetOperations::RecoverIncompleteTransactions(Array<AssetPipelineDiagnosti
                         FileSystem::AreFilePathsEquivalent(fragment.TrashPath, batch.TrashRoot);
                 }
             }
-            if (batch.Kind == BatchJournalKind::Copy)
+            if (batch.Kind == BatchJournalKind::Copy || batch.Kind == BatchJournalKind::ContentCopy)
             {
                 for (int32 i = 0; i < batch.Trash.Entries.Count(); i++)
                 {
                     for (int32 j = 0; j < i; j++)
                     {
-                        unsafe |= batch.Trash.Entries[i].AssetGuid == batch.Trash.Entries[j].AssetGuid ||
+                        unsafe |= (batch.Trash.Entries[i].AssetGuid.IsValid() &&
+                                batch.Trash.Entries[i].AssetGuid == batch.Trash.Entries[j].AssetGuid) ||
                             FileSystem::AreFilePathsEquivalent(batch.Trash.Entries[i].TrashPath,
-                                batch.Trash.Entries[j].TrashPath);
+                                batch.Trash.Entries[j].TrashPath) ||
+                            (batch.Trash.Entries[i].TrashMetaPath.HasChars() &&
+                                FileSystem::AreFilePathsEquivalent(batch.Trash.Entries[i].TrashMetaPath,
+                                    batch.Trash.Entries[j].TrashPath)) ||
+                            (batch.Trash.Entries[j].TrashMetaPath.HasChars() &&
+                                FileSystem::AreFilePathsEquivalent(batch.Trash.Entries[j].TrashMetaPath,
+                                    batch.Trash.Entries[i].TrashPath));
                     }
                 }
             }
