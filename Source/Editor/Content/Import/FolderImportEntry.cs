@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System.IO;
+using FlaxEngine;
 
 namespace FlaxEditor.Content.Import
 {
@@ -29,13 +30,23 @@ namespace FlaxEditor.Content.Import
                 Editor.LogWarning("Cannot import folder because the destination already exists: " + ResultUrl);
                 return true;
             }
-            Directory.CreateDirectory(ResultUrl);
             var parentPath = Path.GetDirectoryName(ResultUrl);
             var parent = Editor.Instance.ContentDatabase.Find(parentPath);
             if (parent == null)
             {
                 Editor.LogWarning("Failed to find the parent folder for the imported directory.");
-                Directory.Delete(ResultUrl, false);
+                return true;
+            }
+            var createResult = Editor.Instance.ContentDatabase.CreatePath(ResultUrl, true, () => Directory.CreateDirectory(ResultUrl));
+            if (!createResult.Succeeded)
+            {
+                Editor.LogWarning(createResult.Message ?? "Failed to create the imported directory.");
+                return true;
+            }
+            if (AssetPipelineService.RefreshSources(new[] { ResultUrl }))
+            {
+                foreach (var diagnostic in AssetDatabaseQueryService.GetDiagnostics())
+                    Editor.LogWarning($"Failed to register imported folder {diagnostic.SourcePath}: {diagnostic.Message}");
                 return true;
             }
             Editor.Instance.ContentDatabase.RefreshFolder(parent, true);
@@ -43,17 +54,18 @@ namespace FlaxEditor.Content.Import
             if (target == null)
             {
                 Editor.LogWarning("Failed to index the imported directory: " + ResultUrl);
-                Directory.Delete(ResultUrl, false);
                 return true;
             }
 
             // Import all sub elements
             var files = Directory.GetFiles(SourceUrl);
-            Editor.Instance.ContentImporting.Import(files, target, SkipSettingsDialog);
+            if (files.Length != 0)
+                Editor.Instance.ContentImporting.Import(files, target, SkipSettingsDialog);
 
             // Import all sub dirs
             var folders = Directory.GetDirectories(SourceUrl);
-            Editor.Instance.ContentImporting.Import(folders, target, SkipSettingsDialog);
+            if (folders.Length != 0)
+                Editor.Instance.ContentImporting.Import(folders, target, SkipSettingsDialog);
 
             return false;
         }

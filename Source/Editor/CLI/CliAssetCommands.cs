@@ -584,8 +584,9 @@ namespace FlaxEditor
                 var moveResult = Editor.Instance.ContentDatabase.TryMove(new[] { (item, destination) });
                 if (!moveResult.Succeeded)
                     throw new InvalidOperationException(moveResult.Message ?? $"Failed to move asset to '{destination}' ({moveResult.Failure}).");
+                RefreshPath(destination, false);
                 TrackVerification(destination);
-                return DescribeAsset(item);
+                return DescribeAsset(RequireItem(destination));
             }
 
             private object DeleteAsset(CliAssetOperationOptions options)

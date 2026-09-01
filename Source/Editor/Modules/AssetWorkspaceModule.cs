@@ -1158,7 +1158,11 @@ namespace FlaxEditor.Modules
                 refresh[i * 2] = moves[i].Source;
                 refresh[i * 2 + 1] = moves[i].Destination;
             }
-            QueueCanonicalSourceRefresh(refresh);
+            if (AssetPipelineService.RefreshSources(refresh))
+            {
+                ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={plan.Id:N}; failure=canonical-refresh; items={moves.Count}; entries={plan.Entries.Count}");
+                return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, moves[0].Source, moves[0].Destination, "The move committed, but the canonical asset database refresh failed.", transactionId: plan.Id);
+            }
             ContentMutationDiagnostics.Log("mutation.move.committed", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
             return result;
         }
@@ -1407,7 +1411,11 @@ namespace FlaxEditor.Modules
                 var refresh = new string[requests.Count];
                 for (int i = 0; i < requests.Count; i++)
                     refresh[i] = requests[i].Destination;
-                QueueCanonicalSourceRefresh(refresh);
+                if (AssetPipelineService.RefreshSources(refresh))
+                {
+                    ContentMutationDiagnostics.Log("mutation.copy.failed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}; failure=canonical-refresh");
+                    return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, requests[0].Item.Path, requests[0].Destination, "The copy committed, but the canonical asset database refresh failed.", transactionId: result.TransactionId);
+                }
                 ContentMutationDiagnostics.Log("mutation.copy.committed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}");
             }
             else

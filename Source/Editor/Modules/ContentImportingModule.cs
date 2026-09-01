@@ -923,11 +923,19 @@ namespace FlaxEditor.Modules
                     if (wasLastTickWorking)
                     {
                         WaitForCanonicalBuilds(pendingCanonicalBuilds);
+                        bool waitingForRequests;
                         lock (_requests)
                         {
                             if (_importingQueue.Count != 0)
                                 continue;
-                            _importBatchDone = _importBatchSize = 0;
+                            waitingForRequests = _requests.Count != 0;
+                            if (!waitingForRequests)
+                                _importBatchDone = _importBatchSize = 0;
+                        }
+                        if (waitingForRequests)
+                        {
+                            Thread.Sleep(1);
+                            continue;
                         }
                         ImportingQueueEnd?.Invoke();
                     }
