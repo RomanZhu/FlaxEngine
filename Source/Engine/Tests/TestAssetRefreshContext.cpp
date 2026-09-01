@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseScanner.h"
 #include "Engine/Content/Importing/AssetRefreshCoordinator.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DateTime.h"
