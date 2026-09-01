@@ -48,13 +48,12 @@ struct FLAXENGINE_API AssetImportWorkerDescriptor
     ContentHash ImplementationHash;
     bool ProducesMainObject = true;
     bool ProducesSubObjects = false;
-    bool PathSensitive = true;
 };
 
 /// <summary>Self-contained immutable import job passed to an isolated worker process.</summary>
 struct FLAXENGINE_API AssetImportJobRequest
 {
-    static constexpr uint32 CurrentProtocolVersion = 3;
+    static constexpr uint32 CurrentProtocolVersion = 4;
 
     uint32 ProtocolVersion = CurrentProtocolVersion;
     Guid JobID;

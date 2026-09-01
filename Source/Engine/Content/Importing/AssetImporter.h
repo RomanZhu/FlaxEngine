@@ -35,7 +35,6 @@ struct FLAXENGINE_API AssetImporterDescriptor
     bool SupportsParallelImport = true;
     bool ProcessSafe = false;
     bool RequiresMainThread = false;
-    bool PathSensitive = true;
     /// <summary>
     /// Dedicated protocol-compatible executable for a process-safe third-party native importer.
     /// Managed importers leave this empty and use the restricted editor worker host.

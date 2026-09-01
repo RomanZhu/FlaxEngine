@@ -121,6 +121,33 @@ TEST_CASE("AssetImportPlanner coalesces revisions and pins importer lifetime")
     plans.Clear();
 }
 
+TEST_CASE("AssetImportPlanner fingerprints source basename but not parent path")
+{
+    AssetImporterRegistry registry;
+    AssetImporterRegistration registration;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(registry.Register(MakeImporter(TEXT("Tests.PathSemantics"), TEXT(".foo")), registration, diagnostic));
+    AssetImportPlanner planner(registry);
+    AssetImportPlanRequest request = MakeRequest(AssetGuid(Guid::New()), 1);
+    Array<AssetImportPlanRequest> requests;
+    Array<AssetImportPlan> plans;
+
+    request.SourcePath = TEXT("Assets/First/model.foo");
+    requests.Add(request);
+    REQUIRE_FALSE(planner.Build(requests, plans, diagnostic));
+    const ArtifactKey original = plans[0].StaticFingerprint;
+
+    requests[0].SourcePath = TEXT("Assets/Second/model.foo");
+    plans.Clear();
+    REQUIRE_FALSE(planner.Build(requests, plans, diagnostic));
+    CHECK(plans[0].StaticFingerprint == original);
+
+    requests[0].SourcePath = TEXT("Assets/Second/renamed.foo");
+    plans.Clear();
+    REQUIRE_FALSE(planner.Build(requests, plans, diagnostic));
+    CHECK(plans[0].StaticFingerprint != original);
+}
+
 TEST_CASE("AssetRefreshCoordinator restarts on importer generation and reaches a fixed point")
 {
     AssetImporterRegistry importers;

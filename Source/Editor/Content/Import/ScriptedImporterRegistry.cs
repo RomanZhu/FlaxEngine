@@ -118,8 +118,7 @@ namespace FlaxEditor.Content.Import
                                     (attribute.ProducesMainObject ? 2 : 0) |
                                     (attribute.ProducesSubObjects ? 4 : 0) |
                                     (attribute.SupportsParallelImport ? 8 : 0) |
-                                    (attribute.RequiresMainThread ? 16 : 0) |
-                                    (attribute.PathSensitive ? 32 : 0);
+                                    (attribute.RequiresMainThread ? 16 : 0);
                         if (ScriptedImporterInterop.AddRegistration(entry.ID, attribute.Version, attribute.SettingsVersion,
                             entry.ImplementationHash, string.Join(";", attribute.Extensions), attribute.Priority, flags))
                             throw new InvalidOperationException(ScriptedImporterInterop.GetLastError());

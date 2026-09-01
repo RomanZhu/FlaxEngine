@@ -332,7 +332,6 @@ bool AssetImportWorkerProtocol::SaveRequest(const StringView& path, const AssetI
     writer.Hash(request.Importer.ImplementationHash);
     writer.Pod(request.Importer.ProducesMainObject);
     writer.Pod(request.Importer.ProducesSubObjects);
-    writer.Pod(request.Importer.PathSensitive);
     WriteTarget(writer, request.Target);
     uint32 count = request.AuthorizedInputs.Count();
     writer.Pod(count);
@@ -376,7 +375,7 @@ bool AssetImportWorkerProtocol::LoadRequest(const StringView& path, AssetImportJ
         reader.Pod(request.Importer.ProviderKind) ||
         reader.Pod(request.Importer.ImporterVersion) || reader.Pod(request.Importer.SettingsSchemaVersion) ||
         reader.Hash(request.Importer.ImplementationHash) || reader.Pod(request.Importer.ProducesMainObject) ||
-        reader.Pod(request.Importer.ProducesSubObjects) || reader.Pod(request.Importer.PathSensitive) || ReadTarget(reader, request.Target) ||
+        reader.Pod(request.Importer.ProducesSubObjects) || ReadTarget(reader, request.Target) ||
         reader.Count(count))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, TEXT("Isolated import request is truncated or malformed."));
     request.AuthorizedInputs.Resize(count);

@@ -117,7 +117,6 @@ namespace FlaxEditor.Content.Import
         public bool ProducesSubObjects { get; set; } = true;
         public bool SupportsParallelImport { get; set; }
         public bool RequiresMainThread { get; set; } = true;
-        public bool PathSensitive { get; set; } = true;
 
         public ScriptedImporterAttribute(string id, int version, string[] extensions, int priority = 0)
         {

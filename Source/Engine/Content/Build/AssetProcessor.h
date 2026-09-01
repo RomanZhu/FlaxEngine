@@ -67,7 +67,6 @@ struct FLAXENGINE_API AssetProcessorDescriptor
     String MainOutputType;
     StringAnsi NormalizedDefaultSettings = "{}\n";
     bool SupportsSubAssets = false;
-    bool IsPathSensitive = false;
     AssetProcessorThreadAffinity PrepareAffinity = AssetProcessorThreadAffinity::AnyWorker;
     AssetProcessorThreadAffinity BuildAffinity = AssetProcessorThreadAffinity::AnyWorker;
     StringAnsi MaxParallelismClass = "default";

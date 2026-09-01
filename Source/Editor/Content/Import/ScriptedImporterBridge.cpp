@@ -244,7 +244,6 @@ DEFINE_INTERNAL_CALL(bool) ScriptedImporterInternal_AddRegistration(MString* idO
     descriptor.ProducesSubObjects = (flags & 4) != 0;
     descriptor.SupportsParallelImport = (flags & 8) != 0;
     descriptor.RequiresMainThread = (flags & 16) != 0;
-    descriptor.PathSensitive = (flags & 32) != 0;
     descriptor.ProcessSafe = true;
     const ScriptedImporterInvoke callback = PendingInvoke;
     descriptor.Import = [id, callback](AssetImportContext& context, AssetPipelineDiagnostic& diagnostic)

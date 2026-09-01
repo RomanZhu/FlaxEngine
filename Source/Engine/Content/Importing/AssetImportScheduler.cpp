@@ -70,7 +70,6 @@ AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImport
     workerRequest.Importer.ImplementationHash = plan.Importer.ImplementationHash;
     workerRequest.Importer.ProducesMainObject = plan.Importer.ProducesMainObject;
     workerRequest.Importer.ProducesSubObjects = plan.Importer.ProducesSubObjects;
-    workerRequest.Importer.PathSensitive = plan.Importer.PathSensitive;
     workerRequest.Target = plan.Request.Target;
     workerRequest.Limits.MaximumMemoryBytes = plan.Importer.MaximumMemoryBytes;
     workerRequest.Limits.MaximumOutputBytes = plan.Importer.MaximumOutputBytes;

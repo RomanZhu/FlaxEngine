@@ -2,6 +2,7 @@
 
 #include "AssetImportPlanner.h"
 #include "Engine/Core/Collections/Dictionary.h"
+#include "Engine/Platform/StringUtils.h"
 #include <algorithm>
 
 namespace
@@ -73,8 +74,7 @@ bool AssetImportPlanner::Build(const Array<AssetImportPlanRequest>& requests, Ar
         const AssetImporterDescriptor descriptor = lease->Get();
         ArtifactKeyBuilder builder("flax-asset-import-plan-v1");
         builder.AddGuid("asset", request.Asset.Value);
-        if (descriptor.PathSensitive)
-            builder.AddString("source-path", request.SourcePath);
+        builder.AddString("source-name", StringUtils::GetFileName(request.SourcePath));
         builder.AddHash("source", request.SourceHash);
         builder.AddHash("metadata", request.MetadataHash);
         builder.AddHash("postprocessors", request.EffectivePostprocessorHash);

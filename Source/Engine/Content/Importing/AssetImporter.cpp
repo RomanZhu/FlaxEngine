@@ -24,7 +24,6 @@ AssetImporterDescriptor AssetImporterDescriptor::FromBuildImplementation(const A
     result.ProcessSafe = processor.ProviderKind == AssetProcessorProviderKind::Native &&
         processor.TrustMode == AssetProcessorTrustMode::IsolatedProcess && result.SupportsParallelImport;
     result.RequiresMainThread = !result.SupportsParallelImport;
-    result.PathSensitive = processor.IsPathSensitive;
     result.MaximumMemoryBytes = processor.MemoryEstimate > 64ull * 1024ull * 1024ull
         ? processor.MemoryEstimate
         : 64ull * 1024ull * 1024ull;
