@@ -7,28 +7,24 @@
 
 namespace
 {
-    bool Less(const AssetObjectId& a, const AssetObjectId& b)
+    bool Less(const Guid& a, const Guid& b)
     {
-        const Guid& left = a.Asset.Value;
-        const Guid& right = b.Asset.Value;
-        if (left.A != right.A)
-            return left.A < right.A;
-        if (left.B != right.B)
-            return left.B < right.B;
-        if (left.C != right.C)
-            return left.C < right.C;
-        if (left.D != right.D)
-            return left.D < right.D;
-        return a.LocalId < b.LocalId;
+        if (a.A != b.A)
+            return a.A < b.A;
+        if (a.B != b.B)
+            return a.B < b.B;
+        if (a.C != b.C)
+            return a.C < b.C;
+        return a.D < b.D;
     }
 
-    bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const AssetObjectId& object,
+    bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const Guid& object,
         const StringView& message)
     {
         diagnostic = AssetPipelineDiagnostic();
         diagnostic.Code = code;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = object.Asset.Value;
+        diagnostic.AssetGuid = object;
         diagnostic.Message = message;
         return true;
     }
@@ -62,7 +58,7 @@ bool AssetHotReloadCoordinator::BuildNotificationOrder(const Array<LoadedAssetRe
             return; // A runtime-reference cycle is one deterministic notification group.
         state[index] = 1;
         Array<int32> dependencies;
-        for (const AssetObjectId& dependency : replacements[index].Dependencies)
+        for (const Guid& dependency : replacements[index].Dependencies)
         {
             for (int32 candidate : canonical)
             {
@@ -88,7 +84,7 @@ bool AssetHotReloadCoordinator::BuildNotificationOrder(const Array<LoadedAssetRe
     for (int32 index : canonical)
         visit(index);
     if (order.Count() != count)
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, AssetObjectId(),
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
             TEXT("Could not calculate a complete asset replacement notification order."));
     diagnostic = AssetPipelineDiagnostic();
     return false;
@@ -98,9 +94,9 @@ bool AssetHotReloadCoordinator::Reload(const Array<AssetObjectRevision>& changes
     AssetPipelineDiagnostic& diagnostic)
 {
     if (changes.IsEmpty())
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, AssetObjectId(),
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
             TEXT("Asset hot-reload batch cannot be empty."));
-    HashSet<AssetObjectId> changedObjects;
+    HashSet<Guid> changedObjects;
     Array<LoadedAssetReplacement> replacements;
     replacements.EnsureCapacity(changes.Count());
     for (const AssetObjectRevision& change : changes)
@@ -160,7 +156,7 @@ bool AssetHotReloadCoordinator::Reload(const Array<AssetObjectRevision>& changes
         for (const LoadedAssetReplacement& replacement : replacements)
             _loader.DiscardInstance(replacement.Instance);
         if (dispatchFailed)
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, AssetObjectId(),
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
                 TEXT("Asset replacement batch could not run on the main thread."));
         diagnostic = swapDiagnostic;
         return true;

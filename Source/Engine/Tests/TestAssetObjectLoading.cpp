@@ -15,11 +15,12 @@ namespace
         return ContentHash::Compute(value, StringUtils::Length(value));
     }
 
-    AssetObjectLoadLocation TestLocation(const AssetObjectId& object, uint64 revision)
+    AssetObjectLoadLocation TestLocation(const Guid& object, uint64 revision, const AssetObjectId& storageObject = AssetObjectId())
     {
         AssetObjectLoadLocation result;
         result.Object = object;
-        result.InstanceID = object.Asset.Value;
+        result.StorageObject = storageObject.IsValid() ? storageObject : AssetObjectId::Main(AssetGuid(object));
+        result.InstanceID = object;
         result.StorageKind = AssetObjectStorageKind::EditorArtifact;
         result.TypeName = "FlaxEngine.Texture";
         result.StorageName = "artifact/object.bin";
@@ -38,7 +39,7 @@ namespace
         bool _entered = false;
         bool _released = false;
 
-        bool Resolve(const AssetObjectId& object, AssetObjectLoadLocation& location,
+        bool Resolve(const Guid& object, AssetObjectLoadLocation& location,
             AssetPipelineDiagnostic& diagnostic)
         {
             Calls.fetch_add(1);
@@ -63,18 +64,18 @@ namespace
         }
 
     public:
-        Dictionary<AssetObjectId, AssetObjectLoadLocation> Locations;
+        Dictionary<Guid, AssetObjectLoadLocation> Locations;
         std::atomic<int32> Calls{0};
         bool Block = false;
         bool FailResolution = false;
 
-        bool ResolveArtifactObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+        bool ResolveArtifactObject(const Guid& object, AssetObjectLoadLocation& location,
             AssetPipelineDiagnostic& diagnostic) override
         {
             return Resolve(object, location, diagnostic);
         }
 
-        bool ResolveCatalogObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+        bool ResolveCatalogObject(const Guid& object, AssetObjectLoadLocation& location,
             AssetPipelineDiagnostic& diagnostic) override
         {
             return Resolve(object, location, diagnostic);
@@ -143,11 +144,11 @@ namespace
     class TestReloadListener : public IAssetObjectReloadListener
     {
     public:
-        Array<AssetObjectId> Objects;
+        Array<Guid> Objects;
         Array<uint64> PreviousRevisions;
         Array<uint64> Revisions;
 
-        void OnAssetObjectReplaced(const AssetObjectId& object, uint64 previousRevision, uint64 revision) override
+        void OnAssetObjectReplaced(const Guid& object, uint64 previousRevision, uint64 revision) override
         {
             Objects.Add(object);
             PreviousRevisions.Add(previousRevision);
@@ -156,9 +157,9 @@ namespace
     };
 }
 
-TEST_CASE("Object loader preserves unresolved composite identity")
+TEST_CASE("Object loader preserves unresolved persistent GUID identity")
 {
-    const AssetObjectId object(AssetGuid(Guid(101, 0, 0, 0)), 7);
+    const Guid object(101, 0, 0, 0);
     LoadedAssetRegistry registry;
     TestObjectResolver resolver;
     resolver.FailResolution = true;
@@ -179,7 +180,7 @@ TEST_CASE("Object loader preserves unresolved composite identity")
 
 TEST_CASE("Object loader deduplicates simultaneous exact object loads")
 {
-    const AssetObjectId object(AssetGuid(Guid(102, 0, 0, 0)), 12);
+    const Guid object(102, 0, 0, 0);
     LoadedAssetRegistry registry;
     TestObjectResolver resolver;
     resolver.Set(TestLocation(object, 1));
@@ -218,9 +219,9 @@ TEST_CASE("Object loader deduplicates simultaneous exact object loads")
 
 TEST_CASE("Cooked object loader resolves persistent GUID entries through runtime catalog")
 {
-    const AssetObjectId object = AssetObjectId::Main(AssetGuid(Guid(103, 0, 0, 0)));
+    const Guid object(103, 0, 0, 0);
     RuntimeAssetCatalogEntry entry;
-    entry.Object = object.Asset.Value;
+    entry.Object = object;
     entry.TypeName = "FlaxEngine.Texture";
     entry.PackageName = "base/objects.pak";
     entry.Offset = 128;
@@ -243,18 +244,11 @@ TEST_CASE("Cooked object loader resolves persistent GUID entries through runtime
     CHECK(result.State == LoadedAssetState::Loaded);
     CHECK(factory.LastStorage == TEXT("base/objects.pak"));
     CHECK(editorResolver.Calls.load() == 0);
-
-    const AssetObjectId editorComposite(object.Asset, 7);
-    AssetObjectLoadResult rejected;
-    CHECK(loader.Load(editorComposite, rejected, diagnostic));
-    CHECK(rejected.State == LoadedAssetState::Failed);
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactMissing);
-    CHECK(factory.Creates.load() == 1);
 }
 
 TEST_CASE("Object loader rematerializes an unloaded registry instance")
 {
-    const AssetObjectId object(AssetGuid(Guid(106, 0, 0, 0)), 4);
+    const Guid object(106, 0, 0, 0);
     LoadedAssetRegistry registry;
     TestObjectResolver resolver;
     resolver.Set(TestLocation(object, 1));
@@ -272,10 +266,42 @@ TEST_CASE("Object loader rematerializes an unloaded registry instance")
     CHECK(factory.Creates.load() == 2);
 }
 
+TEST_CASE("Object loader keys exact subassets and rematerialization by persistent GUID")
+{
+    const Guid source(107, 0, 0, 0);
+    const Guid firstObject(107, 0, 0, 11);
+    const Guid secondObject(107, 0, 0, 12);
+    const AssetObjectId firstStorage(AssetGuid(source), 11);
+    const AssetObjectId secondStorage(AssetGuid(source), 12);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    resolver.Set(TestLocation(firstObject, 4, firstStorage));
+    resolver.Set(TestLocation(secondObject, 4, secondStorage));
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetPipelineDiagnostic diagnostic;
+    AssetObjectLoadResult first;
+    AssetObjectLoadResult second;
+    REQUIRE_FALSE(loader.Load(firstObject, first, diagnostic));
+    REQUIRE_FALSE(loader.Load(secondObject, second, diagnostic));
+    CHECK(first.Object == firstObject);
+    CHECK(second.Object == secondObject);
+    CHECK(first.Instance != second.Instance);
+    CHECK(registry.Count() == 2);
+
+    REQUIRE_FALSE(registry.Remove(firstObject, first.Instance));
+    AssetObjectLoadResult reloaded;
+    REQUIRE_FALSE(loader.Load(firstObject, reloaded, diagnostic));
+    CHECK(reloaded.Object == firstObject);
+    CHECK(reloaded.Instance != first.Instance);
+    CHECK(registry.Count() == 2);
+    CHECK(factory.Creates.load() == 3);
+}
+
 TEST_CASE("Hot reload publishes atomically and notifies dependencies first")
 {
-    const AssetObjectId owner(AssetGuid(Guid(104, 0, 0, 0)), 2);
-    const AssetObjectId dependency(AssetGuid(Guid(104, 0, 0, 0)), 3);
+    const Guid owner(104, 0, 0, 2);
+    const Guid dependency(104, 0, 0, 3);
     TestObjectResolver resolver;
     AssetObjectLoadLocation ownerLocation = TestLocation(owner, 1);
     ownerLocation.Dependencies.Add(dependency);

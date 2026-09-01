@@ -4,6 +4,7 @@
 
 #include "LoadedAssetRegistry.h"
 #include "Engine/Content/Artifacts/ArtifactKey.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Content/Build/RuntimeAssetCatalog.h"
 
 enum class AssetObjectLoadMode : byte
@@ -21,7 +22,9 @@ enum class AssetObjectStorageKind : byte
 /// <summary>Resolved physical bytes and recorded dependencies for one exact object.</summary>
 struct FLAXENGINE_API AssetObjectLoadLocation
 {
-    AssetObjectId Object;
+    Guid Object = Guid::Empty;
+    /// <summary>Private source/local key used only to address generated storage.</summary>
+    AssetObjectId StorageObject;
     Guid InstanceID = Guid::Empty;
     AssetObjectStorageKind StorageKind = AssetObjectStorageKind::EditorArtifact;
     StringAnsi TypeName;
@@ -33,7 +36,7 @@ struct FLAXENGINE_API AssetObjectLoadLocation
     ContentHash Content;
     ArtifactKey Artifact;
     uint64 Revision = 0;
-    Array<AssetObjectId> Dependencies;
+    Array<Guid> Dependencies;
 };
 
 /// <summary>Injectable editor bridge to object entries in the artifact resolver.</summary>
@@ -41,7 +44,7 @@ class FLAXENGINE_API IEditorAssetObjectResolver
 {
 public:
     virtual ~IEditorAssetObjectResolver() = default;
-    virtual bool ResolveArtifactObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+    virtual bool ResolveArtifactObject(const Guid& object, AssetObjectLoadLocation& location,
         AssetPipelineDiagnostic& diagnostic) = 0;
 };
 
@@ -50,7 +53,7 @@ class FLAXENGINE_API IRuntimeAssetObjectResolver
 {
 public:
     virtual ~IRuntimeAssetObjectResolver() = default;
-    virtual bool ResolveCatalogObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+    virtual bool ResolveCatalogObject(const Guid& object, AssetObjectLoadLocation& location,
         AssetPipelineDiagnostic& diagnostic) = 0;
 };
 
@@ -59,7 +62,7 @@ public:
 class FLAXENGINE_API EditorArtifactAssetObjectResolver : public IEditorAssetObjectResolver
 {
 public:
-    bool ResolveArtifactObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+    bool ResolveArtifactObject(const Guid& object, AssetObjectLoadLocation& location,
         AssetPipelineDiagnostic& diagnostic) override;
 };
 #endif
@@ -88,14 +91,14 @@ public:
     {
     }
 
-    bool ResolveCatalogObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+    bool ResolveCatalogObject(const Guid& object, AssetObjectLoadLocation& location,
         AssetPipelineDiagnostic& diagnostic) override;
 };
 
 /// <summary>Object-level load result that retains its requested identity even when unresolved.</summary>
 struct FLAXENGINE_API AssetObjectLoadResult
 {
-    AssetObjectId Object;
+    Guid Object = Guid::Empty;
     LoadedAssetState State = LoadedAssetState::Unresolved;
     void* Instance = nullptr;
     uint64 Revision = 0;
@@ -111,7 +114,7 @@ private:
     IAssetObjectFactory& _factory;
     AssetObjectLoadMode _mode;
 
-    bool Resolve(const AssetObjectId& object, AssetObjectLoadLocation& location,
+    bool Resolve(const Guid& object, AssetObjectLoadLocation& location,
         AssetPipelineDiagnostic& diagnostic);
 
 public:
@@ -132,10 +135,10 @@ public:
     }
 
     /// <summary>Loads or joins the in-flight request for an exact object ID. Returns true on failure.</summary>
-    bool Load(const AssetObjectId& object, AssetObjectLoadResult& result, AssetPipelineDiagnostic& diagnostic);
+    bool Load(const Guid& object, AssetObjectLoadResult& result, AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Prepares an exact replacement without publishing it to the loaded registry.</summary>
-    bool PrepareReplacement(const AssetObjectId& object, uint64 expectedRevision, LoadedAssetReplacement& replacement,
+    bool PrepareReplacement(const Guid& object, uint64 expectedRevision, LoadedAssetReplacement& replacement,
         AssetPipelineDiagnostic& diagnostic);
 
     void DiscardInstance(void* instance);

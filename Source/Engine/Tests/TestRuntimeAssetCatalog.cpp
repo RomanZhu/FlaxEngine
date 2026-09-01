@@ -3,7 +3,6 @@
 #include "Engine/Content/Build/AssetBuildSnapshot.h"
 #include "Engine/Content/Build/RuntimeAssetCatalog.h"
 #include "Engine/Content/Build/RuntimeDependencyClosure.h"
-#include "Engine/Content/Loading/LoadedAssetRuntimeIdIndex.h"
 #include <ThirdParty/catch2/catch.hpp>
 #include <utility>
 
@@ -169,38 +168,6 @@ TEST_CASE("Runtime asset catalog v5 preserves bootstrap identity and rejects leg
     invalidBootstrap.SetGameSettingsObject(Guid(99, 98, 97, 96));
     CHECK(invalidBootstrap.ToBytes(bytes, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
-}
-
-TEST_CASE("Loaded runtime GUID index rejects collisions and recovers uniqueness")
-{
-    const AssetObjectId subAsset(AssetGuid(Guid(7, 0, 0, 0)), 2);
-    const Guid runtimeId(70, 71, 72, 73);
-    const AssetObjectId collidingMain = AssetObjectId::Main(AssetGuid(runtimeId));
-    LoadedAssetRuntimeIdIndex index;
-    index.EnsureCapacity(2);
-
-    AssetObjectId found;
-    index.Add(runtimeId, subAsset);
-    REQUIRE(index.TryGetUnique(runtimeId, found));
-    CHECK(found == subAsset);
-
-    index.Add(runtimeId, subAsset);
-    REQUIRE(index.TryGetUnique(runtimeId, found));
-    CHECK(found == subAsset);
-
-    index.Add(runtimeId, collidingMain);
-    CHECK(index.Contains(runtimeId));
-    CHECK_FALSE(index.TryGetUnique(runtimeId, found));
-    CHECK_FALSE(found.IsValid());
-
-    index.Remove(runtimeId, subAsset);
-    REQUIRE(index.TryGetUnique(runtimeId, found));
-    CHECK(found == collidingMain);
-
-    index.Remove(runtimeId, collidingMain);
-    CHECK_FALSE(index.Contains(runtimeId));
-    CHECK_FALSE(index.TryGetUnique(runtimeId, found));
-    CHECK_FALSE(found.IsValid());
 }
 
 TEST_CASE("Runtime dependency closure follows recorded object edges without asset loading")

@@ -9,13 +9,13 @@
 
 namespace
 {
-    bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const AssetObjectId& object,
+    bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const Guid& object,
         const StringView& message)
     {
         diagnostic = AssetPipelineDiagnostic();
         diagnostic.Code = code;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = object.Asset.Value;
+        diagnostic.AssetGuid = object;
         diagnostic.Message = message;
         return true;
     }
@@ -30,12 +30,11 @@ namespace
 }
 
 #if USE_EDITOR
-bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectId& object,
+bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const Guid& object,
     AssetObjectLoadLocation& location, AssetPipelineDiagnostic& diagnostic)
 {
     location = AssetObjectLoadLocation();
     location.Object = object;
-    location.InstanceID = object.Asset.Value;
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(object, record))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, object,
@@ -44,8 +43,9 @@ bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectI
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, object,
             TEXT("Editor artifact resolver is not configured."));
 
+    const AssetObjectId storageObject(AssetGuid(record.SourceAssetID), record.LocalId);
     ArtifactRequest request;
-    request.Object = object;
+    request.Object = storageObject;
     request.Target = ArtifactResolver::Get().GetDefaultTarget();
     request.OutputKind = "runtime";
     request.Policy = ArtifactResolvePolicy::Exact;
@@ -62,6 +62,7 @@ bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectI
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
             TEXT("Editor artifact resolution returned an invalid output key."));
     location.StorageKind = AssetObjectStorageKind::EditorArtifact;
+    location.StorageObject = storageObject;
     location.InstanceID = record.ID;
     location.TypeName = StringAnsi(record.TypeName);
     location.SourceName = record.CanonicalPath.Get();
@@ -70,24 +71,35 @@ bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectI
     location.Content = resolved.Artifact.Content;
     location.Artifact = artifact;
     location.Revision = record.DatabaseRevision;
-    location.Dependencies = record.RuntimeReferences;
+    for (const AssetObjectId& dependency : record.RuntimeReferences)
+    {
+        AssetRecord dependencyRecord;
+        Guid dependencyId;
+        if (AssetDatabase::Get().TryGetRecord(dependency, dependencyRecord))
+            dependencyId = dependencyRecord.ID;
+        else if (dependency.IsMainObject())
+            dependencyId = dependency.Asset.Value;
+        else
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
+                TEXT("Asset record has a runtime dependency without an exact persistent GUID."));
+        location.Dependencies.Add(dependencyId);
+    }
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
 #endif
 
-bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId& object, AssetObjectLoadLocation& location,
+bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const Guid& object, AssetObjectLoadLocation& location,
     AssetPipelineDiagnostic& diagnostic)
 {
     location = AssetObjectLoadLocation();
     location.Object = object;
     RuntimeAssetCatalogEntry entry;
-    // Cooked identities are persistent record GUIDs. Reject editor-private source/local pairs instead
-    // of silently discarding LocalId and potentially resolving an unrelated catalog entry.
-    if (!object.IsMainObject() || !_catalog.TryGet(object.Asset.Value, entry) || _revision == 0)
+    if (!_catalog.TryGet(object, entry) || _revision == 0)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, object,
             TEXT("Runtime catalog has no exact entry for the requested asset object."));
     location.InstanceID = entry.Object;
+    location.StorageObject = AssetObjectId::Main(AssetGuid(entry.Object));
     location.StorageKind = AssetObjectStorageKind::RuntimePackage;
     location.TypeName = entry.TypeName;
     location.StorageName = String(entry.PackageName);
@@ -99,12 +111,12 @@ bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId
     location.Revision = _revision;
     location.Dependencies.EnsureCapacity(entry.Dependencies.Count());
     for (const Guid& dependency : entry.Dependencies)
-        location.Dependencies.Add(AssetObjectId::Main(AssetGuid(dependency)));
+        location.Dependencies.Add(dependency);
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
 
-bool AssetObjectLoader::Resolve(const AssetObjectId& object, AssetObjectLoadLocation& location,
+bool AssetObjectLoader::Resolve(const Guid& object, AssetObjectLoadLocation& location,
     AssetPipelineDiagnostic& diagnostic)
 {
     const bool failed = _mode == AssetObjectLoadMode::Cooked
@@ -121,12 +133,12 @@ bool AssetObjectLoader::Resolve(const AssetObjectId& object, AssetObjectLoadLoca
         ? location.StorageKind != AssetObjectStorageKind::RuntimePackage
         : location.StorageKind != AssetObjectStorageKind::EditorArtifact || location.Artifact.IsZero();
     const bool instanceInvalid = _mode == AssetObjectLoadMode::Editor && !location.InstanceID.IsValid();
-    if (location.Object != object || instanceInvalid || location.Revision == 0 || location.TypeName.IsEmpty() || location.StorageName.IsEmpty() ||
+    if (location.Object != object || !location.StorageObject.IsValid() || instanceInvalid || location.Revision == 0 || location.TypeName.IsEmpty() || location.StorageName.IsEmpty() ||
         location.Size == 0 || location.Content.IsZero() || storageInvalid)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
             TEXT("Resolved object location has mismatched identity or incomplete immutable storage data."));
-    HashSet<AssetObjectId> dependencies;
-    for (const AssetObjectId& dependency : location.Dependencies)
+    HashSet<Guid> dependencies;
+    for (const Guid& dependency : location.Dependencies)
     {
         if (!dependency.IsValid() || dependency == object || !dependencies.Add(dependency))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
@@ -135,7 +147,7 @@ bool AssetObjectLoader::Resolve(const AssetObjectId& object, AssetObjectLoadLoca
     return false;
 }
 
-bool AssetObjectLoader::Load(const AssetObjectId& object, AssetObjectLoadResult& result,
+bool AssetObjectLoader::Load(const Guid& object, AssetObjectLoadResult& result,
     AssetPipelineDiagnostic& diagnostic)
 {
     result = AssetObjectLoadResult();
@@ -169,7 +181,7 @@ bool AssetObjectLoader::Load(const AssetObjectId& object, AssetObjectLoadResult&
     }
 
     const uint64 revision = instance ? location.Revision : 0;
-    Array<AssetObjectId> dependencies;
+    Array<Guid> dependencies;
     if (instance)
         dependencies = location.Dependencies;
     AssetPipelineDiagnostic completionDiagnostic;
@@ -185,7 +197,7 @@ bool AssetObjectLoader::Load(const AssetObjectId& object, AssetObjectLoadResult&
     return record.State != LoadedAssetState::Loaded;
 }
 
-bool AssetObjectLoader::PrepareReplacement(const AssetObjectId& object, uint64 expectedRevision,
+bool AssetObjectLoader::PrepareReplacement(const Guid& object, uint64 expectedRevision,
     LoadedAssetReplacement& replacement, AssetPipelineDiagnostic& diagnostic)
 {
     replacement = LoadedAssetReplacement();

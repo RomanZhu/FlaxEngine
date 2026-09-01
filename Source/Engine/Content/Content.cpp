@@ -100,13 +100,13 @@ namespace
             {
                 const FlaxStorageReference storage = ContentStorageManager::GetStorage(storagePath);
                 AssetInitData header;
-                if (!storage || !storage->UsesAssetObjectIds() || storage->LoadAssetHeader(location.Object, header) ||
+                if (!storage || !storage->UsesAssetObjectIds() || storage->LoadAssetHeader(location.StorageObject, header) ||
                     !header.Header.ID.IsValid() || header.Header.TypeName != String(location.TypeName))
                 {
                     diagnostic = AssetPipelineDiagnostic();
                     diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
                     diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-                    diagnostic.AssetGuid = location.Object.Asset.Value;
+                    diagnostic.AssetGuid = location.Object;
                     diagnostic.SourcePath = storagePath;
                     diagnostic.Message = TEXT("Runtime package has no matching persistent object GUID entry.");
                     instance = nullptr;
@@ -119,7 +119,7 @@ namespace
                 diagnostic = AssetPipelineDiagnostic();
                 diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
                 diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-                diagnostic.AssetGuid = location.Object.Asset.Value;
+                diagnostic.AssetGuid = location.Object;
                 diagnostic.SourcePath = storagePath;
                 diagnostic.Message = TEXT("Resolved object has no valid transient instance identifier.");
                 instance = nullptr;
@@ -128,7 +128,7 @@ namespace
             AssetInfo info(instanceId, location.InstanceID, String(location.TypeName), sourcePath, location.Revision);
             AssetLoadLocation contentLocation;
             contentLocation.Info = info;
-            contentLocation.Artifact.ObjectID = location.Object;
+            contentLocation.Artifact.ObjectID = location.StorageObject;
             contentLocation.Artifact.AssetID = info.ID;
             contentLocation.Artifact.TypeName = info.TypeName;
             contentLocation.Artifact.StoragePath = ArtifactStoragePath(storagePath);
@@ -149,7 +149,7 @@ namespace
                 diagnostic = AssetPipelineDiagnostic();
                 diagnostic.Code = factory ? AssetPipelineDiagnosticCode::ArtifactInvalid : AssetPipelineDiagnosticCode::ProcessorMissing;
                 diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-                diagnostic.AssetGuid = location.Object.Asset.Value;
+                diagnostic.AssetGuid = location.Object;
                 diagnostic.SourcePath = storagePath;
                 diagnostic.Message = factory
                     ? TEXT("Asset factory could not materialize the resolved object artifact.")
@@ -187,7 +187,7 @@ namespace
     ConcurrentTaskQueue<ContentLoadTask> LoadTasks;
     ConditionVariable LoadTasksSignal;
     CriticalSection LoadTasksMutex;
-    Array<AssetObjectId> LoadCallAssets;
+    Array<Guid> LoadCallAssets;
 #else
     Array<ContentLoadTask*> LoadTasks;
 #endif
@@ -1940,7 +1940,7 @@ void Content::onAssetLoaded(Asset* asset)
 void Content::onAssetUnload(Asset* asset)
 {
     // This is called by the asset on unloading
-    LoadedObjects.Remove(asset->_internalObjectId, asset);
+    LoadedObjects.Remove(asset->GetPersistentObjectId(), asset);
     ScopeLock locker(AssetsLocker);
     Assets.Remove(asset->GetPersistentObjectId());
     UnloadQueue.Remove(asset);
@@ -2080,7 +2080,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
 
 #if PLATFORM_THREADS_LIMIT > 1
     // Check if that asset is during loading
-    if (LoadCallAssets.Contains(objectId))
+    if (LoadCallAssets.Contains(persistentObjectId))
     {
         AssetsLocker.Unlock();
 
@@ -2090,7 +2090,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
         {
             Platform::Sleep(1);
             AssetsLocker.Lock();
-            contains = LoadCallAssets.Contains(objectId);
+            contains = LoadCallAssets.Contains(persistentObjectId);
             AssetsLocker.Unlock();
         }
         {
@@ -2101,8 +2101,8 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
     }
 
     // Mark asset as loading and release lock so other threads can load other assets
-    LoadCallAssets.Add(objectId);
-#define LOAD_FAILED() AssetsLocker.Lock(); LoadCallAssets.Remove(objectId); AssetsLocker.Unlock(); return nullptr
+    LoadCallAssets.Add(persistentObjectId);
+#define LOAD_FAILED() AssetsLocker.Lock(); LoadCallAssets.Remove(persistentObjectId); AssetsLocker.Unlock(); return nullptr
 #else
 #define LOAD_FAILED() return nullptr
 #endif
@@ -2158,7 +2158,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
     {
         AssetObjectLoadResult objectResult;
         AssetPipelineDiagnostic diagnostic;
-        if (ObjectLoader.Load(objectId, objectResult, diagnostic))
+        if (ObjectLoader.Load(persistentObjectId, objectResult, diagnostic))
         {
             if (!passiveLoad)
                 LOG(Error, "{0}: {1} Asset: {2}, path: '{3}'.", GetAssetPipelineDiagnosticCodeName(diagnostic.Code), diagnostic.Message, objectId, diagnostic.SourcePath);
@@ -2200,7 +2200,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
 
     // Remove from the loading queue and release lock
 #if PLATFORM_THREADS_LIMIT > 1
-    LoadCallAssets.Remove(objectId);
+    LoadCallAssets.Remove(persistentObjectId);
 #endif
     AssetsLocker.Unlock();
 

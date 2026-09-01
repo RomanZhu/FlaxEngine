@@ -11,13 +11,13 @@ struct LoadedAssetRegistry::Entry
 
 namespace
 {
-    bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const AssetObjectId& object,
+    bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const Guid& object,
         const StringView& message)
     {
         diagnostic = AssetPipelineDiagnostic();
         diagnostic.Code = code;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = object.Asset.Value;
+        diagnostic.AssetGuid = object;
         diagnostic.Message = message;
         return true;
     }
@@ -28,7 +28,7 @@ LoadedAssetRegistry::~LoadedAssetRegistry()
     _entries.ClearDelete();
 }
 
-LoadedAssetAcquireResult LoadedAssetRegistry::AcquireLoad(const AssetObjectId& object, LoadedAssetLoadTicket& ticket,
+LoadedAssetAcquireResult LoadedAssetRegistry::AcquireLoad(const Guid& object, LoadedAssetLoadTicket& ticket,
     LoadedAssetRecord& record, AssetPipelineDiagnostic& diagnostic)
 {
     ticket = LoadedAssetLoadTicket();
@@ -83,7 +83,7 @@ LoadedAssetAcquireResult LoadedAssetRegistry::AcquireLoad(const AssetObjectId& o
 }
 
 bool LoadedAssetRegistry::CompleteLoad(const LoadedAssetLoadTicket& ticket, void* instance, uint64 revision,
-    const Array<AssetObjectId>& dependencies, const AssetPipelineDiagnostic& loadDiagnostic,
+    const Array<Guid>& dependencies, const AssetPipelineDiagnostic& loadDiagnostic,
     LoadedAssetRecord& record, AssetPipelineDiagnostic& diagnostic)
 {
     _locker.Lock();
@@ -118,7 +118,7 @@ bool LoadedAssetRegistry::CompleteLoad(const LoadedAssetLoadTicket& ticket, void
     return false;
 }
 
-bool LoadedAssetRegistry::TryGet(const AssetObjectId& object, LoadedAssetRecord& record) const
+bool LoadedAssetRegistry::TryGet(const Guid& object, LoadedAssetRecord& record) const
 {
     _locker.Lock();
     Entry** entry = _entries.TryGet(object);
@@ -128,7 +128,7 @@ bool LoadedAssetRegistry::TryGet(const AssetObjectId& object, LoadedAssetRecord&
     return entry != nullptr;
 }
 
-bool LoadedAssetRegistry::Remove(const AssetObjectId& object, void* instance)
+bool LoadedAssetRegistry::Remove(const Guid& object, void* instance)
 {
     ScopeLock lock(_locker);
     Entry** entry = _entries.TryGet(object);
@@ -144,11 +144,11 @@ bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& repl
 {
     swaps.Clear();
     if (replacements.IsEmpty())
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, AssetObjectId(),
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
             TEXT("Asset replacement batch cannot be empty."));
 
     _locker.Lock();
-    HashSet<AssetObjectId> objects;
+    HashSet<Guid> objects;
     for (const LoadedAssetReplacement& replacement : replacements)
     {
         Entry** entry = _entries.TryGet(replacement.Object);
