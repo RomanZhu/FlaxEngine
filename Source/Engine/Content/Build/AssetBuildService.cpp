@@ -343,8 +343,8 @@ void AssetBuildService::CancelRequester(const AssetBuildRequestHandle& handle)
             diagnostic.AssetGuid = handle._state->Request.AssetID;
             diagnostic.Message = TEXT("Asset build was cancelled before execution.");
             _impl->FinishLocked(handle._state, AssetBuildJobStatus::Cancelled, diagnostic);
-            handle._state->Request.Build = AssetBuildJobAction();
-            handle._state->Request.Publish = AssetBuildJobAction();
+            handle._state->Request.Build.Unbind();
+            handle._state->Request.Publish.Unbind();
         }
     }
     _impl->Changed.notify_all();
@@ -649,8 +649,8 @@ void AssetBuildService::Impl::Worker()
             }
             if (cancelledAfterBuild)
             {
-                job->Request.Build = AssetBuildJobAction();
-                job->Request.Publish = AssetBuildJobAction();
+                job->Request.Build.Unbind();
+                job->Request.Publish.Unbind();
             }
             continue;
         }
@@ -682,8 +682,8 @@ void AssetBuildService::Impl::Worker()
         if (cancelledBeforePublication)
         {
             publicationLock.unlock();
-            job->Request.Build = AssetBuildJobAction();
-            job->Request.Publish = AssetBuildJobAction();
+            job->Request.Build.Unbind();
+            job->Request.Publish.Unbind();
             continue;
         }
         failed = job->Request.Publish.IsBinded() && job->Request.Publish(token, diagnostic);
@@ -720,8 +720,8 @@ void AssetBuildService::Impl::Worker()
         if (cancelledDuringPublication)
         {
             publicationLock.unlock();
-            job->Request.Build = AssetBuildJobAction();
-            job->Request.Publish = AssetBuildJobAction();
+            job->Request.Build.Unbind();
+            job->Request.Publish.Unbind();
         }
     }
 }

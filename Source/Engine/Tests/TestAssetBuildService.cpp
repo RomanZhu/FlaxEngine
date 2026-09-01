@@ -683,7 +683,7 @@ TEST_CASE("AssetBuildService cancels abandoned requests and closes publication b
         return false;
     };
     const AssetBuildRequestHandle abandonedHandle = service.Request(abandoned);
-    abandoned.Build = AssetBuildJobAction();
+    abandoned.Build.Unbind();
     queuedOwner.reset();
     scheduler.Cancel(abandonedHandle);
     REQUIRE(abandonedHandle.Wait(500));
@@ -707,7 +707,7 @@ TEST_CASE("AssetBuildService cancels abandoned requests and closes publication b
         return false;
     };
     const AssetBuildRequestHandle runningHandle = service.Request(running);
-    running.Build = AssetBuildJobAction();
+    running.Build.Unbind();
     runningOwner.reset();
     REQUIRE(WaitUntil([&]() { return runningStarted.load(); }));
     scheduler.Cancel(runningHandle);
