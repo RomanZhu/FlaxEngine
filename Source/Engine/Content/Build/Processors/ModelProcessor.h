@@ -49,7 +49,7 @@ public:
 class FLAXENGINE_API ModelProcessor
 {
 public:
-    static constexpr uint32 ImplementationVersion = 10;
+    static constexpr uint32 ImplementationVersion = 12;
     static constexpr uint32 RuntimeFormatVersion = 1;
     static constexpr uint32 GeometryFormatVersion = 1;
     static constexpr uint32 LodFormatVersion = 1;
@@ -57,6 +57,7 @@ public:
     static constexpr uint32 SkeletonFormatVersion = 1;
     static constexpr uint32 AnimationFormatVersion = 1;
     static constexpr uint32 MaterialFormatVersion = 1;
+    static constexpr uint32 TextureFormatVersion = 1;
 
     static AssetProcessorDescriptor CreateDescriptor();
     static bool AnalyzeSource(const StringView& sourcePath, const ModelProcessorSettings& settings,

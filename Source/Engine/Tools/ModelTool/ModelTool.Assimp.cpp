@@ -500,6 +500,7 @@ bool ImportTexture(ModelData& result, AssimpImporterData& data, aiString& aFilen
 
     // Import texture
     auto& texture = result.Textures.AddOne();
+    texture.Name = StringUtils::GetFileNameWithoutExtension(path);
     texture.FilePath = path;
     texture.Type = type;
     texture.AssetID = Guid::Empty;
@@ -515,17 +516,41 @@ bool ImportMaterialTexture(ModelData& result, AssimpImporterData& data, const ai
         String filename = String(aFilename.C_Str()).TrimTrailing();
         if (filename.StartsWith(TEXT(AI_EMBEDDED_TEXNAME_PREFIX)))
         {
-            const aiTexture* aTex = data.Scene->GetEmbeddedTexture(aFilename.C_Str());
-            const StringView texIndexName(filename.Get() + (ARRAY_COUNT(AI_EMBEDDED_TEXNAME_PREFIX) - 1));
-            uint32 texIndex;
-            if (!aTex && !StringUtils::Parse(texIndexName.Get(), texIndexName.Length(), &texIndex) && texIndex >= 0 && texIndex < data.Scene->mNumTextures)
-                aTex = data.Scene->mTextures[texIndex];
-            if (aTex && aTex->mHeight == 0 && aTex->mWidth > 0)
+            const auto embedded = data.Scene->GetEmbeddedTextureAndIndex(aFilename.C_Str());
+            const aiTexture* aTex = embedded.first;
+            const int32 embeddedIndex = embedded.second;
+            if (!aTex || embeddedIndex < 0)
+                return true;
+
+            textureIndex = 0;
+            while (textureIndex < result.Textures.Count())
             {
-                // Export embedded texture to temporary file
-                filename = String::Format(TEXT("{0}_tex_{1}.{2}"), StringUtils::GetFileNameWithoutExtension(data.Path), texIndexName, String(aTex->achFormatHint));
-                File::WriteAllBytes(String(StringUtils::GetDirectoryName(data.Path)) / filename, (const byte*)aTex->pcData, (int32)aTex->mWidth);
+                if (result.Textures[textureIndex].EmbeddedIndex == embeddedIndex)
+                    return true;
+                textureIndex++;
             }
+
+            auto& texture = result.Textures.AddOne();
+            texture.Name = String(aTex->mFilename.C_Str()).TrimTrailing();
+            if (texture.Name.IsEmpty() || texture.Name.StartsWith(TEXT(AI_EMBEDDED_TEXNAME_PREFIX)))
+                texture.Name = String::Format(TEXT("Texture {0}"), embeddedIndex);
+            else
+                texture.Name = StringUtils::GetFileNameWithoutExtension(texture.Name);
+            texture.Type = type;
+            texture.sRGB = sRGB;
+            texture.AssetID = Guid::Empty;
+            texture.EmbeddedIndex = embeddedIndex;
+            if (aTex->mHeight == 0)
+            {
+                texture.EmbeddedFormat = String(aTex->achFormatHint).ToLower();
+                texture.EmbeddedData.Add(reinterpret_cast<const byte*>(aTex->pcData), static_cast<int32>(aTex->mWidth));
+            }
+            else
+            {
+                texture.EmbeddedSize = Int2(static_cast<int32>(aTex->mWidth), static_cast<int32>(aTex->mHeight));
+                texture.EmbeddedData.Add(reinterpret_cast<const byte*>(aTex->pcData), static_cast<int32>(aTex->mWidth * aTex->mHeight * sizeof(aiTexel)));
+            }
+            return true;
         }
 
         // Find texture file path
@@ -544,6 +569,7 @@ bool ImportMaterialTexture(ModelData& result, AssimpImporterData& data, const ai
 
         // Import texture
         auto& texture = result.Textures.AddOne();
+        texture.Name = StringUtils::GetFileNameWithoutExtension(path);
         texture.FilePath = path;
         texture.Type = type;
         texture.sRGB = sRGB;
@@ -551,6 +577,27 @@ bool ImportMaterialTexture(ModelData& result, AssimpImporterData& data, const ai
         return true;
     }
     return false;
+}
+
+bool HasTextureAlpha(const TextureEntry& texture)
+{
+    if (!texture.FilePath.IsEmpty())
+        return TextureTool::HasAlpha(texture.FilePath);
+    if (texture.EmbeddedData.IsEmpty())
+        return false;
+    if (texture.EmbeddedSize.X > 0 && texture.EmbeddedSize.Y > 0)
+        return true;
+    if (texture.EmbeddedFormat.IsEmpty())
+        return false;
+
+    String temporaryPath;
+    FileSystem::GetTempFilePath(temporaryPath);
+    temporaryPath += TEXT(".") + texture.EmbeddedFormat;
+    if (File::WriteAllBytes(temporaryPath, texture.EmbeddedData.Get(), texture.EmbeddedData.Count()))
+        return false;
+    const bool result = TextureTool::HasAlpha(temporaryPath);
+    FileSystem::DeleteFile(temporaryPath);
+    return result;
 }
 
 bool ImportMaterials(ModelData& result, AssimpImporterData& data, String& errorMsg)
@@ -610,7 +657,7 @@ bool ImportMaterials(ModelData& result, AssimpImporterData& data, String& errorM
                 if (materialSlot.Diffuse.TextureIndex != -1)
                 {
                     // Detect using alpha mask in diffuse texture
-                    materialSlot.Diffuse.HasAlphaMask = TextureTool::HasAlpha(result.Textures[materialSlot.Diffuse.TextureIndex].FilePath);
+                    materialSlot.Diffuse.HasAlphaMask = HasTextureAlpha(result.Textures[materialSlot.Diffuse.TextureIndex]);
                     if (materialSlot.Diffuse.HasAlphaMask)
                         result.Textures[materialSlot.Diffuse.TextureIndex].Type = TextureEntry::TypeHint::ColorRGBA;
                 }

@@ -33,6 +33,7 @@
 #include "Engine/Core/Types/TimeSpan.h"
 #include "Engine/Core/Types/Pair.h"
 #include "Engine/Core/Types/Variant.h"
+#include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Graphics/Models/SkeletonUpdater.h"
 #include "Engine/Graphics/Models/SkeletonMapping.h"
@@ -1356,10 +1357,24 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
         auto& texture = data.Textures[i];
 
         // Auto-import textures
-        if (autoImportOutput.IsEmpty() || EnumHasNoneFlags(options.ImportTypes, ImportDataTypes::Textures) || texture.FilePath.IsEmpty() || options.CreateEmptyMaterialSlots)
+        if (autoImportOutput.IsEmpty() || EnumHasNoneFlags(options.ImportTypes, ImportDataTypes::Textures) ||
+            (texture.FilePath.IsEmpty() && texture.EmbeddedData.IsEmpty()) || options.CreateEmptyMaterialSlots)
             continue;
-        String assetPath = GetAdditionalImportPath(autoImportOutput, importedFileNames, StringUtils::GetFileNameWithoutExtension(texture.FilePath));
+        const String textureName = texture.Name.HasChars() ? texture.Name : StringUtils::GetFileNameWithoutExtension(texture.FilePath);
+        String assetPath = GetAdditionalImportPath(autoImportOutput, importedFileNames, textureName);
 #if COMPILE_WITH_ASSETS_IMPORTER
+        String importPath = texture.FilePath;
+        String temporaryPath;
+        if (importPath.IsEmpty())
+        {
+            if (texture.EmbeddedFormat.IsEmpty())
+                continue;
+            FileSystem::GetTempFilePath(temporaryPath);
+            temporaryPath += TEXT(".") + texture.EmbeddedFormat;
+            if (File::WriteAllBytes(temporaryPath, texture.EmbeddedData.Get(), texture.EmbeddedData.Count()))
+                continue;
+            importPath = temporaryPath;
+        }
         TextureTool::Options textureOptions;
         textureOptions.sRGB = texture.sRGB;
         switch (texture.Type)
@@ -1375,7 +1390,9 @@ bool ModelTool::ImportModel(const String& path, ModelData& data, Options& option
             textureOptions.sRGB = false;
             break;
         }
-        AssetsImportingManager::ImportIfEdited(texture.FilePath, assetPath, texture.AssetID, &textureOptions);
+        AssetsImportingManager::ImportIfEdited(importPath, assetPath, texture.AssetID, &textureOptions);
+        if (temporaryPath.HasChars())
+            FileSystem::DeleteFile(temporaryPath);
 #endif
     }
 

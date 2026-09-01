@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/Build/Processors/ModelSubAssetKeys.h"
+#include "Engine/Content/Assets/Texture.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
@@ -51,6 +52,25 @@ TEST_CASE("Model stable mesh keys ignore source ordering and disambiguate identi
     REQUIRE(reorderedInfos.Count() == 3);
     CHECK(reorderedInfos[0].StableKey != reorderedInfos[1].StableKey);
     CHECK(reorderedInfos[1].StableKey != reorderedInfos[2].StableKey);
+}
+
+TEST_CASE("Model embedded textures produce canonical texture subassets")
+{
+    ModelData data;
+    TextureEntry& texture = data.Textures.AddOne();
+    texture.Name = TEXT("Albedo");
+    texture.EmbeddedFormat = TEXT("png");
+    texture.EmbeddedIndex = 0;
+    texture.EmbeddedData.Add(1);
+
+    Array<ModelSubAssetInfo> infos;
+    Array<SubAssetCandidate> candidates;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(ModelSubAssetKeys::Enumerate(data, infos, candidates, diagnostic));
+    REQUIRE(infos.Count() == 1);
+    CHECK(infos[0].Kind == ModelSubAssetKind::Texture);
+    CHECK(infos[0].StableKey == TEXT("texture:Albedo"));
+    CHECK(candidates[0].TypeName == Texture::TypeName);
 }
 
 #endif
