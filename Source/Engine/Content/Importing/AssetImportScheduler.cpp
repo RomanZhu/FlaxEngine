@@ -3,6 +3,25 @@
 #include "AssetImportScheduler.h"
 #include <memory>
 
+namespace
+{
+    constexpr int32 TextureImporterConcurrency = 2;
+
+    void ConfigureImporterBounds(const AssetImportPlan& plan, AssetBuildJobRequest& request, bool isolated)
+    {
+        request.ProcessorClass = String(TEXT("asset-import/")) + plan.Importer.ID;
+        request.MemoryBytes = Math::Max<uint64>(1, isolated
+            ? plan.Importer.MaximumMemoryBytes
+            : plan.Importer.Processor.MemoryEstimate);
+        request.ExternalToolSlots = isolated || plan.Importer.Processor.UsesExternalProcess ? 1 : 0;
+        request.ProcessorConcurrencyLimit = plan.Importer.SupportsParallelImport ? MAX_int32 : 1;
+        if (plan.Importer.ID == TEXT("Flax.Texture"))
+            request.ProcessorConcurrencyLimit = Math::Min(request.ProcessorConcurrencyLimit, TextureImporterConcurrency);
+        else if (plan.Importer.ID == TEXT("Flax.Model"))
+            request.SerialGroup = plan.Request.Asset.Value.ToString(Guid::FormatType::N);
+    }
+}
+
 AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& plan, AssetImportJobAction action,
                                                        AssetBuildJobPriority priority)
 {
@@ -14,14 +33,11 @@ AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& pl
     request.AssetID = plan.Request.Asset.Value;
     request.RefreshId = plan.Request.RefreshId;
     request.Pass = plan.Request.Pass;
-    request.ProcessorClass = TEXT("asset-import");
     request.ProcessorID = plan.Importer.ID;
     request.Target = String(plan.Request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     request.KeyComponents = plan.KeyComponents;
     request.RebuildReason = plan.Request.Reason;
-    request.MemoryBytes = plan.Importer.Processor.MemoryEstimate;
-    request.ExternalToolSlots = plan.Importer.Processor.UsesExternalProcess ? 1 : 0;
-    request.ProcessorConcurrencyLimit = plan.Importer.SupportsParallelImport ? MAX_int32 : 1;
+    ConfigureImporterBounds(plan, request, false);
     request.Priority = priority;
     request.AllowTerminalDeduplication = !plan.Request.Force;
     for (const AssetProcessorOutputDescriptor& output : plan.Importer.Processor.Outputs)
@@ -102,13 +118,11 @@ AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImport
     request.AssetID = plan.Request.Asset.Value;
     request.RefreshId = plan.Request.RefreshId;
     request.Pass = plan.Request.Pass;
-    request.ProcessorClass = TEXT("isolated-asset-import");
     request.ProcessorID = plan.Importer.ID;
     request.Target = String(execution->Request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
     request.KeyComponents = plan.KeyComponents;
     request.RebuildReason = plan.Request.Reason;
-    request.MemoryBytes = plan.Importer.MaximumMemoryBytes;
-    request.ProcessorConcurrencyLimit = plan.Importer.SupportsParallelImport ? MAX_int32 : 1;
+    ConfigureImporterBounds(plan, request, true);
     request.Priority = priority;
     request.AllowTerminalDeduplication = !plan.Request.Force;
     for (const AssetProcessorOutputDescriptor& output : plan.Importer.Processor.Outputs)

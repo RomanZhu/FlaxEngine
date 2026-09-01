@@ -184,6 +184,111 @@ TEST_CASE("AssetImportScheduler preserves refresh context on asynchronous jobs")
     CHECK(result.Pass == plan.Request.Pass);
 }
 
+TEST_CASE("AssetImportScheduler applies adaptive importer family and source bounds")
+{
+    const String library = BuildServiceLibrary(TEXT("AssetImportSchedulerBounds"));
+    const String root = StringUtils::GetDirectoryName(library);
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    AssetBuildService service;
+    AssetBuildServiceLimits limits;
+    limits.MaximumWorkers = 4;
+    limits.MaximumMemoryBytes = 100;
+    limits.MaximumExternalTools = 1;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+    AssetImportScheduler scheduler(service);
+
+    std::atomic<int32> active { 0 };
+    std::atomic<int32> textureActive { 0 };
+    std::atomic<int32> modelActive { 0 };
+    std::atomic<int32> texturePeak { 0 };
+    std::atomic<int32> modelPeak { 0 };
+    std::atomic<bool> release { false };
+    auto updatePeak = [](std::atomic<int32>& peak, int32 current)
+    {
+        int32 observed = peak.load();
+        while (current > observed && !peak.compare_exchange_weak(observed, current))
+        {
+        }
+    };
+    const Guid modelSource = Guid::New();
+    const char* keys[] = { "adaptive-png-a", "adaptive-glb-a", "adaptive-png-b", "adaptive-glb-b", "adaptive-png-c", "adaptive-glb-c" };
+    Array<AssetBuildRequestHandle> handles;
+    for (int32 i = 0; i < ARRAY_COUNT(keys); i++)
+    {
+        const bool texture = (i & 1) == 0;
+        AssetImportPlan plan;
+        plan.Request.Asset = AssetGuid(texture ? Guid::New() : modelSource);
+        plan.Request.SourcePath = texture ? TEXT("Content/Cohort.png") : TEXT("Content/Cohort.glb");
+        plan.StaticFingerprint = JobKey(keys[i]).ExactPlan;
+        plan.Importer.ID = texture ? TEXT("Flax.Texture") : TEXT("Flax.Model");
+        plan.Importer.SupportsParallelImport = true;
+        plan.Importer.Processor.MemoryEstimate = texture ? 30 : 20;
+        std::atomic<int32>* familyActive = texture ? &textureActive : &modelActive;
+        std::atomic<int32>* familyPeak = texture ? &texturePeak : &modelPeak;
+        handles.Add(scheduler.Schedule(plan,
+            [&, familyActive, familyPeak](const AssetImportPlan&, const AssetCancellationToken& cancellation, AssetPipelineDiagnostic&)
+            {
+                const int32 currentFamily = ++(*familyActive);
+                updatePeak(*familyPeak, currentFamily);
+                active++;
+                while (!release.load() && !cancellation.IsCancellationRequested())
+                    Platform::Sleep(1);
+                (*familyActive)--;
+                active--;
+                return false;
+            }));
+    }
+
+    REQUIRE(WaitUntil([&]() { return active.load() == 3; }));
+    CHECK(textureActive.load() == 2);
+    CHECK(modelActive.load() == 1);
+    const AssetBuildMetrics saturated = service.GetMetrics();
+    CHECK(saturated.ActiveWorkers == 3);
+    CHECK(saturated.ActiveMemoryBytes == 80);
+    release.store(true);
+    for (const AssetBuildRequestHandle& handle : handles)
+        REQUIRE(handle.Wait(5000));
+    CHECK(texturePeak.load() == 2);
+    CHECK(modelPeak.load() == 1);
+
+    std::atomic<int32> memoryActive { 0 };
+    std::atomic<int32> memoryPeak { 0 };
+    std::atomic<bool> releaseMemory { false };
+    Array<AssetBuildRequestHandle> memoryHandles;
+    for (int32 i = 0; i < 2; i++)
+    {
+        AssetImportPlan plan;
+        plan.Request.Asset = AssetGuid(Guid::New());
+        plan.Request.SourcePath = i == 0 ? TEXT("Content/MemoryA.bin") : TEXT("Content/MemoryB.bin");
+        plan.StaticFingerprint = JobKey(i == 0 ? "adaptive-memory-a" : "adaptive-memory-b").ExactPlan;
+        plan.Importer.ID = i == 0 ? TEXT("Test.MemoryA") : TEXT("Test.MemoryB");
+        plan.Importer.SupportsParallelImport = true;
+        plan.Importer.Processor.MemoryEstimate = 60;
+        memoryHandles.Add(scheduler.Schedule(plan,
+            [&](const AssetImportPlan&, const AssetCancellationToken& cancellation, AssetPipelineDiagnostic&)
+            {
+                const int32 current = ++memoryActive;
+                updatePeak(memoryPeak, current);
+                while (!releaseMemory.load() && !cancellation.IsCancellationRequested())
+                    Platform::Sleep(1);
+                memoryActive--;
+                return false;
+            }));
+    }
+    REQUIRE(WaitUntil([&]() { return memoryActive.load() == 1; }));
+    CHECK(service.GetMetrics().ActiveMemoryBytes == 60);
+    CHECK(service.GetMetrics().QueuedJobs == 1);
+    releaseMemory.store(true);
+    for (const AssetBuildRequestHandle& handle : memoryHandles)
+        REQUIRE(handle.Wait(5000));
+    CHECK(memoryPeak.load() == 1);
+    const AssetBuildMetrics completed = service.GetMetrics();
+    CHECK(completed.ActiveWorkers == 0);
+    CHECK(completed.ActiveMemoryBytes == 0);
+    CHECK(completed.QueuedJobs == 0);
+}
+
 TEST_CASE("AssetBuildService replays terminal publication when requested")
 {
     const String library = BuildServiceLibrary(TEXT("AssetBuildServiceReplayPublication"));
