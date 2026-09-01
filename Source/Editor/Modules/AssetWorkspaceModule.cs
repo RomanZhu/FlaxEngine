@@ -636,8 +636,7 @@ namespace FlaxEditor.Modules
         internal static bool IsTypedAuthoredDocumentProcessor(string processor)
         {
             return processor is "Flax.GraphDocument" or "Flax.MaterialInstance" or "Flax.SkeletonMask" or
-                   "Flax.SceneAnimation" or "Flax.ParticleSystem" or "Flax.CollisionData" or
-                   "Flax.JsonDocument" or "Flax.Settings";
+                   "Flax.SceneAnimation" or "Flax.ParticleSystem" or "Flax.CollisionData";
         }
 
         private AssetItem ConstructCanonicalSubAssetItem(AssetDatabaseRecordInfo record)
