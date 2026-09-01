@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Core/Math/Vector3.h"
+#include "Engine/Core/Log.h"
 #include "Engine/Core/ObjectsRemovalService.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/String.h"
@@ -16,6 +17,7 @@
 #include "Engine/Scripting/Scripting.h"
 #if USE_EDITOR
 #include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/AssetObjectRegistry.h"
@@ -508,6 +510,15 @@ TEST_CASE("ExternalActorsSceneStorage")
         sibling->SetParent(scene);
         sibling->SetOrderInParent(0);
 
+        Array<String> lifecycleWarningsAndErrors;
+        Delegate<LogType, const StringView&>::FunctionType logHandler = [&lifecycleWarningsAndErrors](LogType type, const StringView& message)
+        {
+            if (type == LogType::Warning || type == LogType::Error || type == LogType::Fatal)
+                lifecycleWarningsAndErrors.Add(String(message));
+        };
+        Log::Logger::OnMessage.Bind(logHandler);
+        SCOPE_EXIT { Log::Logger::OnMessage.Unbind(logHandler); };
+
         REQUIRE(!Level::SaveScene(scene));
         RefreshTestScene(scenePath);
 
@@ -537,13 +548,22 @@ TEST_CASE("ExternalActorsSceneStorage")
 
         rapidjson_flax::Document unifiedDocument;
         ParseJson(unifiedDocument, unifiedBuffer);
+        CHECK_FALSE(unifiedDocument.HasMember("ExternalActors"));
+        CHECK_FALSE(unifiedDocument.HasMember("externalActors"));
         const rapidjson_flax::Value& unifiedData = GetDataArray(unifiedDocument);
         REQUIRE(unifiedData.Size() == 4);
         CHECK(GetObjectLocalId(unifiedData[0]) == 1);
         CHECK(ContainsObject(unifiedData, siblingId));
         CHECK(ContainsObject(unifiedData, parentId));
         CHECK(ContainsObject(unifiedData, childId));
-        CHECK(externalActorFiles.IsEmpty());
+        REQUIRE(externalActorFiles.Count() == 4);
+        CHECK(externalActorFiles.Contains(SceneFragmentStore::GetIndexPath(sceneId)));
+        CHECK(externalActorFiles.Contains(GetExternalActorPath(scenePath, siblingId)));
+        CHECK(externalActorFiles.Contains(GetExternalActorPath(scenePath, parentId)));
+        CHECK(externalActorFiles.Contains(GetExternalActorPath(scenePath, childId)));
+        for (const String& dependency : externalActorFiles)
+            CHECK(AssetPathPolicy::IsSameOrChild(dependency, SceneFragmentStore::GetScenePath(sceneId)));
+        CHECK(lifecycleWarningsAndErrors.IsEmpty());
 
         Array<int64> rootChildIds;
         for (rapidjson::SizeType i = 0; i < unifiedData.Size(); i++)
