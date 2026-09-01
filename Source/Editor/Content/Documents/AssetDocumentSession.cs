@@ -110,9 +110,7 @@ namespace FlaxEditor.Content.Documents
                 allowOverwriteConflict ? string.Empty : value.BaseSourceHash,
                 propertiesJson), allowOverwriteConflict);
             save.Complete(committed);
-            if (committed)
-                item.RefreshThumbnail();
-            else if (HasExternalConflict)
+            if (!committed && HasExternalConflict)
                 Editor.LogError("Cannot save graph source because it changed externally: " + SourcePath);
             return !committed;
         }

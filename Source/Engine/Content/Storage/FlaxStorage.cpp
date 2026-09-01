@@ -220,10 +220,6 @@ const Char* TypeId2TypeName(const uint32 typeId)
         return TEXT("FlaxEngine.CubeTexture");
     case 10:
         return TEXT("FlaxEngine.SpriteAtlas");
-#if USE_EDITOR
-    case 11:
-        return TEXT("FlaxEditor.PreviewsCache");
-#endif
     case 12:
         return TEXT("FlaxEngine.IESProfile");
     case 13:
@@ -1525,7 +1521,7 @@ bool FlaxStorage::CloseFileHandles()
     Platform::InterlockedIncrement(&_isUnloadingData);
     SCOPE_EXIT{ Platform::InterlockedDecrement(&_isUnloadingData); };
 
-    // Explicit asset moves should tolerate longer-running thumbnail/streaming reads.
+    // Explicit asset moves should tolerate longer-running streaming reads.
     waitTime = 1000;
     while (Platform::AtomicRead(&_chunksLock) != 0 && waitTime-- > 0)
         Platform::Sleep(1);

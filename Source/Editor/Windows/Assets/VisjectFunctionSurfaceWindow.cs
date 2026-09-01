@@ -154,7 +154,6 @@ namespace FlaxEditor.Windows.Assets
 
             ClearEditedFlag();
             OnSurfaceEditedChanged();
-            _item.RefreshThumbnail();
         }
 
         /// <inheritdoc />

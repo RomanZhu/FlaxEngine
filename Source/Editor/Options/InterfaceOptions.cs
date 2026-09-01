@@ -367,10 +367,10 @@ namespace FlaxEditor.Options
         public bool AutoSizePropertiesPanelSplitter { get; set; }
 
         /// <summary>
-        /// Gets or sets the option to show asset thumbnails next to compact reference fields in the Inspector panel.
+        /// Gets or sets the option to show static asset icons next to compact reference fields in the Inspector panel.
         /// </summary>
         [DefaultValue(true)]
-        [EditorDisplay("Interface", "Show Reference Previews in Inspector"), EditorOrder(312), Tooltip("Shows asset thumbnails next to compact asset reference fields in the Inspector panel.")]
+        [EditorDisplay("Interface", "Show Reference Previews in Inspector"), EditorOrder(312), Tooltip("Shows static asset icons next to compact asset reference fields in the Inspector panel.")]
         public bool ShowReferencePreviewsInProperties { get; set; } = true;
 
         /// <summary>

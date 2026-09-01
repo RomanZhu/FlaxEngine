@@ -108,18 +108,6 @@ namespace FlaxEditor.Windows
                     });
                 }
 
-                if (item.HasDefaultThumbnail == false)
-                {
-                    if (_view.SelectedCount > 1)
-                        cm.AddButton("Refresh thumbnails", () =>
-                        {
-                            foreach (var e in _view.Selection)
-                                e.RefreshThumbnail();
-                        });
-                    else
-                        cm.AddButton("Refresh thumbnail", item.RefreshThumbnail);
-                }
-
                 if (!isFolder)
                 {
                     b = cm.AddButton("Reimport", ReimportSelection);
@@ -209,7 +197,6 @@ namespace FlaxEditor.Windows
 
                 cm.AddButton("Refresh", () => Editor.ContentDatabase.RefreshFolder(CurrentViewFolder, true));
 
-                cm.AddButton("Refresh all thumbnails", RefreshViewItemsThumbnails);
             }
 
             cm.AddSeparator();
@@ -373,18 +360,6 @@ namespace FlaxEditor.Windows
         private void OnCollapseAllClicked(ContextMenuButton button)
         {
             CurrentViewFolder.Node.CollapseAll();
-        }
-
-        /// <summary>
-        /// Refreshes thumbnails for all the items in the view.
-        /// </summary>
-        private void RefreshViewItemsThumbnails()
-        {
-            var items = _view.Items;
-            for (int i = 0; i < items.Count; i++)
-            {
-                items[i].RefreshThumbnail();
-            }
         }
 
         /// <summary>

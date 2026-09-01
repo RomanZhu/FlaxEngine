@@ -1142,7 +1142,6 @@ namespace FlaxEditor.Surface
 
             ClearEditedFlag();
             OnSurfaceEditedChanged();
-            _item.RefreshThumbnail();
         }
 
         /// <inheritdoc />

@@ -870,9 +870,7 @@ bool Content::GetRuntimeAssetInfo(const Guid& runtimeId, AssetInfo& info)
     if (BuiltinAssetCatalog::Get().TryGet(runtimeId, info))
         return true;
 
-    // Editor-private binary assets (for example thumbnail atlases) are generated
-    // under Cache and intentionally do not belong to the canonical project database.
-    return ObjectRegistry.FindRuntimeObject(runtimeId, info) && AssetPathPolicy::IsSameOrChild(info.Path, Globals::ProjectCacheFolder);
+    return false;
 #else
     return ObjectRegistry.FindRuntimeObject(runtimeId, info);
 #endif
@@ -1530,7 +1528,7 @@ bool Content::RenameAsset(const StringView& oldPathInput, const StringView& newP
         //oldAsset->unload(true);
     }
 
-    // Hold exclusive storage access through the rename so background thumbnail/streaming work
+    // Hold exclusive storage access through the rename so background streaming work
     // cannot reopen the file between releasing its handle and moving it.
     FlaxStorageReference lockedStorage;
     if (ContentStorageManager::LockFileAccess(oldPath, lockedStorage))

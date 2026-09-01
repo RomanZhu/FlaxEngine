@@ -1,11 +1,9 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
-using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;
-using FlaxEngine.GUI;
 
 namespace FlaxEditor.Content
 {
@@ -36,17 +34,5 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Type AssetType => typeof(FontAsset);
 
-        /// <inheritdoc />
-        public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
-        {
-            var asset = FlaxEngine.Content.LoadAssetAsync<FontAsset>(request.Item.ObjectID);
-            guiRoot.AddChild(new Label
-            {
-                Text = asset.FamilyName,
-                AnchorPreset = AnchorPresets.StretchAll,
-                Offsets = Margin.Zero,
-                Wrapping = TextWrapping.WrapWords
-            });
-        }
     }
 }

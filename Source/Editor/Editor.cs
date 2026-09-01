@@ -11,7 +11,6 @@ using System.Threading.Tasks;
 using FlaxEditor.FMOD;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Settings;
-using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.History;
 using FlaxEditor.Modules;
 using FlaxEditor.Modules.SourceCodeEditing;
@@ -111,11 +110,6 @@ namespace FlaxEditor
         /// The UI module.
         /// </summary>
         public UIModule UI;
-
-        /// <summary>
-        /// The thumbnails module.
-        /// </summary>
-        public ThumbnailsModule Thumbnails;
 
         /// <summary>
         /// The simulation module.
@@ -311,7 +305,6 @@ namespace FlaxEditor
             RegisterModule(Scene = new SceneModule(this));
             RegisterModule(Windows = new WindowsModule(this));
             RegisterModule(UI = new UIModule(this));
-            RegisterModule(Thumbnails = new ThumbnailsModule(this));
             RegisterModule(Simulation = new SimulationModule(this));
             RegisterModule(Prefabs = new PrefabsModule(this));
             RegisterModule(SceneEditing = new SceneEditingModule(this));

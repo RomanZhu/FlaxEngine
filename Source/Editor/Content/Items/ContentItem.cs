@@ -175,7 +175,7 @@ namespace FlaxEditor.Content
         /// <summary>
         /// The default thumbnail size.
         /// </summary>
-        public const int DefaultThumbnailSize = PreviewsCache.AssetIconSize;
+        public const int DefaultThumbnailSize = 128;
 
         /// <summary>
         /// The default width.
@@ -204,7 +204,6 @@ namespace FlaxEditor.Content
         private static ContentItem _lastHighlightedItem;
         private readonly List<IContentItemOwner> _references = new List<IContentItemOwner>(4);
 
-        private SpriteHandle _thumbnail;
         private SpriteHandle _shadowIcon;
 
         /// <summary>
@@ -297,26 +296,14 @@ namespace FlaxEditor.Content
         public abstract string TypeDescription { get; }
 
         /// <summary>
-        /// Gets the default name of the content item thumbnail. Returns null if not used.
+        /// Gets the default static icon of the content item.
         /// </summary>
-        public virtual SpriteHandle DefaultThumbnail => SpriteHandle.Invalid;
+        public virtual SpriteHandle DefaultThumbnail => Editor.Instance.Icons.Document128;
 
-        /// <summary>
-        /// Gets a value indicating whether this item has default thumbnail.
-        /// </summary>
-        public bool HasDefaultThumbnail => DefaultThumbnail.IsValid;
-
-        /// <summary>
-        /// Gets or sets the item thumbnail. Warning, thumbnail may not be available if item has no references (<see cref="ReferencesCount"/>).
-        /// </summary>
-        public SpriteHandle Thumbnail
-        {
-            get => _thumbnail;
-            set => _thumbnail = value;
-        }
+        private SpriteHandle PresentationIcon => DefaultThumbnail.IsValid ? DefaultThumbnail : Editor.Instance.Icons.Document128;
 
         /// <inheritdoc />
-        public SpriteHandle TooltipPreview => Thumbnail;
+        public SpriteHandle TooltipPreview => PresentationIcon;
 
         /// <summary>
         /// True if force show file extension.
@@ -352,27 +339,6 @@ namespace FlaxEditor.Content
             for (int i = 0; i < _references.Count; i++)
             {
                 _references[i].OnItemRenamed(this);
-            }
-        }
-
-        /// <summary>
-        /// Refreshes the item thumbnail.
-        /// </summary>
-        public virtual void RefreshThumbnail()
-        {
-            // Skip if item has default thumbnail
-            if (HasDefaultThumbnail)
-                return;
-
-            var thumbnails = Editor.Instance.Thumbnails;
-
-            // Delete old thumbnail and remove it from the cache
-            thumbnails.DeletePreview(this);
-
-            // Request new one (if need to)
-            if (_references.Count > 0)
-            {
-                thumbnails.RequestPreview(this);
             }
         }
 
@@ -500,8 +466,9 @@ namespace FlaxEditor.Content
             }
 
             // Draw thumbnail
-            if (_thumbnail.IsValid)
-                Render2D.DrawSprite(_thumbnail, rectangle);
+            var thumbnail = PresentationIcon;
+            if (thumbnail.IsValid)
+                Render2D.DrawSprite(thumbnail, rectangle);
             else
                 Render2D.FillRectangle(rectangle, Color.Black);
 
@@ -526,8 +493,9 @@ namespace FlaxEditor.Content
             }
 
             // Draw thumbnail
-            if (_thumbnail.IsValid)
-                Render2D.DrawSprite(_thumbnail, rectangle);
+            var thumbnail = PresentationIcon;
+            if (thumbnail.IsValid)
+                Render2D.DrawSprite(thumbnail, rectangle);
             else
                 Render2D.FillRectangle(rectangle, Color.Black);
 
@@ -559,12 +527,6 @@ namespace FlaxEditor.Content
             Assert.IsFalse(_references.Contains(obj));
 
             _references.Add(obj);
-
-            // Check if need to generate preview
-            if (_references.Count == 1 && !_thumbnail.IsValid)
-            {
-                RequestThumbnail();
-            }
         }
 
         /// <summary>
@@ -573,14 +535,7 @@ namespace FlaxEditor.Content
         /// <param name="obj">The object.</param>
         public void RemoveReference(IContentItemOwner obj)
         {
-            if (_references.Remove(obj))
-            {
-                // Check if need to release the preview
-                if (_references.Count == 0 && _thumbnail.IsValid)
-                {
-                    ReleaseThumbnail();
-                }
-            }
+            _references.Remove(obj);
         }
 
         /// <summary>
@@ -611,11 +566,6 @@ namespace FlaxEditor.Content
                 RemoveReference(reference);
             }
 
-            // Release thumbnail
-            if (_thumbnail.IsValid)
-            {
-                ReleaseThumbnail();
-            }
         }
 
         /// <summary>
@@ -623,23 +573,6 @@ namespace FlaxEditor.Content
         /// </summary>
         protected virtual void OnParentFolderChanged()
         {
-        }
-
-        /// <summary>
-        /// Requests the thumbnail.
-        /// </summary>
-        protected void RequestThumbnail()
-        {
-            Editor.Instance.Thumbnails.RequestPreview(this);
-        }
-
-        /// <summary>
-        /// Releases the thumbnail.
-        /// </summary>
-        protected void ReleaseThumbnail()
-        {
-            // Simply unlink sprite
-            _thumbnail = SpriteHandle.Invalid;
         }
 
         /// <summary>
@@ -697,7 +630,6 @@ namespace FlaxEditor.Content
         {
             for (int i = 0; i < _references.Count; i++)
                 _references[i].OnItemReimported(this);
-            RefreshThumbnail();
         }
 
         /// <summary>
@@ -1069,12 +1001,6 @@ namespace FlaxEditor.Content
                 var reference = _references[0];
                 reference.OnItemDispose(this);
                 RemoveReference(reference);
-            }
-
-            // Release thumbnail
-            if (_thumbnail.IsValid)
-            {
-                ReleaseThumbnail();
             }
 
             base.OnDestroy();

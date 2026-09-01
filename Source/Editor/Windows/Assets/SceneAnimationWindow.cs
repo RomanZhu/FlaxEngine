@@ -894,7 +894,6 @@ namespace FlaxEditor.Windows.Assets
                 return;
 
             ClearEditedFlag();
-            _item.RefreshThumbnail();
         }
 
         /// <inheritdoc />

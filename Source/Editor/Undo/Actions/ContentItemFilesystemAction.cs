@@ -656,7 +656,6 @@ namespace FlaxEditor.Actions
             {
                 try
                 {
-                    _editor.Thumbnails.DeletePreview(item);
                     _editor.ContentDatabase.RemoveFromDatabasePreservingAssets(item);
                 }
                 catch (Exception ex)

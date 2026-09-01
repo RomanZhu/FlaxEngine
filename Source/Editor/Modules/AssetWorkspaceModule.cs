@@ -456,17 +456,6 @@ namespace FlaxEditor.Modules
             }
         }
 
-        private void OnArtifactPublished(Guid assetId)
-        {
-            if (Find(assetId) is AssetItem item)
-            {
-                if (item.ReferencesCount > 0)
-                    Editor.Thumbnails.RequestPreview(item);
-            }
-            else
-                Editor.Thumbnails.DeletePreview(assetId);
-        }
-
         /// <summary>Gets the immutable canonical database record for an asset identity.</summary>
         public bool TryGetAssetDatabaseRecord(Guid id, out AssetDatabaseRecordInfo record)
         {
@@ -2620,7 +2609,6 @@ namespace FlaxEditor.Modules
             Proxy.Add(new MaterialFunctionProxy());
             Proxy.Add(new SpriteAtlasProxy());
             Proxy.Add(new CubeTextureProxy());
-            Proxy.Add(new PreviewsCacheProxy());
             Proxy.Add(new FontProxy());
             Proxy.Add(new ShaderProxy());
             Proxy.Add(new ShaderSourceProxy());
@@ -2782,11 +2770,6 @@ namespace FlaxEditor.Modules
             assetItem.Dispose();
             assetItem.ParentFolder.Children.Remove(assetItem);
 
-            // Delete old thumbnail and remove it from the cache
-            if (!assetItem.HasDefaultThumbnail)
-            {
-                Editor.Instance.Thumbnails.DeletePreview(assetItem);
-            }
         }
 
         private static string GetCanonicalSourcePathForDiskEvent(string path)
@@ -3410,8 +3393,6 @@ namespace FlaxEditor.Modules
 
             var publishedAssets = AssetPipelineService.DrainArtifactPublications();
             ScriptedImporterRegistry.OnAssetsPublished(publishedAssets);
-            for (int i = 0; i < publishedAssets.Length; i++)
-                OnArtifactPublished(publishedAssets[i]);
 
             ProcessPendingAssetDiskChanges();
             CompleteSourceRefreshTask();

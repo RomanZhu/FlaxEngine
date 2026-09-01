@@ -500,7 +500,6 @@ namespace FlaxEditor.Windows.Assets
 
             _properties.PeekState();
             ClearEditedFlag();
-            _item.RefreshThumbnail();
         }
 
         /// <inheritdoc />

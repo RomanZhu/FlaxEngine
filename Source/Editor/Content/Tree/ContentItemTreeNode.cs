@@ -29,7 +29,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     public ContentItem Item { get; }
 
     /// <inheritdoc />
-    public SpriteHandle TooltipPreview => Item?.Thumbnail ?? SpriteHandle.Invalid;
+    public SpriteHandle TooltipPreview => GetIcon(Item);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ContentItemTreeNode"/> class.
@@ -50,9 +50,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     {
         if (item == null)
             return SpriteHandle.Invalid;
-        var icon = item.Thumbnail;
-        if (!icon.IsValid)
-            icon = item.DefaultThumbnail;
+        var icon = item.DefaultThumbnail;
         if (!icon.IsValid)
             icon = Editor.Instance.Icons.Document128;
         return icon;

@@ -50,7 +50,7 @@ namespace FlaxEditor.Content
         public override ContentItemSearchFilter SearchFilter => ContentItemSearchFilter.Prefab;
 
         /// <inheritdoc />
-        public override SpriteHandle DefaultThumbnail => SpriteHandle.Invalid;
+        public override SpriteHandle DefaultThumbnail => Editor.Instance.Icons.Document128;
 
         /// <inheritdoc />
         public override string TypeDescription

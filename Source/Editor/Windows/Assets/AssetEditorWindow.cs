@@ -724,9 +724,6 @@ namespace FlaxEditor.Windows.Assets
                 originalAsset.Reload();
             }
 
-            // Refresh thumbnail
-            _item.RefreshThumbnail();
-
             saveScope.Complete(true);
             return false;
         }

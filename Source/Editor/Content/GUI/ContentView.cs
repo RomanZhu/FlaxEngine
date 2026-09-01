@@ -607,15 +607,6 @@ namespace FlaxEditor.Content.GUI
             }
         }
 
-        /// <summary>
-        /// Refreshes thumbnails of all items in the <see cref="ContentView"/>.
-        /// </summary>
-        public void RefreshThumbnails()
-        {
-            for (int i = 0; i < _items.Count; i++)
-                _items[i].RefreshThumbnail();
-        }
-
         #region Internal events
 
         /// <summary>

@@ -2,9 +2,7 @@
 
 using System;
 using FlaxEditor.Content.Create;
-using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.GUI.ContextMenu;
-using FlaxEditor.Viewport.Previews;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;
@@ -19,8 +17,6 @@ namespace FlaxEditor.Content
     [ContentContextMenu("New/Prefab")]
     public sealed class PrefabProxy : JsonAssetBaseProxy
     {
-        private PrefabPreview _preview;
-
         private sealed class PrefabVariantCreateInfo
         {
             public AssetObjectId PrefabObjectId;
@@ -174,123 +170,6 @@ namespace FlaxEditor.Content
                 throw new InvalidOperationException("Failed to register the prefab source in the asset database.");
         }
 
-        /// <inheritdoc />
-        public override void OnThumbnailDrawPrepare(ThumbnailRequest request)
-        {
-            if (_preview == null)
-            {
-                _preview = new PrefabPreview(false);
-                InitAssetPreview(_preview);
-            }
-        }
-
-        /// <inheritdoc />
-        public override bool CanDrawThumbnail(ThumbnailRequest request)
-        {
-            if (!_preview.HasLoadedAssets)
-                return false;
-
-            // Check if asset is streamed enough
-            return ThumbnailsModule.HasMinimumQuality((Prefab)request.Asset);
-        }
-
-        private void Prepare(Actor actor, ref BoundingBox bounds)
-        {
-            if (!actor.IsActive)
-                return;
-            if (actor is TextRender textRender)
-            {
-                textRender.UpdateLayout();
-            }
-
-            // Use bounds from visual-only elements
-            var actorBounds = BoundingBox.Empty;
-            if (actor is ModelInstanceActor || 
-                actor is SpriteRender ||
-                actor is TextRender)
-            {
-                actorBounds = actor.EditorBox;
-            }
-            if (actorBounds != BoundingBox.Empty)
-            {
-                if (bounds == BoundingBox.Empty)
-                    bounds = actorBounds;
-                else
-                    BoundingBox.Merge(ref actorBounds, ref bounds, out bounds);
-            }
-
-            for (int i = 0; i < actor.ChildrenCount; i++)
-            {
-                Prepare(actor.GetChild(i), ref bounds);
-            }
-        }
-
-        /// <inheritdoc />
-        public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
-        {
-            _preview.Prefab = (Prefab)request.Asset;
-            _preview.Parent = guiRoot;
-            _preview.Scale = Float2.One;
-            _preview.ShowDefaultSceneActors = true;
-            _preview.SyncBackbufferSize();
-
-            // Special case for UI prefabs
-            if (_preview.Instance is UIControl uiControl && uiControl.HasControl)
-            {
-                // Ensure to place UI in a proper way
-                uiControl.Control.Location = Float2.Zero;
-                uiControl.Control.Scale *= PreviewsCache.AssetIconSize / uiControl.Control.Size.MaxValue;
-                uiControl.Control.AnchorPreset = AnchorPresets.TopLeft;
-                uiControl.Control.AnchorPreset = AnchorPresets.MiddleCenter;
-
-                // Tweak preview
-                _preview.ShowDefaultSceneActors = false;
-            }
-            else
-            {
-                // Update some actors data (some actor types update bounds/data later but its required to be done before rendering)
-                var bounds = BoundingBox.Empty;
-                Prepare(_preview.Instance, ref bounds);
-                //bounds = _preview.Instance.EditorBoxChildren;
-
-                // Auto fit actor to camera
-                if (bounds != BoundingBox.Empty)
-                {
-                    float targetSize = 38.0f;
-                    float maxSize = Math.Max(0.001f, (float)bounds.Size.MaxValue);
-                    float scale = targetSize / maxSize;
-                    _preview.Instance.Scale = new Float3(scale);
-                    _preview.Instance.Position = -bounds.Center * scale;
-                }
-                else
-                {
-                    _preview.Instance.Scale = Float3.One;
-                    _preview.Instance.Position = Vector3.Zero;
-                }
-            }
-
-            _preview.Task.OnDraw();
-        }
-
-        /// <inheritdoc />
-        public override void OnThumbnailDrawEnd(ThumbnailRequest request, ContainerControl guiRoot)
-        {
-            _preview.RemoveChildren();
-            _preview.Prefab = null;
-            _preview.Parent = null;
-        }
-
-        /// <inheritdoc />
-        public override void Dispose()
-        {
-            if (_preview != null)
-            {
-                _preview.Dispose();
-                _preview = null;
-            }
-
-            base.Dispose();
-        }
     }
 
     /// <summary>
