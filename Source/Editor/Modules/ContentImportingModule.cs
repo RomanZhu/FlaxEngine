@@ -871,9 +871,6 @@ namespace FlaxEditor.Modules
 
         private bool ExecuteImportTransaction(IFileEntryAction entry)
         {
-            if (entry is InPlaceCanonicalImportEntry inPlaceEntry)
-                return ExecuteInPlaceRegistrationTransaction(inPlaceEntry);
-
             // Folder imports enqueue their descendants and do not have a synchronous commit boundary.
             if (Directory.Exists(entry.SourceUrl))
                 return entry.Execute();
@@ -887,6 +884,17 @@ namespace FlaxEditor.Modules
             {
                 Editor.LogWarning("Cannot import because the destination already exists: " + destinationPath);
                 return true;
+            }
+
+            // Plain canonical source imports need no managed importer callback. Let the native
+            // operation own source, metadata, database publication, and crash recovery together.
+            if (!destinationExisted && entry.GetType() == typeof(ImportFileEntry) &&
+                ((ImportFileEntry)entry).IsCanonicalSource)
+            {
+                var failed = AssetOperationService.ImportAsset(entry.SourceUrl, destinationPath);
+                ContentMutationDiagnostics.Log(failed ? "mutation.import.failed" : "mutation.import.committed",
+                    $"source='{entry.SourceUrl}'; destination='{destinationPath}'; native=true");
+                return failed;
             }
 
             var plan = new ContentMutationPlan(isCreate ? ContentMutationOperationKind.Create : ContentMutationOperationKind.ImportOutput);
@@ -988,63 +996,6 @@ namespace FlaxEditor.Modules
                 Editor.LogWarning("Failed to clean import transaction backup folder: " + ex.Message);
             }
             ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.import.committed" : "mutation.import.failed", $"transaction={plan.Id:N}; source='{sourcePath}'; destination='{destinationPath}'; replaced={destinationExisted}; failure={result.Failure}; recovery={result.RequiresRecovery}");
-            return !result.Succeeded;
-        }
-
-        private static bool ExecuteInPlaceRegistrationTransaction(InPlaceCanonicalImportEntry entry)
-        {
-            var sourcePath = ContentMutationPathUtils.Normalize(entry.SourceUrl);
-            var metadataPath = sourcePath + ".meta";
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-            var steps = new List<ContentMutationStep>();
-            string backupRoot = null;
-            string backupPath = null;
-            if (entry.ReplaceForeignMetadata)
-            {
-                backupRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationBackups", plan.Id.ToString("N"));
-                backupPath = StringUtils.CombinePaths(backupRoot, Path.GetFileName(metadataPath));
-                Directory.CreateDirectory(backupRoot);
-                var backupEntry = plan.Entries.Count;
-                plan.Entries.Add(new ContentMutationEntry(metadataPath, backupPath, ContentMutationPathRole.ReplacementBackup, false));
-                steps.Add(new ContentMutationStep(
-                    "backup-foreign-metadata",
-                    new[] { backupEntry },
-                    () =>
-                    {
-                        File.Move(metadataPath, backupPath);
-                        return ContentMutationResult.Success(metadataPath, backupPath);
-                    },
-                    () =>
-                    {
-                        if (File.Exists(backupPath) && !File.Exists(metadataPath))
-                            File.Move(backupPath, metadataPath);
-                        return File.Exists(metadataPath) && !File.Exists(backupPath);
-                    },
-                    () => !File.Exists(metadataPath) && File.Exists(backupPath)));
-            }
-            var metadataEntry = plan.Entries.Count;
-            plan.Entries.Add(new ContentMutationEntry(sourcePath, metadataPath, ContentMutationPathRole.MetadataSidecar, false)
-            {
-                DestinationReleasedByTransaction = entry.ReplaceForeignMetadata,
-                SourceRequired = true,
-            });
-            steps.Add(new ContentMutationStep(
-                "register-in-place-source",
-                new[] { metadataEntry },
-                () => entry.Execute()
-                    ? ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, sourcePath, metadataPath, "Canonical metadata creation or database registration failed.")
-                    : ContentMutationResult.Success(sourcePath, metadataPath),
-                () => DeleteCanonicalMetadata(metadataPath),
-                () => File.Exists(metadataPath) && FlaxEngine.Content.GetAssetInfo(sourcePath, out var info) && info.ID != Guid.Empty));
-            var result = new ContentMutationTransaction(plan).Execute(steps);
-            if (result.Succeeded && backupPath != null)
-            {
-                DeleteImportPath(backupPath);
-                if (Directory.Exists(backupRoot) && !Directory.EnumerateFileSystemEntries(backupRoot).Any())
-                    Directory.Delete(backupRoot, false);
-            }
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.register-in-place.committed" : "mutation.register-in-place.failed",
-                $"transaction={plan.Id:N}; source='{sourcePath}'; failure={result.Failure}; recovery={result.RequiresRecovery}");
             return !result.Succeeded;
         }
 

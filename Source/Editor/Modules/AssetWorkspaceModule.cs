@@ -484,6 +484,13 @@ namespace FlaxEditor.Modules
             return UseContentBackendForFileOperation(item);
         }
 
+        private static bool CanUseNativeAssetTransaction(ContentItem item, string sourcePath, string destinationPath)
+        {
+            return item is AssetItem { IsCanonicalSource: true, IsCanonicalSubAsset: false } &&
+                   ContentMutationPathUtils.IsWithinRoot(sourcePath, Globals.ProjectContentFolder, false) &&
+                   ContentMutationPathUtils.IsWithinRoot(destinationPath, Globals.ProjectContentFolder, false);
+        }
+
         internal bool ShouldRemoveMissingContentItem(ContentItem item)
         {
             if (item is AssetItem { IsCanonicalSource: true })
@@ -1116,17 +1123,31 @@ namespace FlaxEditor.Modules
                 return ContentMutationResult.Prepared(requestedMoves[0].Item?.Path, requestedMoves[0].Destination);
 
             var operation = moves.Count == 1 && moves[0].OldParent == moves[0].NewParent ? ContentMutationOperationKind.Rename : ContentMutationOperationKind.Move;
-            var plan = new ContentMutationPlan(operation);
-            var steps = new List<ContentMutationStep>();
-            for (int i = 0; i < moves.Count; i++)
-                AddMoveSteps(plan, steps, moves[i].Item, moves[i].Source, moves[i].Destination);
+            var useNativeTransaction = moves.Count == 1 && CanUseNativeAssetTransaction(moves[0].Item, moves[0].Source, moves[0].Destination) &&
+                                       !ContentMutationPathUtils.IsCaseOnlyRename(moves[0].Source, moves[0].Destination);
+            ContentMutationPlan plan = null;
+            ContentMutationResult result;
+            if (useNativeTransaction)
+            {
+                var move = moves[0];
+                ContentMutationDiagnostics.Log("mutation.move.begin", $"operation={operation}; items=1; native=true");
+                result = AssetOperationService.MoveAsset(move.Source, move.Destination)
+                    ? ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, move.Source, move.Destination, "The native asset move transaction failed.")
+                    : ContentMutationResult.Success(move.Source, move.Destination);
+            }
+            else
+            {
+                plan = new ContentMutationPlan(operation);
+                var steps = new List<ContentMutationStep>();
+                for (int i = 0; i < moves.Count; i++)
+                    AddMoveSteps(plan, steps, moves[i].Item, moves[i].Source, moves[i].Destination);
 
-            ContentMutationDiagnostics.Log("mutation.move.begin", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
-            var transaction = new ContentMutationTransaction(plan);
-            var result = transaction.Execute(steps);
+                ContentMutationDiagnostics.Log("mutation.move.begin", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
+                result = new ContentMutationTransaction(plan).Execute(steps);
+            }
             if (!result.Succeeded)
             {
-                ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={plan.Id:N}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
+                ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={result.TransactionId:N}; native={useNativeTransaction}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
                 return result;
             }
 
@@ -1152,18 +1173,21 @@ namespace FlaxEditor.Modules
 
             if (_enableEvents)
                 WorkspaceModified?.Invoke();
-            var refresh = new string[moves.Count * 2];
-            for (int i = 0; i < moves.Count; i++)
+            if (!useNativeTransaction)
             {
-                refresh[i * 2] = moves[i].Source;
-                refresh[i * 2 + 1] = moves[i].Destination;
+                var refresh = new string[moves.Count * 2];
+                for (int i = 0; i < moves.Count; i++)
+                {
+                    refresh[i * 2] = moves[i].Source;
+                    refresh[i * 2 + 1] = moves[i].Destination;
+                }
+                if (AssetPipelineService.RefreshSources(refresh))
+                {
+                    ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={plan.Id:N}; failure=canonical-refresh; items={moves.Count}; entries={plan.Entries.Count}");
+                    return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, moves[0].Source, moves[0].Destination, "The move committed, but the canonical asset database refresh failed.", transactionId: plan.Id);
+                }
             }
-            if (AssetPipelineService.RefreshSources(refresh))
-            {
-                ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={plan.Id:N}; failure=canonical-refresh; items={moves.Count}; entries={plan.Entries.Count}");
-                return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, moves[0].Source, moves[0].Destination, "The move committed, but the canonical asset database refresh failed.", transactionId: plan.Id);
-            }
-            ContentMutationDiagnostics.Log("mutation.move.committed", $"transaction={plan.Id:N}; operation={operation}; items={moves.Count}; entries={plan.Entries.Count}");
+            ContentMutationDiagnostics.Log("mutation.move.committed", $"transaction={result.TransactionId:N}; native={useNativeTransaction}; operation={operation}; items={moves.Count}; entries={plan?.Entries.Count ?? 2}");
             return result;
         }
 
@@ -1373,6 +1397,26 @@ namespace FlaxEditor.Modules
         {
             if (requests == null || requests.Count == 0)
                 return ContentMutationResult.Prepared(null, null);
+
+            if (requests.Count == 1)
+            {
+                var item = requests[0].Item;
+                var targetPath = ContentMutationPathUtils.Normalize(requests[0].Destination);
+                if (item != null && CanUseNativeAssetTransaction(item, item.Path, targetPath))
+                {
+                    var preflight = PreflightCopy(item, targetPath);
+                    if (!preflight.Succeeded)
+                        return preflight;
+                    ContentMutationDiagnostics.Log("mutation.copy.begin", $"source='{item.Path}'; destination='{targetPath}'; native=true");
+                    if (AssetOperationService.CopyAsset(item.Path, targetPath, out _))
+                    {
+                        ContentMutationDiagnostics.Log("mutation.copy.failed", $"source='{item.Path}'; destination='{targetPath}'; native=true");
+                        return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, item.Path, targetPath, "The native asset copy transaction failed.");
+                    }
+                    ContentMutationDiagnostics.Log("mutation.copy.committed", $"source='{item.Path}'; destination='{targetPath}'; native=true");
+                    return ContentMutationResult.Success(item.Path, targetPath);
+                }
+            }
 
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
             var steps = new List<ContentMutationStep>(requests.Count);
@@ -1816,57 +1860,7 @@ namespace FlaxEditor.Modules
 
         private bool DeleteCanonicalFolderPair(string folderPath)
         {
-            var metadataPath = folderPath + ".meta";
-            var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationDelete", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(trashRoot);
-            var stagedFolder = Path.Combine(trashRoot, Path.GetFileName(folderPath));
-            var stagedMeta = stagedFolder + ".meta";
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
-            plan.Entries.Add(new ContentMutationEntry(folderPath, stagedFolder, ContentMutationPathRole.Main, true));
-            plan.Entries.Add(new ContentMutationEntry(metadataPath, stagedMeta, ContentMutationPathRole.MetadataSidecar, false));
-            var step = new ContentMutationStep(
-                "delete-canonical-folder-pair",
-                new[] { 0, 1 },
-                () =>
-                {
-                    Directory.Move(folderPath, stagedFolder);
-                    File.Move(metadataPath, stagedMeta);
-                    return ContentMutationResult.Success(folderPath, stagedFolder);
-                },
-                () =>
-                {
-                    try
-                    {
-                        if (File.Exists(stagedMeta) && !File.Exists(metadataPath))
-                            File.Move(stagedMeta, metadataPath);
-                        if (Directory.Exists(stagedFolder) && !Directory.Exists(folderPath))
-                            Directory.Move(stagedFolder, folderPath);
-                        return Directory.Exists(folderPath) && File.Exists(metadataPath) && !Directory.Exists(stagedFolder) && !File.Exists(stagedMeta);
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                },
-                () => !Directory.Exists(folderPath) && !File.Exists(metadataPath) && Directory.Exists(stagedFolder) && File.Exists(stagedMeta));
-            var result = new ContentMutationTransaction(plan).Execute(new[] { step });
-            if (!result.Succeeded)
-            {
-                Editor.LogError($"Cannot delete canonical folder pair '{folderPath}': {result.Message}");
-                return false;
-            }
-            try
-            {
-                Directory.Delete(stagedFolder, true);
-                File.Delete(stagedMeta);
-                Directory.Delete(trashRoot);
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning($"Canonical folder was deleted but its recovery staging data could not be cleaned: {ex.Message}");
-            }
-            QueueCanonicalSourceRefresh(folderPath);
-            return true;
+            return DeleteCanonicalPair(folderPath, Guid.Empty, true);
         }
 
         private bool DeleteCanonicalAssetPair(AssetItem item)
@@ -1878,57 +1872,27 @@ namespace FlaxEditor.Modules
                 Editor.LogError($"Cannot delete canonical source pair because '{sourcePath}' or its metadata sidecar is missing.");
                 return false;
             }
+            return DeleteCanonicalPair(sourcePath, item.ID, false);
+        }
 
-            var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "ContentMutationDelete", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(trashRoot);
-            var stagedSource = Path.Combine(trashRoot, Path.GetFileName(sourcePath));
-            var stagedMeta = stagedSource + ".meta";
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
-            plan.Entries.Add(new ContentMutationEntry(sourcePath, stagedSource, ContentMutationPathRole.Main, false));
-            plan.Entries.Add(new ContentMutationEntry(metaPath, stagedMeta, ContentMutationPathRole.MetadataSidecar, false));
-            var indices = new[] { 0, 1 };
-            var step = new ContentMutationStep(
-                "delete-canonical-pair",
-                indices,
-                () =>
-                {
-                    File.Move(sourcePath, stagedSource);
-                    File.Move(metaPath, stagedMeta);
-                    return ContentMutationResult.Success(sourcePath, stagedSource);
-                },
-                () =>
-                {
-                    try
-                    {
-                        if (File.Exists(stagedMeta) && !File.Exists(metaPath))
-                            File.Move(stagedMeta, metaPath);
-                        if (File.Exists(stagedSource) && !File.Exists(sourcePath))
-                            File.Move(stagedSource, sourcePath);
-                        return File.Exists(sourcePath) && File.Exists(metaPath) && !File.Exists(stagedSource) && !File.Exists(stagedMeta);
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                },
-                () => !File.Exists(sourcePath) && !File.Exists(metaPath) && File.Exists(stagedSource) && File.Exists(stagedMeta));
-            var result = new ContentMutationTransaction(plan).Execute(new[] { step });
-            if (!result.Succeeded)
+        private static bool DeleteCanonicalPair(string sourcePath, Guid expectedAssetId, bool isFolder)
+        {
+            var requests = new[]
             {
-                Editor.LogError($"Cannot delete canonical source pair '{sourcePath}': {result.Message}");
+                new AssetTrashEntryRequest
+                {
+                    SourcePath = sourcePath,
+                    ExpectedAssetGuid = expectedAssetId,
+                    IsFolder = isFolder,
+                }
+            };
+            if (AssetOperationService.TrashEntries(requests, out var trash))
+            {
+                Editor.LogError($"Cannot delete canonical {(isFolder ? "folder" : "source")} pair '{sourcePath}': the native trash transaction failed.");
                 return false;
             }
-            try
-            {
-                File.Delete(stagedMeta);
-                File.Delete(stagedSource);
-                Directory.Delete(trashRoot);
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning($"Canonical source was deleted but its recovery staging data could not be cleaned: {ex.Message}");
-            }
-            QueueCanonicalSourceRefresh(sourcePath);
+            if (AssetOperationService.DiscardTrash(trash))
+                Editor.LogWarning($"Canonical {(isFolder ? "folder" : "source")} pair '{sourcePath}' was deleted but its native recovery staging data could not be cleaned.");
             return true;
         }
 
