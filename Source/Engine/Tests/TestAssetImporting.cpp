@@ -4,7 +4,11 @@
 #include "Engine/Content/Importing/AssetImportPlanner.h"
 #include "Engine/Content/Importing/AssetPostprocessor.h"
 #include "Engine/Content/Importing/AssetRefreshCoordinator.h"
+#include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
 #include "Engine/Content/Importing/CustomDependencyRegistry.h"
+#include "Engine/Core/ScopeExit.h"
+#include "Engine/Engine/Globals.h"
+#include "Engine/Platform/FileSystem.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 namespace
@@ -29,6 +33,36 @@ namespace
         request.SourceRevision = revision;
         request.SourceHash = ContentHash::Compute("source", 6);
         request.MetadataHash = ContentHash::Compute("metadata", 8);
+        return request;
+    }
+
+    AssetImportJobRequest MakeWorkerRequest(const StringView& stagingPath)
+    {
+        AssetImportJobRequest request;
+        request.JobID = Guid::New();
+        request.Capability = Guid::New();
+        request.Asset = AssetGuid(Guid::New());
+        request.SourceRevision = 7;
+        request.SourcePath = TEXT("Content/model.foo");
+        request.SourceSnapshot.Add(1);
+        request.SourceSnapshot.Add(2);
+        request.SourceHash = ContentHash::Compute(request.SourceSnapshot.Get(), request.SourceSnapshot.Count());
+        request.MetaSnapshot.Add(3);
+        request.MetaHash = ContentHash::Compute(request.MetaSnapshot.Get(), request.MetaSnapshot.Count());
+        AssetImportWorkerInput input;
+        input.Identity = TEXT("texture:albedo");
+        input.CanonicalPath = TEXT("Content/albedo.png");
+        input.Snapshot.Add(4);
+        input.Hash = ContentHash::Compute(input.Snapshot.Get(), input.Snapshot.Count());
+        request.AuthorizedInputs.Add(input);
+        AssetImportWorkerTool tool;
+        tool.Name = TEXT("Tests.Tool");
+        tool.VersionHash = ContentHash::Compute("tool", 4);
+        request.AllowedTools.Add(tool);
+        request.Importer.ID = TEXT("Tests.Worker");
+        request.Importer.ImplementationHash = ContentHash::Compute("worker", 6);
+        request.Importer.ProducesMainObject = false;
+        request.OutputStagingPath = stagingPath;
         return request;
     }
 }
@@ -106,6 +140,74 @@ TEST_CASE("Process-safe native callback importers require an external worker")
 
     descriptor.WorkerExecutable = TEXT("Binaries/NativeImportWorker.exe");
     REQUIRE_FALSE(registry.Register(descriptor, registration, diagnostic));
+}
+
+TEST_CASE("Asset import worker protocol round-trips bounded capabilities")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetImportWorkerProtocol-") + Guid::New().ToString(Guid::FormatType::N));
+    const String staging = root / TEXT("Staging");
+    const String requestPath = root / TEXT("request.bin");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const AssetImportJobRequest request = MakeWorkerRequest(staging);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetImportWorkerProtocol::SaveRequest(requestPath, request, diagnostic));
+    AssetImportJobRequest loaded;
+    REQUIRE_FALSE(AssetImportWorkerProtocol::LoadRequest(requestPath, loaded, diagnostic));
+    CHECK(loaded.ProtocolVersion == request.ProtocolVersion);
+    CHECK(loaded.JobID == request.JobID);
+    CHECK(loaded.Capability == request.Capability);
+    CHECK(loaded.Asset == request.Asset);
+    CHECK(loaded.SourceHash == request.SourceHash);
+    CHECK(loaded.MetaHash == request.MetaHash);
+    REQUIRE(loaded.AuthorizedInputs.Count() == 1);
+    CHECK(loaded.AuthorizedInputs[0].Identity == request.AuthorizedInputs[0].Identity);
+    CHECK(loaded.AuthorizedInputs[0].Hash == request.AuthorizedInputs[0].Hash);
+    REQUIRE(loaded.AllowedTools.Count() == 1);
+    CHECK(loaded.AllowedTools[0].Name == request.AllowedTools[0].Name);
+    CHECK(loaded.AllowedTools[0].VersionHash == request.AllowedTools[0].VersionHash);
+    CHECK(loaded.Importer.ID == request.Importer.ID);
+    CHECK(loaded.OutputStagingPath == request.OutputStagingPath);
+    CHECK(loaded.Limits.MaximumMemoryBytes == request.Limits.MaximumMemoryBytes);
+    CHECK(loaded.Limits.TimeoutMilliseconds == request.Limits.TimeoutMilliseconds);
+}
+
+TEST_CASE("Asset import worker protocol rejects mismatched capabilities and escaping outputs")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetImportWorkerValidation-") + Guid::New().ToString(Guid::FormatType::N));
+    const String staging = root / TEXT("Staging");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(staging));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const AssetImportJobRequest request = MakeWorkerRequest(staging);
+    AssetImportJobResult result;
+    result.ProtocolVersion = request.ProtocolVersion;
+    result.JobID = request.JobID;
+    result.Capability = Guid::New();
+    result.Status = AssetImportWorkerStatus::Succeeded;
+    AssetPipelineDiagnostic diagnostic;
+    CHECK(AssetImportWorkerProtocol::ValidateResult(request, result, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SnapshotInvalid);
+
+    result.Capability = request.Capability;
+    AssetImportWorkerTool unapprovedTool;
+    unapprovedTool.Name = TEXT("Tests.OtherTool");
+    unapprovedTool.VersionHash = ContentHash::Compute("other", 5);
+    result.ObservedToolchain.Add(unapprovedTool);
+    CHECK(AssetImportWorkerProtocol::ValidateResult(request, result, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
+    result.ObservedToolchain.Clear();
+
+    AssetImportWorkerOutput output;
+    output.Name = TEXT("runtime");
+    output.Kind = "runtime";
+    output.RelativePath = TEXT("../escape.bin");
+    output.Hash = ContentHash::Compute("output", 6);
+    output.Size = 6;
+    result.Outputs.Add(output);
+    CHECK(AssetImportWorkerProtocol::ValidateResult(request, result, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
 }
 
 TEST_CASE("AssetImportPlanner coalesces revisions and pins importer lifetime")
