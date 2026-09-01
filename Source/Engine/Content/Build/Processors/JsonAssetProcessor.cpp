@@ -114,20 +114,33 @@ namespace
                 !fileIDMember->value.IsInt64())
                 return true;
             const int64 fileID = fileIDMember->value.GetInt64();
-            if (!guid.IsValid() && fileID == 0)
-                return false;
-            AssetObjectId objectID(AssetGuid(guid), fileID);
-            if (!objectID.IsValid())
-                return true;
             const auto kindMember = value.FindMember("kind");
+            const auto instanceMember = value.FindMember("prefabInstanceFileId");
+            GlobalObjectKind kind = GlobalObjectKind::ImportedAssetObject;
             if (kindMember != value.MemberEnd())
             {
-                const auto instanceMember = value.FindMember("prefabInstanceFileId");
                 if (!kindMember->value.IsInt() || (instanceMember != value.MemberEnd() && !instanceMember->value.IsInt64()) ||
                     kindMember->value.GetInt() < static_cast<int32>(GlobalObjectKind::ImportedAssetObject) ||
                     kindMember->value.GetInt() > static_cast<int32>(GlobalObjectKind::BuiltinObject))
                     return true;
-                const auto kind = static_cast<GlobalObjectKind>(kindMember->value.GetInt());
+                kind = static_cast<GlobalObjectKind>(kindMember->value.GetInt());
+            }
+            if (!guid.IsValid())
+            {
+                // A scene actor reference is local to the document and intentionally has no asset GUID.
+                if (kindMember != value.MemberEnd() && kind == GlobalObjectKind::SceneObject && fileID != 0 &&
+                    instanceMember != value.MemberEnd() && instanceMember->value.GetInt64() == 0)
+                    return false;
+                // Preserve the canonical null asset-reference form, but never treat a typed object reference as null.
+                if (kindMember == value.MemberEnd() && fileID == 0)
+                    return false;
+                return true;
+            }
+            AssetObjectId objectID(AssetGuid(guid), fileID);
+            if (!objectID.IsValid())
+                return true;
+            if (kindMember != value.MemberEnd())
+            {
                 if (kind == GlobalObjectKind::SceneObject || kind == GlobalObjectKind::PrefabObject)
                 {
                     if (guid == currentSource)
