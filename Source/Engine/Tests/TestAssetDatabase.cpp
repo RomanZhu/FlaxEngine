@@ -270,6 +270,89 @@ TEST_CASE("Asset database incremental publication keeps WAL growth bounded")
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
+TEST_CASE("Asset database scanner reconciles typed rows and retains unrelated durable state")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseScannerRows-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid sourceId = Guid::New();
+    String sourcePath = content / TEXT("Payload.bin");
+    REQUIRE_FALSE(File::WriteAllText(sourcePath, TEXT("initial"), Encoding::ANSI));
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(sourcePath + TEXT(".meta"), MakeDatabaseMeta(sourceId), diagnostic));
+
+    AssetDatabase database;
+    REQUIRE_FALSE(database.Open(library, Guid::New(), diagnostic));
+    AssetDatabaseScanOptions options;
+    AssetDatabaseScanResult scan;
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    Array<AssetChangeSet> changes;
+    bool requiresSnapshot = false;
+    REQUIRE_FALSE(database.ReadChangesAfter(0, changes, requiresSnapshot, diagnostic));
+    REQUIRE(changes.Count() == 1);
+    REQUIRE(changes[0].Added.Count() == 1);
+    CHECK(changes[0].Added[0].AssetGuid == sourceId);
+
+    SourceAssetPublicationRow publication;
+    publication.AssetGuid = sourceId;
+    publication.LocalFileId = 1;
+    publication.TargetId = TEXT("Windows-x64");
+    publication.Artifact = ArtifactKey(ContentHash::Compute("scanner-publication", 19));
+    publication.IsLastKnownGood = true;
+    Array<SourceAssetDependencyRow> publicationDependencies;
+    REQUIRE_FALSE(database.RecordPublication(publication, publicationDependencies, diagnostic));
+    REQUIRE_FALSE(database.RegisterCustomDependency(TEXT("scanner-environment"),
+        ContentHash::Compute("stable", 6), TEXT("test"), diagnostic));
+
+    uint64 baselineRevision = database.GetRevision();
+    REQUIRE_FALSE(File::WriteAllText(sourcePath, TEXT("changed-payload"), Encoding::ANSI));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    changes.Clear();
+    REQUIRE_FALSE(database.ReadChangesAfter(baselineRevision, changes, requiresSnapshot, diagnostic));
+    REQUIRE(changes.Count() == 1);
+    CHECK(changes[0].SourceChanged.Count() == 1);
+    CHECK(changes[0].Moved.IsEmpty());
+    CHECK(changes[0].ObjectsChanged.IsEmpty());
+
+    const String movedFolder = content / TEXT("Moved");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(movedFolder));
+    const String movedPath = movedFolder / TEXT("Payload.bin");
+    REQUIRE_FALSE(FileSystem::MoveFile(movedPath, sourcePath));
+    REQUIRE_FALSE(FileSystem::MoveFile(movedPath + TEXT(".meta"), sourcePath + TEXT(".meta")));
+    baselineRevision = database.GetRevision();
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    changes.Clear();
+    REQUIRE_FALSE(database.ReadChangesAfter(baselineRevision, changes, requiresSnapshot, diagnostic));
+    REQUIRE(changes.Count() == 1);
+    REQUIRE(changes[0].Moved.Count() == 1);
+    CHECK(changes[0].Moved[0].AssetGuid == sourceId);
+    CHECK(changes[0].SourceChanged.IsEmpty());
+    CHECK(changes[0].ObjectsChanged.IsEmpty());
+
+    const AssetDatabaseReadSnapshot retainedSnapshot = database.GetDurableSnapshot();
+    const SourceAssetDatabaseState& retained = retainedSnapshot.GetState();
+    CHECK(retained.Publications.Count() == 1);
+    CHECK(retained.CustomDependencies.Count() == 1);
+
+    baselineRevision = database.GetRevision();
+    REQUIRE_FALSE(FileSystem::DeleteFile(movedPath));
+    REQUIRE_FALSE(FileSystem::DeleteFile(movedPath + TEXT(".meta")));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    changes.Clear();
+    REQUIRE_FALSE(database.ReadChangesAfter(baselineRevision, changes, requiresSnapshot, diagnostic));
+    REQUIRE(changes.Count() == 1);
+    REQUIRE(changes[0].Removed.Count() == 1);
+    CHECK(changes[0].Removed[0].AssetGuid == sourceId);
+    const AssetDatabaseReadSnapshot removedSnapshot = database.GetDurableSnapshot();
+    CHECK(removedSnapshot.GetState().Publications.IsEmpty());
+    CHECK(removedSnapshot.GetState().CustomDependencies.Count() == 1);
+    REQUIRE_FALSE(database.Close(&diagnostic));
+}
+
 TEST_CASE("Asset database detects portable main path collisions")
 {
     AssetDatabase database;

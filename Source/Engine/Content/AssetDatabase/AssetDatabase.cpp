@@ -833,29 +833,36 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, AssetPipelineDiagnostic& diagnostic)
 {
     Array<AssetPipelineDiagnostic> diagnostics;
-    return PublishFullSnapshotInternal(records, diagnostics, nullptr, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, nullptr, diagnostic);
 }
 
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics, AssetPipelineDiagnostic& diagnostic)
 {
-    return PublishFullSnapshotInternal(records, diagnostics, nullptr, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, nullptr, diagnostic);
 }
 
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records,
     const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic)
 {
     Array<AssetPipelineDiagnostic> diagnostics;
-    return PublishFullSnapshotInternal(records, diagnostics, &fileStates, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, diagnostic);
 }
 
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records,
     const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>& fileStates,
     AssetPipelineDiagnostic& diagnostic)
 {
-    return PublishFullSnapshotInternal(records, diagnostics, &fileStates, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, diagnostic);
 }
 
-bool AssetDatabase::PublishFullSnapshotInternal(const Array<AssetRecord>& records,
+bool AssetDatabase::ReconcileScanRows(const Array<AssetRecord>& records,
+    const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>& fileStates,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, diagnostic);
+}
+
+bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
     const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>* fileStates,
     AssetPipelineDiagnostic& diagnostic)
 {

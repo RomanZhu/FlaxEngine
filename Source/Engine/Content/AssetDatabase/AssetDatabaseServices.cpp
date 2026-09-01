@@ -355,6 +355,7 @@ namespace
         case AssetDependencyKind::BuildInput: result.Kind = TEXT("BuildInput"); break;
         case AssetDependencyKind::RuntimeReference: result.Kind = TEXT("RuntimeReference"); break;
         case AssetDependencyKind::Toolchain: result.Kind = TEXT("Toolchain"); break;
+        case AssetDependencyKind::LogicalPath: result.Kind = TEXT("LogicalPath"); break;
         default: result.Kind = TEXT("Unknown"); break;
         }
         result.TargetObject = AssetObjectId(AssetGuid(dependency.TargetAssetGuid), dependency.TargetLocalFileId);
@@ -1814,7 +1815,7 @@ bool AssetPipelineService::Scan(bool strictMetadata)
     if (!failed)
     {
         AssetPipelineDiagnostic publishDiagnostic;
-        failed = AssetDatabase::Get().PublishFullSnapshot(records, result.Diagnostics, result.FileStates,
+        failed = AssetDatabase::Get().ReconcileScanRows(records, result.Diagnostics, result.FileStates,
             publishDiagnostic);
         if (failed)
             result.Diagnostics.Add(MoveTemp(publishDiagnostic));
@@ -2051,7 +2052,7 @@ bool AssetPipelineService::RefreshSources(const Array<String>& paths, bool ensur
     nextStates.Add(result.FileStates);
 
     AssetPipelineDiagnostic publishDiagnostic;
-    if (AssetDatabase::Get().PublishFullSnapshot(merged, diagnostics, nextStates, publishDiagnostic))
+    if (AssetDatabase::Get().ReconcileScanRows(merged, diagnostics, nextStates, publishDiagnostic))
     {
         failureDiagnostic = publishDiagnostic;
         diagnostics.Add(MoveTemp(publishDiagnostic));

@@ -63,7 +63,7 @@ private:
     SourceAssetDatabase _sourceDatabase;
 
     bool PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic);
-    bool PublishFullSnapshotInternal(const Array<AssetRecord>& records,
+    bool ReconcileScanRowsInternal(const Array<AssetRecord>& records,
         const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>* fileStates,
         AssetPipelineDiagnostic& diagnostic);
     void RebuildCacheFromDurable(AssetDatabaseChangeBatch* changes = nullptr);
@@ -117,6 +117,10 @@ public:
 
     /// <summary>Atomically publishes records, diagnostics, and current source file hashes into durable authority.</summary>
     bool PublishFullSnapshot(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics,
+        const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Reconciles scanner output through typed source/object/dependency/diagnostic row mutations.</summary>
+    bool ReconcileScanRows(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics,
         const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic);
 
     AssetDatabaseReadSnapshot GetDurableSnapshot() const;
