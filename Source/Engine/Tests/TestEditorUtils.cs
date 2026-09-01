@@ -1513,10 +1513,12 @@ namespace FlaxEngine.Tests
             Assert.NotNull(item);
             Assert.AreEqual(itemType, item.GetType().Name);
             Assert.AreEqual(typeName, item.TypeName);
+            Assert.IsFalse(item.IsOfType<RawDataAsset>(), "Authored asset was exposed as RawData for " + path);
             Assert.IsTrue(item.IsCanonicalSource, "Project item is not canonical for " + path);
             var proxy = workspace.GetProxy(item);
             Assert.NotNull(proxy);
             Assert.AreEqual(proxyType, proxy.GetType().Name);
+            Assert.IsFalse(proxy is FileProxy, "Authored asset was routed through FileProxy for " + path);
 
             var contentWindow = FlaxEditor.Editor.Instance.Windows.ContentWin;
             contentWindow.Select(item, true);
@@ -1534,6 +1536,52 @@ namespace FlaxEngine.Tests
                 editorWindow?.Close();
             }
             return item;
+        }
+
+        private static void RoundTripAuthoredGraph<TAsset>(AssetItem item, string propertiesJson = null) where TAsset : Asset
+        {
+            var asset = AssetDocumentRegistry.OpenGraph<TAsset>(item, out var session);
+            try
+            {
+                Assert.NotNull(asset);
+                Assert.AreEqual(typeof(TAsset), asset.GetType());
+                Assert.IsFalse(asset.WaitForLoaded());
+                session.SetGraphSurface((byte[])session.GetGraphSurface().Clone());
+                Assert.IsFalse(session.SaveGraph(item, propertiesJson));
+                Assert.IsFalse(session.IsDirty);
+                Assert.IsTrue(session.ReloadFromDisk(), item.Path + " did not reload from disk.");
+                asset.Reload();
+                Assert.IsFalse(asset.WaitForLoaded());
+            }
+            finally
+            {
+                AssetDocumentRegistry.Close(item, ref session);
+            }
+        }
+
+        private static void AssertAuthoredRuntimeType<TAsset>(Guid id) where TAsset : Asset
+        {
+            var asset = FlaxEngine.Content.LoadAssetAsync<TAsset>(id);
+            Assert.NotNull(asset);
+            Assert.AreEqual(typeof(TAsset), asset.GetType());
+            Assert.IsFalse(asset.WaitForLoaded());
+            asset.Reload();
+            Assert.IsFalse(asset.WaitForLoaded());
+        }
+
+        private static void AssertAuthoredGraphReopens<TAsset>(AssetItem item) where TAsset : Asset
+        {
+            var asset = AssetDocumentRegistry.OpenGraph<TAsset>(item, out var session);
+            try
+            {
+                Assert.NotNull(asset);
+                Assert.IsFalse(asset.WaitForLoaded());
+                Assert.AreEqual(Path.GetFullPath(item.Path), Path.GetFullPath(session.SourcePath));
+            }
+            finally
+            {
+                AssetDocumentRegistry.Close(item, ref session);
+            }
         }
 
         private static void AssertAuthoredText(string path, string typeName)
@@ -1685,6 +1733,197 @@ namespace FlaxEngine.Tests
         public static int RunParticleAndCollisionAuthoredTextLifecycle()
         {
             new TestEditorUtils().TestParticleAndCollisionAuthoredTextLifecycle();
+            return 0;
+        }
+
+        [Test]
+        public void TestAdditionalAuthoredTextFamiliesLifecycle()
+        {
+            var root = Path.Combine(Globals.ProjectContentFolder, "__AdditionalAuthoredLifecycle_" + Guid.NewGuid().ToString("N"));
+            var materialPath = Path.Combine(root, "Surface.material");
+            var materialFunctionPath = Path.Combine(root, "MaterialFunction.materialfunction");
+            var animationGraphPath = Path.Combine(root, "Animation.animgraph");
+            var animationFunctionPath = Path.Combine(root, "AnimationFunction.animgraphfunction");
+            var visualScriptPath = Path.Combine(root, "Logic.visualscript");
+            var behaviorTreePath = Path.Combine(root, "Behavior.behaviortree");
+            var particleFunctionPath = Path.Combine(root, "ParticleFunction.particlefunction");
+            var materialInstancePath = Path.Combine(root, "SurfaceInstance.materialinstance");
+            var skeletonMaskPath = Path.Combine(root, "Mask.skeletonmask");
+            var sceneAnimationPath = Path.Combine(root, "Timeline.sceneanimation");
+            var paths = new[]
+            {
+                materialPath, materialFunctionPath, animationGraphPath, animationFunctionPath, visualScriptPath,
+                behaviorTreePath, particleFunctionPath, materialInstancePath, skeletonMaskPath, sceneAnimationPath,
+            };
+            var consoleDiagnostics = new List<string>();
+            var lifecycleStage = "setup";
+            LogMessageDelegate captureConsoleDiagnostic = (level, message, stackTrace, threadId) =>
+            {
+                if (level == LogType.Warning || level == LogType.Error || level == LogType.Fatal)
+                {
+                    lock (consoleDiagnostics)
+                        consoleDiagnostics.Add("[" + lifecycleStage + "] " + level + ": " + message);
+                }
+            };
+            Debug.LogMessageReceived += captureConsoleDiagnostic;
+            try
+            {
+                Directory.CreateDirectory(root);
+                lifecycleStage = "create";
+                var materialId = AssetDocumentRegistry.CreateGraph(materialPath, typeof(Material).FullName);
+                var materialFunctionId = AssetDocumentRegistry.CreateGraph(materialFunctionPath, typeof(MaterialFunction).FullName);
+                var animationGraphId = AssetDocumentRegistry.CreateGraph(animationGraphPath, typeof(AnimationGraph).FullName);
+                var animationFunctionId = AssetDocumentRegistry.CreateGraph(animationFunctionPath, typeof(AnimationGraphFunction).FullName);
+                var visualScriptId = AssetDocumentRegistry.CreateGraph(visualScriptPath, typeof(VisualScript).FullName);
+                var behaviorTreeId = AssetDocumentRegistry.CreateGraph(behaviorTreePath, typeof(BehaviorTree).FullName);
+                var particleFunctionId = AssetDocumentRegistry.CreateGraph(particleFunctionPath, typeof(ParticleEmitterFunction).FullName);
+                var materialInstanceId = AuthoredAssetDocumentService.Create(materialInstancePath, typeof(MaterialInstance).FullName);
+                var skeletonMaskId = AuthoredAssetDocumentService.Create(skeletonMaskPath, typeof(SkeletonMask).FullName);
+                var sceneAnimationId = AuthoredAssetDocumentService.Create(sceneAnimationPath, typeof(SceneAnimation).FullName);
+                var ids = new[]
+                {
+                    materialId, materialFunctionId, animationGraphId, animationFunctionId, visualScriptId,
+                    behaviorTreeId, particleFunctionId, materialInstanceId, skeletonMaskId, sceneAnimationId,
+                };
+                Assert.IsFalse(ids.Contains(Guid.Empty), string.Join(Environment.NewLine,
+                    AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
+
+                lifecycleStage = "initial refresh";
+                Assert.IsFalse(AssetPipelineService.RefreshSources(paths));
+                lifecycleStage = "editor routes";
+                var materialItem = AssertAuthoredEditorRoute(materialPath, materialId, typeof(Material).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "MaterialProxy", typeof(MaterialWindow));
+                var materialFunctionItem = AssertAuthoredEditorRoute(materialFunctionPath, materialFunctionId, typeof(MaterialFunction).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "MaterialFunctionProxy", typeof(MaterialFunctionWindow));
+                var animationGraphItem = AssertAuthoredEditorRoute(animationGraphPath, animationGraphId, typeof(AnimationGraph).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "AnimationGraphProxy", typeof(AnimationGraphWindow));
+                var animationFunctionItem = AssertAuthoredEditorRoute(animationFunctionPath, animationFunctionId, typeof(AnimationGraphFunction).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "AnimationGraphFunctionProxy", typeof(AnimationGraphFunctionWindow));
+                var visualScriptItem = AssertAuthoredEditorRoute(visualScriptPath, visualScriptId, typeof(VisualScript).FullName,
+                    "Flax.GraphDocument", "VisualScriptItem", "VisualScriptProxy", typeof(VisualScriptWindow));
+                var behaviorTreeItem = AssertAuthoredEditorRoute(behaviorTreePath, behaviorTreeId, typeof(BehaviorTree).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "BehaviorTreeProxy", typeof(BehaviorTreeWindow));
+                var particleFunctionItem = AssertAuthoredEditorRoute(particleFunctionPath, particleFunctionId, typeof(ParticleEmitterFunction).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "ParticleEmitterFunctionProxy", typeof(ParticleEmitterFunctionWindow));
+                AssertAuthoredEditorRoute(materialInstancePath, materialInstanceId, typeof(MaterialInstance).FullName,
+                    "Flax.MaterialInstance", "BinaryAssetItem", "MaterialInstanceProxy", typeof(MaterialInstanceWindow));
+                AssertAuthoredEditorRoute(skeletonMaskPath, skeletonMaskId, typeof(SkeletonMask).FullName,
+                    "Flax.SkeletonMask", "BinaryAssetItem", "SkeletonMaskProxy", typeof(SkeletonMaskWindow));
+                AssertAuthoredEditorRoute(sceneAnimationPath, sceneAnimationId, typeof(SceneAnimation).FullName,
+                    "Flax.SceneAnimation", "SceneAnimationItem", "SceneAnimationProxy", typeof(SceneAnimationWindow));
+
+                lifecycleStage = "graph edit save reload";
+                RoundTripAuthoredGraph<Material>(materialItem);
+                RoundTripAuthoredGraph<MaterialFunction>(materialFunctionItem);
+                RoundTripAuthoredGraph<AnimationGraph>(animationGraphItem);
+                RoundTripAuthoredGraph<AnimationGraphFunction>(animationFunctionItem);
+                RoundTripAuthoredGraph<VisualScript>(visualScriptItem);
+                RoundTripAuthoredGraph<BehaviorTree>(behaviorTreeItem);
+                RoundTripAuthoredGraph<ParticleEmitterFunction>(particleFunctionItem);
+
+                lifecycleStage = "authored edit save";
+                var material = FlaxEngine.Content.LoadAssetAsync<Material>(materialId);
+                var materialInstance = FlaxEngine.Content.LoadAssetAsync<MaterialInstance>(materialInstanceId);
+                Assert.NotNull(material);
+                Assert.NotNull(materialInstance);
+                Assert.IsFalse(material.WaitForLoaded());
+                Assert.IsFalse(materialInstance.WaitForLoaded());
+                materialInstance.BaseMaterial = material;
+                Assert.IsFalse(FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(materialInstance));
+                var mask = FlaxEngine.Content.LoadAssetAsync<SkeletonMask>(skeletonMaskId);
+                Assert.NotNull(mask);
+                Assert.IsFalse(mask.WaitForLoaded());
+                Assert.IsFalse(FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(mask));
+                var timeline = AuthoredAssetDocumentService.LoadSceneAnimationTimeline(sceneAnimationPath);
+                Assert.IsFalse(FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(sceneAnimationPath,
+                    () => AuthoredAssetDocumentService.SaveSceneAnimationTimeline(sceneAnimationPath, timeline)));
+
+                lifecycleStage = "initial builds";
+                foreach (var id in ids)
+                {
+                    Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
+                    Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(id), "Artifact was not current for " + id);
+                }
+                Assert.IsTrue(AssetDatabaseQueryService.GetDependencies(materialInstanceId).Any(x => x.TargetObject == materialId),
+                    "Material instance did not retain its persistent base-material dependency.");
+
+                lifecycleStage = "dependency invalidation";
+                var materialJson = JObject.Parse(File.ReadAllText(materialPath));
+                var materialProperties = (JObject)materialJson["properties"];
+                Assert.NotNull(materialProperties);
+                materialProperties["maskThreshold"] = ((float?)materialProperties["maskThreshold"] ?? 0.3f) + 0.01f;
+                RoundTripAuthoredGraph<Material>(materialItem, materialProperties.ToString());
+                Assert.IsFalse(AssetPipelineService.BuildAssetForeground(materialId));
+                Assert.IsFalse(AssetPipelineService.IsArtifactCurrent(materialInstanceId),
+                    "Material instance remained current after its base material changed.");
+                Assert.IsFalse(AssetPipelineService.BuildAssetForeground(materialInstanceId));
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(materialInstanceId));
+
+                lifecycleStage = "runtime reload";
+                AssertAuthoredRuntimeType<Material>(materialId);
+                AssertAuthoredRuntimeType<MaterialFunction>(materialFunctionId);
+                AssertAuthoredRuntimeType<AnimationGraph>(animationGraphId);
+                AssertAuthoredRuntimeType<AnimationGraphFunction>(animationFunctionId);
+                AssertAuthoredRuntimeType<VisualScript>(visualScriptId);
+                AssertAuthoredRuntimeType<BehaviorTree>(behaviorTreeId);
+                AssertAuthoredRuntimeType<ParticleEmitterFunction>(particleFunctionId);
+                AssertAuthoredRuntimeType<MaterialInstance>(materialInstanceId);
+                AssertAuthoredRuntimeType<SkeletonMask>(skeletonMaskId);
+                AssertAuthoredRuntimeType<SceneAnimation>(sceneAnimationId);
+
+                lifecycleStage = "restart equivalent refresh";
+                Assert.IsFalse(AssetPipelineService.RefreshSources(paths));
+                materialItem = AssertAuthoredEditorRoute(materialPath, materialId, typeof(Material).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "MaterialProxy", typeof(MaterialWindow));
+                materialFunctionItem = AssertAuthoredEditorRoute(materialFunctionPath, materialFunctionId, typeof(MaterialFunction).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "MaterialFunctionProxy", typeof(MaterialFunctionWindow));
+                animationGraphItem = AssertAuthoredEditorRoute(animationGraphPath, animationGraphId, typeof(AnimationGraph).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "AnimationGraphProxy", typeof(AnimationGraphWindow));
+                animationFunctionItem = AssertAuthoredEditorRoute(animationFunctionPath, animationFunctionId, typeof(AnimationGraphFunction).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "AnimationGraphFunctionProxy", typeof(AnimationGraphFunctionWindow));
+                visualScriptItem = AssertAuthoredEditorRoute(visualScriptPath, visualScriptId, typeof(VisualScript).FullName,
+                    "Flax.GraphDocument", "VisualScriptItem", "VisualScriptProxy", typeof(VisualScriptWindow));
+                behaviorTreeItem = AssertAuthoredEditorRoute(behaviorTreePath, behaviorTreeId, typeof(BehaviorTree).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "BehaviorTreeProxy", typeof(BehaviorTreeWindow));
+                particleFunctionItem = AssertAuthoredEditorRoute(particleFunctionPath, particleFunctionId, typeof(ParticleEmitterFunction).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "ParticleEmitterFunctionProxy", typeof(ParticleEmitterFunctionWindow));
+                AssertAuthoredEditorRoute(materialInstancePath, materialInstanceId, typeof(MaterialInstance).FullName,
+                    "Flax.MaterialInstance", "BinaryAssetItem", "MaterialInstanceProxy", typeof(MaterialInstanceWindow));
+                AssertAuthoredEditorRoute(skeletonMaskPath, skeletonMaskId, typeof(SkeletonMask).FullName,
+                    "Flax.SkeletonMask", "BinaryAssetItem", "SkeletonMaskProxy", typeof(SkeletonMaskWindow));
+                AssertAuthoredEditorRoute(sceneAnimationPath, sceneAnimationId, typeof(SceneAnimation).FullName,
+                    "Flax.SceneAnimation", "SceneAnimationItem", "SceneAnimationProxy", typeof(SceneAnimationWindow));
+                AssertAuthoredGraphReopens<Material>(materialItem);
+                AssertAuthoredGraphReopens<MaterialFunction>(materialFunctionItem);
+                AssertAuthoredGraphReopens<AnimationGraph>(animationGraphItem);
+                AssertAuthoredGraphReopens<AnimationGraphFunction>(animationFunctionItem);
+                AssertAuthoredGraphReopens<VisualScript>(visualScriptItem);
+                AssertAuthoredGraphReopens<BehaviorTree>(behaviorTreeItem);
+                AssertAuthoredGraphReopens<ParticleEmitterFunction>(particleFunctionItem);
+
+                for (var i = 0; i < paths.Length; i++)
+                    AssertAuthoredText(paths[i], AssetDatabaseQueryService.TryGetRecord(ids[i], out var record) ? record.TypeName : string.Empty);
+                var diagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
+                    x.Severity != AssetPipelineDiagnosticSeverity.Info &&
+                    (ids.Contains(x.AssetGuid) || paths.Any(path => string.Equals(path, x.SourcePath, StringComparison.OrdinalIgnoreCase)))).ToArray();
+                Assert.IsEmpty(diagnostics, string.Join(Environment.NewLine, diagnostics.Select(x => x.Code + ": " + x.Message)));
+                lock (consoleDiagnostics)
+                    Assert.IsEmpty(consoleDiagnostics, string.Join(Environment.NewLine, consoleDiagnostics));
+            }
+            finally
+            {
+                Debug.LogMessageReceived -= captureConsoleDiagnostic;
+                foreach (var path in paths)
+                    CleanupCanonicalCopyAsset(path);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
+            }
+        }
+
+        public static int RunAdditionalAuthoredTextFamiliesLifecycle()
+        {
+            new TestEditorUtils().TestAdditionalAuthoredTextFamiliesLifecycle();
             return 0;
         }
 
