@@ -124,7 +124,7 @@ BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact
         LOG(Error, "Binary asset storage can only be switched from the main thread. Asset: '{0}'.", GetPath());
         return BinaryAssetStorageSwitchResult::InvalidThread;
     }
-    if (artifact.ObjectID != GetPersistentObjectId() || !artifact.AssetID.IsValid() || artifact.AssetID != GetID() ||
+    if (artifact.ObjectID.Asset.Value != GetPersistentObjectId() || !artifact.AssetID.IsValid() || artifact.AssetID != GetID() ||
         artifact.TypeName != GetTypeName() || artifact.StoragePath.Get().IsEmpty())
         return BinaryAssetStorageSwitchResult::InvalidArtifact;
 
@@ -134,7 +134,7 @@ BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact
 
     AssetInitData newData;
     const bool headerLoadFailed = newStorage->UsesAssetObjectIds()
-        ? newStorage->LoadAssetHeader(GetPersistentObjectId(), newData)
+        ? newStorage->LoadAssetHeader(_internalObjectId, newData)
         : newStorage->LoadAssetHeader(GetID(), newData);
     if (headerLoadFailed)
         return BinaryAssetStorageSwitchResult::InvalidArtifact;
@@ -539,7 +539,7 @@ void BinaryAsset::OnStorageReloaded(FlaxStorage* storage, bool failed)
     // Gather updated asset init data
     AssetInitData initData;
     const bool headerLoadFailed = Storage->UsesAssetObjectIds()
-        ? Storage->LoadAssetHeader(GetPersistentObjectId(), initData)
+        ? Storage->LoadAssetHeader(_internalObjectId, initData)
         : Storage->LoadAssetHeader(GetID(), initData);
     if (headerLoadFailed)
     {
@@ -598,7 +598,7 @@ StringView BinaryAsset::GetPath() const
     return _canonicalPath;
 #else
     // In build all assets are packed into packages so use ID for original path lookup
-    return Content::GetEditorAssetPath(_persistentObjectId);
+    return Content::GetEditorAssetPath(GetPersistentObjectId());
 #endif
 }
 

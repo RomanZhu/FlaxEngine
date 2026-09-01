@@ -37,8 +37,8 @@ struct FLAXENGINE_API AssetRecordQuery
     AssetRecordStatus Status = AssetRecordStatus::Ready;
     bool HasStatus = false;
     bool MainAssetsOnly = false;
-    AssetObjectId ReferencedAsset;
-    AssetObjectId UsedByAsset;
+    Guid ReferencedAsset;
+    Guid UsedByAsset;
 };
 
 /// <summary>Thread-safe canonical source/metadata registry.</summary>

@@ -41,6 +41,7 @@ API_CLASS(Abstract, NoSpawn) class FLAXENGINE_API Asset : public ManagedScriptin
     DECLARE_SCRIPTING_TYPE_NO_SPAWN(Asset);
     friend Content;
     friend class BinaryAsset;
+    friend class BinaryAssetFactory;
     friend LoadAssetTask;
     friend class ContentService;
 public:
@@ -61,7 +62,8 @@ protected:
     volatile int64 _loadState;
     volatile intptr _loadingTask;
 
-    AssetObjectId _persistentObjectId;
+    Guid _persistentObjectId;
+    AssetObjectId _internalObjectId;
     uint64 _loadedRevision = 0;
     Guid _instanceId;
 
@@ -109,8 +111,8 @@ public:
     /// </summary>
     API_PROPERTY() int32 GetReferencesCount() const;
 
-    /// <summary>Gets the persistent source and local file identity for this loaded asset object.</summary>
-    API_PROPERTY() FORCE_INLINE AssetObjectId GetPersistentObjectId() const
+    /// <summary>Gets the persistent GUID identity for this loaded asset object.</summary>
+    API_PROPERTY() FORCE_INLINE Guid GetPersistentObjectId() const
     {
         return _persistentObjectId;
     }
@@ -360,4 +362,4 @@ public:
 
 // Don't include Content.h but just Load method
 extern FLAXENGINE_API Asset* LoadRuntimeAsset(const Guid& runtimeId, const ScriptingTypeHandle& type);
-extern FLAXENGINE_API Asset* LoadAsset(const AssetObjectId& id, const ScriptingTypeHandle& type);
+extern FLAXENGINE_API Asset* LoadAsset(const Guid& id, const ScriptingTypeHandle& type);

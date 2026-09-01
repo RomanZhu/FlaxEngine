@@ -9,6 +9,7 @@
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/AssetDatabase/Identity/GlobalAssetObjectId.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Level/ScenePartitionDocument.h"
 #include "Engine/Level/ScenePrefabDocument.h"
 #include "Engine/Level/SceneFragments/SceneFragmentStore.h"
@@ -101,6 +102,17 @@ namespace
             }
             return false;
         }
+        if (value.IsString())
+        {
+            Guid objectGuid;
+            if (!Guid::Parse(StringAnsiView(value.GetString(), value.GetStringLength()), objectGuid))
+            {
+                AssetRecord record;
+                if (AssetDatabase::Get().TryGetRecord(objectGuid, record))
+                    references.Add(AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId));
+            }
+            return false;
+        }
         if (!value.IsObject())
             return false;
 
@@ -109,45 +121,38 @@ namespace
         if (guidMember != value.MemberEnd())
         {
             Guid guid;
-            if (guidMember == value.MemberEnd() || fileIDMember == value.MemberEnd() || !guidMember->value.IsString() ||
+            const auto kindMember = value.FindMember("kind");
+            if (fileIDMember == value.MemberEnd() || !guidMember->value.IsString() ||
                 Guid::Parse(StringAnsiView(guidMember->value.GetString(), guidMember->value.GetStringLength()), guid) ||
                 !fileIDMember->value.IsInt64())
                 return true;
             const int64 fileID = fileIDMember->value.GetInt64();
-            const auto kindMember = value.FindMember("kind");
+            if (kindMember == value.MemberEnd())
+                return guid.IsValid() || fileID != 0;
             const auto instanceMember = value.FindMember("prefabInstanceFileId");
             GlobalObjectKind kind = GlobalObjectKind::ImportedAssetObject;
-            if (kindMember != value.MemberEnd())
-            {
-                if (!kindMember->value.IsInt() || (instanceMember != value.MemberEnd() && !instanceMember->value.IsInt64()) ||
-                    kindMember->value.GetInt() < static_cast<int32>(GlobalObjectKind::ImportedAssetObject) ||
-                    kindMember->value.GetInt() > static_cast<int32>(GlobalObjectKind::BuiltinObject))
-                    return true;
-                kind = static_cast<GlobalObjectKind>(kindMember->value.GetInt());
-            }
+            if (!kindMember->value.IsInt() || (instanceMember != value.MemberEnd() && !instanceMember->value.IsInt64()) ||
+                kindMember->value.GetInt() < static_cast<int32>(GlobalObjectKind::ImportedAssetObject) ||
+                kindMember->value.GetInt() > static_cast<int32>(GlobalObjectKind::BuiltinObject))
+                return true;
+            kind = static_cast<GlobalObjectKind>(kindMember->value.GetInt());
             if (!guid.IsValid())
             {
                 // A scene actor reference is local to the document and intentionally has no asset GUID.
-                if (kindMember != value.MemberEnd() && kind == GlobalObjectKind::SceneObject && fileID != 0 &&
+                if (kind == GlobalObjectKind::SceneObject && fileID != 0 &&
                     instanceMember != value.MemberEnd() && instanceMember->value.GetInt64() == 0)
-                    return false;
-                // Preserve the canonical null asset-reference form, but never treat a typed object reference as null.
-                if (kindMember == value.MemberEnd() && fileID == 0)
                     return false;
                 return true;
             }
             AssetObjectId objectID(AssetGuid(guid), fileID);
             if (!objectID.IsValid())
                 return true;
-            if (kindMember != value.MemberEnd())
+            if (kind == GlobalObjectKind::SceneObject || kind == GlobalObjectKind::PrefabObject)
             {
-                if (kind == GlobalObjectKind::SceneObject || kind == GlobalObjectKind::PrefabObject)
-                {
-                    if (guid == currentSource)
-                        objectID = AssetObjectId();
-                    else
-                        objectID = AssetObjectId::Main(AssetGuid(guid));
-                }
+                if (guid == currentSource)
+                    objectID = AssetObjectId();
+                else
+                    objectID = AssetObjectId::Main(AssetGuid(guid));
             }
             if (!objectID.IsValid())
                 return false;

@@ -141,28 +141,29 @@ bool ValidateStep::Perform(CookingData& data)
         return true;
     }
 
-    const AssetObjectId gameSettingsObject = GameSettings::GetGameSettingsObjectId();
+    const Guid gameSettingsObject = GameSettings::GetGameSettingsObjectId();
     if (!gameSettingsObject.IsValid())
     {
         data.Error(TEXT("The project settings index does not resolve a GameSettings object."));
         return true;
     }
     bool foundGameSettings = false;
+    AssetRecord gameSettingsRecord;
     AssetRecord firstSceneRecord;
     bool foundFirstScene = false;
     for (const AssetRecord& record : snapshot.Records)
     {
-        const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
-        if (object == gameSettingsObject)
+        if (record.ID == gameSettingsObject)
         {
             if (!record.IsMainAsset() || record.TypeName != JsonAsset::TypeName || record.ProcessorID != TEXT("Flax.Settings"))
             {
                 data.Error(TEXT("The project settings index GameSettings reference is not a Flax.Settings JsonAsset."));
                 return true;
             }
+            gameSettingsRecord = record;
             foundGameSettings = true;
         }
-        if (object == gameSettings->FirstScene.ID)
+        if (record.ID == gameSettings->FirstScene.ID)
         {
             firstSceneRecord = record;
             foundFirstScene = true;
@@ -173,14 +174,14 @@ bool ValidateStep::Perform(CookingData& data)
         data.Error(TEXT("The runtime game settings object is not registered in the frozen asset database."));
         return true;
     }
-    if (!foundFirstScene || !gameSettings->FirstScene.ID.IsMainObject() || firstSceneRecord.TypeName != TEXT("FlaxEngine.SceneAsset"))
+    if (!foundFirstScene || !firstSceneRecord.IsMainAsset() || firstSceneRecord.TypeName != TEXT("FlaxEngine.SceneAsset"))
     {
         data.Error(String::Format(TEXT("The first scene {0} must resolve to a registered main SceneAsset object (found={1}, type={2})."),
             gameSettings->FirstScene.ID, foundFirstScene, firstSceneRecord.TypeName));
         return true;
     }
-    data.AddRootAsset(gameSettingsObject);
-    data.AddRootAsset(gameSettings->FirstScene.ID);
+    data.AddRootAsset(AssetObjectId(AssetGuid(gameSettingsRecord.SourceAssetID), gameSettingsRecord.LocalId));
+    data.AddRootAsset(AssetObjectId(AssetGuid(firstSceneRecord.SourceAssetID), firstSceneRecord.LocalId));
 
     for (const AssetRecord& record : snapshot.Records)
     {

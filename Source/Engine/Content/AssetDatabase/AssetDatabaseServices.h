@@ -73,8 +73,8 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseQuery
     API_FIELD() AssetRecordStatus Status = AssetRecordStatus::Ready;
     API_FIELD() bool HasStatus = false;
     API_FIELD() bool MainAssetsOnly = false;
-    API_FIELD() AssetObjectId ReferencedAsset;
-    API_FIELD() AssetObjectId UsedByAsset;
+    API_FIELD() Guid ReferencedAsset;
+    API_FIELD() Guid UsedByAsset;
 };
 
 /// <summary>Managed-safe normalized asset dependency projection.</summary>
@@ -82,10 +82,10 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseDependencyInfo
 {
     DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabaseDependencyInfo);
 
-    API_FIELD() AssetObjectId Owner;
+    API_FIELD() Guid Owner;
     API_FIELD() String TargetID;
     API_FIELD() String Kind;
-    API_FIELD() AssetObjectId TargetObject;
+    API_FIELD() Guid TargetObject;
     API_FIELD() String SourcePath;
     API_FIELD() String ExactArtifact;
     API_FIELD() String CustomDependency;
@@ -100,7 +100,7 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabasePublicationInfo
 {
     DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabasePublicationInfo);
 
-    API_FIELD() AssetObjectId Object;
+    API_FIELD() Guid Object;
     API_FIELD() String TargetID;
     API_FIELD() String Artifact;
     API_FIELD() String ManifestHash;
@@ -198,22 +198,22 @@ public:
     API_PROPERTY() static uint64 GetRevision();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> GetRecords();
     API_FUNCTION() static Array<AssetDatabaseRecordInfo> QueryRecords(const AssetDatabaseQuery& query);
-    API_FUNCTION() static bool TryGetRecord(const AssetObjectId& objectID, API_PARAM(Out) AssetDatabaseRecordInfo& result);
+    API_FUNCTION() static bool TryGetRecord(const Guid& objectID, API_PARAM(Out) AssetDatabaseRecordInfo& result);
     API_FUNCTION() static bool TryGetMainRecordAtPath(const StringView& path, API_PARAM(Out) AssetDatabaseRecordInfo& result);
     API_FUNCTION() static Array<String> GetLabels(const Guid& sourceID);
-    API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetDependencies(const AssetObjectId& objectID);
-    API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetReferencers(const AssetObjectId& objectID);
-    API_FUNCTION() static Array<AssetDatabasePublicationInfo> GetPublications(const AssetObjectId& objectID);
+    API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetDependencies(const Guid& objectID);
+    API_FUNCTION() static Array<AssetDatabaseDependencyInfo> GetReferencers(const Guid& objectID);
+    API_FUNCTION() static Array<AssetDatabasePublicationInfo> GetPublications(const Guid& objectID);
     API_FUNCTION() static Array<AssetPipelineDiagnostic> GetDiagnostics();
     API_FUNCTION() static AssetDatabaseChangeInfo GetLastChange();
     API_FUNCTION() static Array<AssetDatabaseChangeInfo> GetChangesAfter(uint64 revision, API_PARAM(Out) bool& requiresSnapshot);
     API_FUNCTION() static Guid AssetPathToGUID(const StringView& path);
     API_FUNCTION() static String GUIDToAssetPath(const Guid& assetID);
     API_FUNCTION() static Array<String> GetAllAssetPaths();
-    API_FUNCTION() static bool TryGetAssetObjectId(Asset* asset, API_PARAM(Out) AssetObjectId& result);
-    API_FUNCTION() static Guid GetBackingAssetID(const AssetObjectId& objectID);
+    API_FUNCTION() static bool TryGetAssetGuid(Asset* asset, API_PARAM(Out) Guid& result);
+    API_FUNCTION() static Guid GetBackingAssetID(const Guid& objectID);
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
-    API_FUNCTION() static Asset* LoadAssetPreview(const AssetObjectId& objectID);
+    API_FUNCTION() static Asset* LoadAssetPreview(const Guid& objectID);
 };
 
 /// <summary>Coordinates source refresh, importer execution, and artifact publication.</summary>

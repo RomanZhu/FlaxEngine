@@ -448,6 +448,9 @@ public:
     /// <param name="id">The persistent asset object id.</param>
     void AddRootAsset(const AssetObjectId& id);
 
+    /// <summary>Adds a public persistent asset GUID to the build.</summary>
+    void AddRootAsset(const Guid& id);
+
     /// <summary>
     /// Adds the internal engine asset to the build.
     /// </summary>

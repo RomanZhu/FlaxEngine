@@ -6,6 +6,7 @@
 #include "Engine/Content/Importing/CallbackImporterPipelineService.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/Platform.h"
 #include "Engine/Platform/FileSystem.h"
@@ -485,7 +486,13 @@ DEFINE_INTERNAL_CALL(void) ScriptedImporterContextInternal_DependsOnObject(Guid*
 {
     if (!RequireContext() || !asset)
         return;
-    const AssetObjectId object(AssetGuid(*asset), localId);
+    AssetRecord record;
+    if (!AssetDatabase::Get().TryGetRecord(*asset, record))
+    {
+        SetError(TEXT("The dependency GUID is not a live asset object."));
+        return;
+    }
+    const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
     if (kind == 0)
         CurrentContext->DependsOnSourceAsset(object);
     else

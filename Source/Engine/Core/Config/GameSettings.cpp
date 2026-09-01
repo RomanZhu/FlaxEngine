@@ -132,20 +132,19 @@ IMPLEMENT_ENGINE_SETTINGS_GETTER(WebPlatformSettings, WebPlatform);
 GameSettingsService GameSettingsServiceInstance;
 AssetReference<JsonAsset> GameSettingsAsset;
 
-AssetObjectId GameSettings::GetGameSettingsObjectId()
+Guid GameSettings::GetGameSettingsObjectId()
 {
 #if USE_EDITOR
     if (!Editor::Project || !Editor::Project->ProjectSettingsIndexGuid.IsValid())
-        return AssetObjectId();
-    const AssetObjectId indexObject = AssetObjectId::Main(AssetGuid(Editor::Project->ProjectSettingsIndexGuid));
-    const AssetReference<JsonAsset> indexAsset = Content::LoadAssetAsync<JsonAsset>(indexObject);
+        return Guid::Empty;
+    const AssetReference<JsonAsset> indexAsset = Content::LoadAssetAsync<JsonAsset>(Editor::Project->ProjectSettingsIndexGuid);
     if (!indexAsset || indexAsset->WaitForLoaded() || !indexAsset->Data || !indexAsset->Data->IsObject())
     {
-        LOG(Error, "Failed to load project settings index object {0} through the asset pipeline.", indexObject);
-        return AssetObjectId();
+        LOG(Error, "Failed to load project settings index object {0} through the asset pipeline.", Editor::Project->ProjectSettingsIndexGuid);
+        return Guid::Empty;
     }
     const auto gameSettings = indexAsset->Data->FindMember("GameSettings");
-    AssetObjectId result;
+    Guid result;
     if (gameSettings != indexAsset->Data->MemberEnd())
         Serialization::Deserialize(gameSettings->value, result, nullptr);
     if (!result.IsValid())
@@ -156,7 +155,7 @@ AssetObjectId GameSettings::GetGameSettingsObjectId()
 #endif
 }
 
-DEFINE_INTERNAL_CALL(void) GameSettingsInternal_GetGameSettingsObjectId(AssetObjectId* result)
+DEFINE_INTERNAL_CALL(void) GameSettingsInternal_GetGameSettingsObjectId(Guid* result)
 {
     *result = GameSettings::GetGameSettingsObjectId();
 }
@@ -172,7 +171,7 @@ GameSettings* GameSettings::Get()
         // Silence missing GameSettings during test run before Editor creates it (not important)
         return nullptr;
 #endif
-        const AssetObjectId gameSettingsObject = GetGameSettingsObjectId();
+        const Guid gameSettingsObject = GetGameSettingsObjectId();
         if (!gameSettingsObject.IsValid())
         {
             LOG(Error, "Runtime catalog is missing the GameSettings bootstrap object.");

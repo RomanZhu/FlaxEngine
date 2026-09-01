@@ -121,7 +121,7 @@ TEST_CASE("Binary asset factory separates canonical and storage paths")
     WriteRawDataAsset(storagePath, id, RawDataAsset::SerializedVersion, payload, ARRAY_COUNT(payload));
     AssetLoadLocation location;
     location.Info = AssetInfo(id, RawDataAsset::TypeName, canonicalPath);
-    location.Artifact.ObjectID = location.Info.ObjectID;
+    location.Artifact.ObjectID = AssetObjectId::Main(AssetGuid(location.Info.ObjectID));
     location.Artifact.AssetID = id;
     location.Artifact.TypeName = RawDataAsset::TypeName;
     location.Artifact.StoragePath = ArtifactStoragePath(storagePath);
@@ -221,7 +221,7 @@ TEST_CASE("Binary asset storage switch succeeds or restores old storage")
     REQUIRE_FALSE(asset->WaitForLoaded());
 
     ResolvedArtifact replacement;
-    replacement.ObjectID = asset->GetPersistentObjectId();
+    replacement.ObjectID = AssetObjectId::Main(AssetGuid(asset->GetPersistentObjectId()));
     replacement.AssetID = id;
     replacement.TypeName = RawDataAsset::TypeName;
     replacement.StoragePath = ArtifactStoragePath(replacementPath);
@@ -340,7 +340,7 @@ TEST_CASE("Generated unsupported binary requests rebuild without mutation")
 
     AssetLoadLocation location;
     location.Info = AssetInfo(id, RawDataAsset::TypeName, canonicalPath);
-    location.Artifact.ObjectID = location.Info.ObjectID;
+    location.Artifact.ObjectID = AssetObjectId::Main(AssetGuid(location.Info.ObjectID));
     location.Artifact.AssetID = id;
     location.Artifact.TypeName = RawDataAsset::TypeName;
     location.Artifact.StoragePath = ArtifactStoragePath(path);

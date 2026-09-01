@@ -134,12 +134,7 @@ bool ProjectInfo::SaveProject()
         if (DefaultScene.IsValid())
         {
             stream.JKEY("DefaultScene");
-            stream.StartObject();
-            stream.JKEY("guid");
-            stream.Guid(DefaultScene.Asset.Value);
-            stream.JKEY("fileId");
-            stream.Int64(DefaultScene.LocalId);
-            stream.EndObject();
+            stream.Guid(DefaultScene);
         }
 
         if (DefaultSceneSpawn != Ray(Vector3::Zero, Vector3::Forward))
@@ -231,16 +226,13 @@ bool ProjectInfo::LoadProject(const String& projectPath)
     const auto defaultSceneValue = document.FindMember("DefaultScene");
     if (defaultSceneValue != document.MemberEnd())
     {
-        if (!defaultSceneValue->value.IsObject())
-            return unsupported(TEXT("DefaultScene must use the current composite object form."));
-        const auto guid = defaultSceneValue->value.FindMember("guid");
-        const auto fileId = defaultSceneValue->value.FindMember("fileId");
+        if (!defaultSceneValue->value.IsString())
+            return unsupported(TEXT("DefaultScene must use the current GUID-only form."));
         Guid parsedGuid;
-        if (guid == defaultSceneValue->value.MemberEnd() || !guid->value.IsString() || guid->value.GetStringLength() != 32 ||
-            Guid::Parse(StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()), parsedGuid) || !parsedGuid.IsValid() ||
-            StringAnsi(parsedGuid.ToString(Guid::FormatType::N).ToLower()) != StringAnsiView(guid->value.GetString(), guid->value.GetStringLength()) ||
-            fileId == defaultSceneValue->value.MemberEnd() || !fileId->value.IsInt64() || fileId->value.GetInt64() == 0)
-            return unsupported(TEXT("DefaultScene must contain a canonical GUID and nonzero fileId."));
+        if (defaultSceneValue->value.GetStringLength() != 32 ||
+            Guid::Parse(StringAnsiView(defaultSceneValue->value.GetString(), defaultSceneValue->value.GetStringLength()), parsedGuid) || !parsedGuid.IsValid() ||
+            StringAnsi(parsedGuid.ToString(Guid::FormatType::N).ToLower()) != StringAnsiView(defaultSceneValue->value.GetString(), defaultSceneValue->value.GetStringLength()))
+            return unsupported(TEXT("DefaultScene must contain one canonical GUID."));
     }
     const auto engineNickname = document.FindMember("EngineNickname");
     if (engineNickname != document.MemberEnd() && (!engineNickname->value.IsString() || engineNickname->value.GetStringLength() == 0))
@@ -337,25 +329,24 @@ bool ProjectInfo::LoadProject(const String& projectPath)
             }
         }
     }
-    DefaultScene = AssetObjectId();
+    DefaultScene = Guid::Empty;
     const auto defaultSceneMember = document.FindMember("DefaultScene");
     if (defaultSceneMember != document.MemberEnd())
     {
         const auto& value = defaultSceneMember->value;
-        if (value.IsObject())
+        if (value.IsString() && value.GetStringLength() == 32)
         {
-            const Guid guid = JsonTools::GetGuid(value, "guid");
-            const auto fileIdMember = value.FindMember("fileId");
-            if (!guid.IsValid() || fileIdMember == value.MemberEnd() || !fileIdMember->value.IsInt64() || fileIdMember->value.GetInt64() == 0)
+            Guid guid;
+            if (Guid::Parse(StringAnsiView(value.GetString(), value.GetStringLength()), guid) || !guid.IsValid())
             {
-                ShowProjectLoadError(TEXT("Invalid composite DefaultScene identifier."), projectPath);
+                ShowProjectLoadError(TEXT("Invalid DefaultScene GUID."), projectPath);
                 return true;
             }
-            DefaultScene = AssetObjectId(AssetGuid(guid), fileIdMember->value.GetInt64());
+            DefaultScene = guid;
         }
         else
         {
-            ShowProjectLoadError(TEXT("DefaultScene must contain a composite asset identifier."), projectPath);
+            ShowProjectLoadError(TEXT("DefaultScene must contain one asset GUID."), projectPath);
             return true;
         }
     }
@@ -403,13 +394,13 @@ bool ProjectInfo::LoadOldProject(const String& projectPath)
     Name = (const Char*)root.child_value(PUGIXML_TEXT("Name"));
     ProjectPath = projectPath;
     ProjectFolderPath = StringUtils::GetDirectoryName(projectPath);
-    DefaultScene = AssetObjectId();
+    DefaultScene = Guid::Empty;
     const auto defaultScene = root.child_value(PUGIXML_TEXT("DefaultSceneId"));
     if (defaultScene)
     {
         Guid legacyGuid;
         if (!Guid::Parse((const Char*)defaultScene, legacyGuid))
-            DefaultScene = AssetObjectId::Main(AssetGuid(legacyGuid));
+            DefaultScene = legacyGuid;
     }
     DefaultSceneSpawn.Position = GetVector3FromXml(root, PUGIXML_TEXT("DefaultSceneSpawnPos"), Vector3::Zero);
     DefaultSceneSpawn.Direction = Quaternion::Euler(GetVector3FromXml(root, PUGIXML_TEXT("DefaultSceneSpawnDir"), Vector3::Zero)) * Vector3::Forward;

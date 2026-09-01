@@ -57,20 +57,20 @@ namespace FlaxEngine
             return LoadRuntimeObjectAsync<Asset>(id);
         }
 
-        /// <summary>Loads one persistent imported object without dropping its local file identity.</summary>
-        public static T LoadAssetAsync<T>(AssetObjectId id) where T : Asset
+        /// <summary>Loads one persistent asset object by its GUID.</summary>
+        public static T LoadAssetAsync<T>(Guid id) where T : Asset
         {
             return (T)LoadAssetAsync(id, typeof(T));
         }
 
-        /// <summary>Loads one persistent imported object without dropping its local file identity.</summary>
-        public static Asset LoadAssetAsync(AssetObjectId id)
+        /// <summary>Loads one persistent asset object by its GUID.</summary>
+        public static Asset LoadAssetAsync(Guid id)
         {
             return LoadAssetAsync<Asset>(id);
         }
 
-        /// <summary>Loads and waits for one exact persistent imported object.</summary>
-        public static T LoadAsset<T>(AssetObjectId id, double timeoutInMilliseconds = 30000.0) where T : Asset
+        /// <summary>Loads and waits for one persistent asset object.</summary>
+        public static T LoadAsset<T>(Guid id, double timeoutInMilliseconds = 30000.0) where T : Asset
         {
             var asset = LoadAssetAsync<T>(id);
             if (asset && asset.WaitForLoaded(timeoutInMilliseconds) == false)
@@ -78,8 +78,8 @@ namespace FlaxEngine
             return null;
         }
 
-        /// <summary>Loads and waits for one exact persistent imported object.</summary>
-        public static Asset LoadAsset(AssetObjectId id, double timeoutInMilliseconds = 30000.0)
+        /// <summary>Loads and waits for one persistent asset object.</summary>
+        public static Asset LoadAsset(Guid id, double timeoutInMilliseconds = 30000.0)
         {
             return LoadAsset<Asset>(id, timeoutInMilliseconds);
         }

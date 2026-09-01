@@ -1889,7 +1889,7 @@ bool FlaxPackage::HasAsset(const AssetInfo& info) const
     ASSERT(_path == info.Path);
     if (_version == 10)
     {
-        const Entry* entry = _objectEntries.TryGet(info.ObjectID);
+        const Entry* entry = _objectEntries.TryGet(AssetObjectId::Main(AssetGuid(info.ObjectID)));
         return entry && entry->TypeName == info.TypeName;
     }
     const Entry* e = _entries.TryGet(info.ID);

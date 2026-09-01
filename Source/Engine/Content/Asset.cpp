@@ -91,7 +91,7 @@ void AssetReferenceBase::OnSet(Asset* asset)
         if (e)
             e->RemoveReference(this);
         _asset = e = asset;
-        _objectId = asset ? asset->GetPersistentObjectId() : AssetObjectId();
+        _objectId = asset ? asset->GetPersistentObjectId() : Guid::Empty;
         if (e)
             e->AddReference(this);
         Changed();
@@ -106,7 +106,7 @@ void AssetReferenceBase::OnSet(Asset* asset)
     }
 }
 
-void AssetReferenceBase::OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+void AssetReferenceBase::OnSet(const Guid& objectId, const ScriptingTypeHandle& type)
 {
     if (_objectId == objectId && (_asset || !objectId.IsValid()))
         return;
@@ -165,13 +165,13 @@ void WeakAssetReferenceBase::OnSet(Asset* asset)
         if (e)
             e->RemoveReference(this, true);
         _asset = e = asset;
-        _objectId = asset ? asset->GetPersistentObjectId() : AssetObjectId();
+        _objectId = asset ? asset->GetPersistentObjectId() : Guid::Empty;
         if (e)
             e->AddReference(this, true);
     }
 }
 
-void WeakAssetReferenceBase::OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+void WeakAssetReferenceBase::OnSet(const Guid& objectId, const ScriptingTypeHandle& type)
 {
     if (_objectId == objectId && (_asset || !objectId.IsValid()))
         return;
@@ -192,7 +192,7 @@ SoftAssetReferenceBase::~SoftAssetReferenceBase()
         asset->RemoveReference(this);
     }
 #if !BUILD_RELEASE
-    _id = AssetObjectId();
+    _id = Guid::Empty;
 #endif
 }
 
@@ -225,13 +225,13 @@ void SoftAssetReferenceBase::OnSet(Asset* asset)
     if (_asset)
         _asset->RemoveReference(this);
     _asset = asset;
-    _id = asset ? asset->GetPersistentObjectId() : AssetObjectId();
+    _id = asset ? asset->GetPersistentObjectId() : Guid::Empty;
     if (asset)
         asset->AddReference(this);
     Changed();
 }
 
-void SoftAssetReferenceBase::OnSet(const AssetObjectId& id)
+void SoftAssetReferenceBase::OnSet(const Guid& id)
 {
     if (_id == id)
         return;
@@ -255,7 +255,8 @@ Asset::Asset(const SpawnParams& params, const AssetInfo* info)
     , _refCount(0)
     , _loadState(0)
     , _loadingTask(0)
-    , _persistentObjectId(info ? (info->ObjectID.IsValid() ? info->ObjectID : AssetObjectId::Main(AssetGuid(info->ID))) : AssetObjectId())
+    , _persistentObjectId(info ? (info->ObjectID.IsValid() ? info->ObjectID : info->ID) : Guid::Empty)
+    , _internalObjectId(AssetObjectId::Main(AssetGuid(_persistentObjectId)))
     , _loadedRevision(info ? info->Revision : 0)
     , _instanceId(params.ID)
     , _deleteFileOnUnload(false)

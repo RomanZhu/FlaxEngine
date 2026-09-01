@@ -91,7 +91,7 @@ public class AssetPickerValidator : IContentItemOwner
     }
 
     /// <summary>Gets or sets the selected persistent asset object identity.</summary>
-    public AssetObjectId SelectedObjectID
+    public Guid SelectedObjectID
     {
         get
         {
@@ -101,7 +101,7 @@ public class AssetPickerValidator : IContentItemOwner
         }
         set
         {
-            if (value.IsNull || !AssetWorkspaceQuery.TryGet(value, out var entry))
+            if (value == Guid.Empty || !AssetWorkspaceQuery.TryGet(value, out var entry))
             {
                 SelectedItem = null;
                 return;

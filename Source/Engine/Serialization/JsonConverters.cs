@@ -19,14 +19,7 @@ namespace FlaxEngine.Json
             if (value is Asset asset)
             {
                 var persistentId = asset.PersistentObjectId;
-                writer.WriteStartObject();
-                writer.WritePropertyName("guid");
-                writer.WriteValue(persistentId.Asset.ToString());
-                writer.WritePropertyName("fileId");
-                writer.WriteValue(persistentId.LocalId);
-                writer.WritePropertyName("type");
-                writer.WriteValue(asset.GetType().FullName);
-                writer.WriteEndObject();
+                writer.WriteValue(JsonSerializer.GetStringID(persistentId));
                 return;
             }
             Guid id = Guid.Empty;
@@ -38,17 +31,11 @@ namespace FlaxEngine.Json
         /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, Newtonsoft.Json.JsonSerializer serializer)
         {
-            if (typeof(Asset).IsAssignableFrom(objectType) && reader.TokenType == JsonToken.StartObject)
-            {
-                var json = JObject.Load(reader);
-                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
-                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
-                    return Content.LoadAssetAsync(new AssetObjectId(guid, (long)json["fileId"]), objectType);
-                return null;
-            }
             if (reader.TokenType == JsonToken.String)
             {
                 JsonSerializer.ParseID((string)reader.Value, out var id);
+                if (typeof(Asset).IsAssignableFrom(objectType))
+                    return Content.LoadAssetAsync(id, objectType);
                 return Object.Find(ref id, objectType);
             }
             return null;
@@ -77,14 +64,7 @@ namespace FlaxEngine.Json
         public override void WriteJson(JsonWriter writer, object value, Newtonsoft.Json.JsonSerializer serializer)
         {
             var id = ((SceneReference)value).ID;
-            writer.WriteStartObject();
-            writer.WritePropertyName("guid");
-            writer.WriteValue(JsonSerializer.GetStringID(id.Asset.Value));
-            writer.WritePropertyName("fileId");
-            writer.WriteValue(id.LocalId);
-            writer.WritePropertyName("type");
-            writer.WriteValue("FlaxEngine.SceneAsset");
-            writer.WriteEndObject();
+            writer.WriteValue(JsonSerializer.GetStringID(id));
         }
 
         /// <inheritdoc />
@@ -92,13 +72,8 @@ namespace FlaxEngine.Json
         {
             SceneReference result = new SceneReference();
 
-            if (reader.TokenType == JsonToken.StartObject)
-            {
-                var json = JObject.Load(reader);
-                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
-                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
-                    result.ID = new AssetObjectId(guid, (long)json["fileId"]);
-            }
+            if (reader.TokenType == JsonToken.String)
+                JsonSerializer.ParseID((string)reader.Value, out result.ID);
 
             return result;
         }
@@ -468,27 +443,18 @@ namespace FlaxEngine.Json
         {
             var asset = (JsonAsset)value.GetType().GetField("Asset").GetValue(value);
             var id = asset?.PersistentObjectId ?? default;
-            writer.WriteStartObject();
-            writer.WritePropertyName("guid");
-            writer.WriteValue(id.Asset.ToString());
-            writer.WritePropertyName("fileId");
-            writer.WriteValue(id.LocalId);
-            writer.WritePropertyName("type");
-            writer.WriteValue(asset?.GetType().FullName ?? typeof(JsonAsset).FullName);
-            writer.WriteEndObject();
+            writer.WriteValue(JsonSerializer.GetStringID(id));
         }
 
         /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, Newtonsoft.Json.JsonSerializer serializer)
         {
             var result = existingValue ?? Activator.CreateInstance(objectType);
-            if (reader.TokenType == JsonToken.StartObject)
+            if (reader.TokenType == JsonToken.String && ((string)reader.Value)?.Length == 32)
             {
-                var json = JObject.Load(reader);
-                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
-                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
-                    objectType.GetField("Asset").SetValue(result,
-                        Content.LoadAssetAsync<JsonAsset>(new AssetObjectId(guid, (long)json["fileId"])));
+                var id = JsonSerializer.ParseID((string)reader.Value);
+                if (id != Guid.Empty)
+                    objectType.GetField("Asset").SetValue(result, Content.LoadAssetAsync<JsonAsset>(id));
             }
 
             return result;

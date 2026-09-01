@@ -262,8 +262,7 @@ bool BuiltinAssetCatalog::Initialize(AssetPipelineDiagnostic& diagnostic)
                     TEXT("Built-in catalog refers to a missing immutable artifact."));
 
             BuiltinAssetCatalogEntry entry;
-            const AssetObjectId publicBridge = AssetObjectId::Main(AssetGuid(serialized.ID));
-            entry.Info = AssetInfo(serialized.ID, publicBridge, serialized.TypeName, path);
+            entry.Info = AssetInfo(serialized.ID, serialized.ID, serialized.TypeName, path);
             entry.Uri = serialized.Uri;
             const String pathKey = NormalizeLookupKey(path);
             const String uriKey = NormalizeLookupKey(entry.Uri);
@@ -294,26 +293,13 @@ void BuiltinAssetCatalog::Dispose()
     _generatedRoots = 0;
 }
 
-bool BuiltinAssetCatalog::TryGet(const AssetObjectId& objectId, AssetInfo& info) const
+bool BuiltinAssetCatalog::TryGet(const Guid& objectId, AssetInfo& info) const
 {
     const int32* index = _byObject.TryGet(objectId);
     if (!index)
         return false;
     info = _entries[*index].Info;
     return true;
-}
-
-bool BuiltinAssetCatalog::TryGet(const Guid& runtimeId, AssetInfo& info) const
-{
-    for (const BuiltinAssetCatalogEntry& entry : _entries)
-    {
-        if (entry.Info.ID == runtimeId)
-        {
-            info = entry.Info;
-            return true;
-        }
-    }
-    return false;
 }
 
 bool BuiltinAssetCatalog::TryGetByPath(const StringView& pathOrUri, AssetInfo& info) const
@@ -348,13 +334,13 @@ bool BuiltinAssetCatalog::IsReadOnlyPath(const StringView& pathOrUri) const
     return false;
 }
 
-StringView BuiltinAssetCatalog::GetStoragePath(const AssetObjectId& objectId) const
+StringView BuiltinAssetCatalog::GetStoragePath(const Guid& objectId) const
 {
     const int32* index = _byObject.TryGet(objectId);
     return index ? StringView(_entries[*index].Info.Path) : StringView::Empty;
 }
 
-StringView BuiltinAssetCatalog::GetUri(const AssetObjectId& objectId) const
+StringView BuiltinAssetCatalog::GetUri(const Guid& objectId) const
 {
     const int32* index = _byObject.TryGet(objectId);
     return index ? StringView(_entries[*index].Uri) : StringView::Empty;

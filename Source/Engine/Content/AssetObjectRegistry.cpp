@@ -23,8 +23,7 @@ namespace
 #if !USE_EDITOR
     void MakeRuntimeAssetInfo(const RuntimeAssetCatalogEntry& entry, AssetInfo& info)
     {
-        const Guid runtimeId = entry.Object.ToRuntimeObjectGuid();
-        info = AssetInfo(runtimeId, entry.Object, String(entry.TypeName), Globals::ProjectContentFolder / String(entry.PackageName));
+        info = AssetInfo(entry.Object, entry.Object, String(entry.TypeName), Globals::ProjectContentFolder / String(entry.PackageName));
         FileSystem::NormalizePath(info.Path);
     }
 #endif
@@ -40,10 +39,10 @@ int32 AssetObjectRegistry::Size() const
 #endif
 }
 
-AssetObjectId AssetObjectRegistry::GetGameSettingsObject() const
+Guid AssetObjectRegistry::GetGameSettingsObject() const
 {
 #if USE_EDITOR
-    return AssetObjectId();
+    return Guid::Empty;
 #else
     return _runtimeCatalog.GetGameSettingsObject();
 #endif
@@ -78,7 +77,7 @@ void AssetObjectRegistry::Init()
 #endif
 }
 
-bool AssetObjectRegistry::FindObject(const AssetObjectId& objectId, AssetInfo& info)
+bool AssetObjectRegistry::FindObject(const Guid& objectId, AssetInfo& info)
 {
     PROFILE_CPU();
     if (!objectId.IsValid())
@@ -111,7 +110,7 @@ bool AssetObjectRegistry::FindRuntimeObject(const Guid& runtimeId, AssetInfo& in
     if (!runtimeId.IsValid())
         return false;
 #if USE_EDITOR
-    AssetObjectId objectId;
+    Guid objectId;
     {
         ScopeLock lock(_locker);
         if (!_runtimeObjects.TryGet(runtimeId, objectId))
@@ -119,8 +118,11 @@ bool AssetObjectRegistry::FindRuntimeObject(const Guid& runtimeId, AssetInfo& in
     }
     return FindObject(objectId, info);
 #else
-    AssetObjectId objectId;
-    return _runtimeCatalog.TryGetByLegacyRuntimeGuid(runtimeId, objectId) && FindObject(objectId, info);
+    RuntimeAssetCatalogEntry entry;
+    if (!_runtimeCatalog.TryGet(runtimeId, entry))
+        return false;
+    MakeRuntimeAssetInfo(entry, info);
+    return FileSystem::FileExists(info.Path);
 #endif
 }
 
@@ -129,7 +131,7 @@ bool AssetObjectRegistry::FindObject(const StringView& path, AssetInfo& info)
     PROFILE_CPU();
 #if USE_EDITOR
     const String normalizedPath = NormalizeObjectPath(path);
-    AssetObjectId foundObject;
+    Guid foundObject;
     {
         ScopeLock lock(_locker);
         for (auto i = _objects.Begin(); i.IsNotEnd(); ++i)
@@ -148,13 +150,13 @@ bool AssetObjectRegistry::FindObject(const StringView& path, AssetInfo& info)
     if (aliasPath.StartsWith(startupPath) && aliasPath.Length() > startupPath.Length() && aliasPath[startupPath.Length()] == '/')
         aliasPath = aliasPath.Right(aliasPath.Length() - startupPath.Length() - 1);
     ContentHash aliasHash;
-    AssetObjectId objectId;
+    Guid objectId;
     return !RuntimeAssetCatalog::HashPathAlias(aliasPath, aliasHash) &&
-        _runtimeCatalog.TryGetByPathHash(aliasHash, objectId) && FindObject(objectId, info);
+        _runtimeCatalog.TryGetByPathHash(aliasHash, objectId) && FindRuntimeObject(objectId, info);
 #endif
 }
 
-StringView AssetObjectRegistry::GetEditorObjectPath(const AssetObjectId& objectId) const
+StringView AssetObjectRegistry::GetEditorObjectPath(const Guid& objectId) const
 {
 #if USE_EDITOR
     ScopeLock lock(_locker);
@@ -173,7 +175,7 @@ void AssetObjectRegistry::GetAllRuntimeIds(Array<Guid>& result) const
 #else
     result.EnsureCapacity(result.Count() + _runtimeCatalog.GetEntries().Count());
     for (const RuntimeAssetCatalogEntry& entry : _runtimeCatalog.GetEntries())
-        result.Add(entry.Object.ToRuntimeObjectGuid());
+        result.Add(entry.Object);
 #endif
 }
 
@@ -190,7 +192,7 @@ void AssetObjectRegistry::GetAllRuntimeIdsByTypeName(const StringView& typeName,
     for (const RuntimeAssetCatalogEntry& entry : _runtimeCatalog.GetEntries())
     {
         if (String(entry.TypeName) == typeName)
-            result.Add(entry.Object.ToRuntimeObjectGuid());
+            result.Add(entry.Object);
     }
 #endif
 }
@@ -217,8 +219,8 @@ void AssetObjectRegistry::RegisterTransientPackage(FlaxStorage* storage)
 
     for (const FlaxStorage::Entry& storageEntry : entries)
     {
-        const AssetObjectId objectId = AssetObjectId::Main(AssetGuid(storageEntry.ID));
-        AssetObjectId existingObject;
+        const Guid objectId = storageEntry.ID;
+        Guid existingObject;
         if (_runtimeObjects.TryGet(storageEntry.ID, existingObject) && existingObject != objectId)
         {
             LOG(Error, "Transient runtime object id {0} collides between {1} and {2}.", storageEntry.ID, existingObject, objectId);
@@ -244,11 +246,11 @@ void AssetObjectRegistry::RegisterTransientObject(const Guid& runtimeId, const S
     PROFILE_CPU();
     if (!runtimeId.IsValid())
         return;
-    const AssetObjectId objectId = AssetObjectId::Main(AssetGuid(runtimeId));
+    const Guid objectId = runtimeId;
     const String normalizedPath = NormalizeObjectPath(path);
     ScopeLock lock(_locker);
 
-    AssetObjectId oldObject;
+    Guid oldObject;
     if (_runtimeObjects.TryGet(runtimeId, oldObject) && oldObject != objectId)
         _objects.Remove(oldObject);
     for (auto i = _objects.Begin(); i.IsNotEnd(); ++i)
@@ -263,7 +265,7 @@ void AssetObjectRegistry::RegisterTransientObject(const Guid& runtimeId, const S
     _runtimeObjects[runtimeId] = objectId;
 }
 
-bool AssetObjectRegistry::RemoveTransientObject(const AssetObjectId& objectId, AssetInfo* info)
+bool AssetObjectRegistry::RemoveTransientObject(const Guid& objectId, AssetInfo* info)
 {
     ScopeLock lock(_locker);
     Entry* entry = _objects.TryGet(objectId);
@@ -278,7 +280,7 @@ bool AssetObjectRegistry::RemoveTransientObject(const AssetObjectId& objectId, A
 
 bool AssetObjectRegistry::RemoveTransientRuntimeObject(const Guid& runtimeId, AssetInfo* info)
 {
-    AssetObjectId objectId;
+    Guid objectId;
     {
         ScopeLock lock(_locker);
         if (!_runtimeObjects.TryGet(runtimeId, objectId))

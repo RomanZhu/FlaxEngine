@@ -11,7 +11,7 @@ class FLAXENGINE_API AssetReferenceBase : public IAssetReference
 {
 protected:
     Asset* _asset = nullptr;
-    AssetObjectId _objectId;
+    Guid _objectId;
     IAssetReference* _owner = nullptr;
 
 public:
@@ -53,7 +53,7 @@ public:
     /// <summary>
     /// Gets the persistent asset object ID.
     /// </summary>
-    FORCE_INLINE AssetObjectId GetID() const
+    FORCE_INLINE Guid GetID() const
     {
         return _objectId;
     }
@@ -84,7 +84,7 @@ public:
 
 protected:
     void OnSet(Asset* asset);
-    void OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
+    void OnSet(const Guid& objectId, const ScriptingTypeHandle& type);
 };
 
 /// <summary>
@@ -121,7 +121,7 @@ public:
         OnSet((Asset*)asset);
     }
 
-    AssetReference(const AssetObjectId& objectId)
+    AssetReference(const Guid& objectId)
     {
         OnSet(objectId, T::TypeInitializer);
     }
@@ -150,7 +150,7 @@ public:
         OnSet(other._asset);
         _objectId = other._objectId;
         other.OnSet(nullptr);
-        other._objectId = AssetObjectId();
+        other._objectId = Guid::Empty;
     }
 
     AssetReference& operator=(AssetReference&& other)
@@ -160,7 +160,7 @@ public:
             OnSet(other._asset);
             _objectId = other._objectId;
             other.OnSet(nullptr);
-            other._objectId = AssetObjectId();
+            other._objectId = Guid::Empty;
         }
         return *this;
     }
@@ -186,7 +186,7 @@ public:
         return *this;
     }
 
-    FORCE_INLINE AssetReference& operator=(const AssetObjectId& id)
+    FORCE_INLINE AssetReference& operator=(const Guid& id)
     {
         OnSet(id, T::TypeInitializer);
         return *this;

@@ -13,10 +13,10 @@ namespace FlaxEditor.Content.Documents
     public static class AssetDocumentRegistry
     {
         private static readonly object Locker = new object();
-        private static readonly Dictionary<AssetObjectId, AssetDocumentSession> Sessions = new Dictionary<AssetObjectId, AssetDocumentSession>();
-        private static readonly Dictionary<AssetObjectId, int> References = new Dictionary<AssetObjectId, int>();
+        private static readonly Dictionary<Guid, AssetDocumentSession> Sessions = new Dictionary<Guid, AssetDocumentSession>();
+        private static readonly Dictionary<Guid, int> References = new Dictionary<Guid, int>();
 
-        public static AssetDocumentSession Open(AssetObjectId id)
+        public static AssetDocumentSession Open(Guid id)
         {
             lock (Locker)
             {
@@ -32,7 +32,7 @@ namespace FlaxEditor.Content.Documents
         }
 
         /// <summary>Opens a shared document session with a source representation loader.</summary>
-        public static AssetDocumentSession Open<TDocument>(AssetObjectId id, Func<string, TDocument> documentLoader)
+        public static AssetDocumentSession Open<TDocument>(Guid id, Func<string, TDocument> documentLoader)
         {
             if (documentLoader == null)
                 throw new ArgumentNullException(nameof(documentLoader));
@@ -109,7 +109,7 @@ namespace FlaxEditor.Content.Documents
                    ",\n  \"shadingModel\": " + (int)info.ShadingModel + "\n}\n";
         }
 
-        public static bool Close(AssetObjectId id)
+        public static bool Close(Guid id)
         {
             lock (Locker)
             {

@@ -11,7 +11,7 @@ class FLAXENGINE_API SoftAssetReferenceBase : public IAssetReference
 {
 protected:
     Asset* _asset = nullptr;
-    AssetObjectId _id;
+    Guid _id;
 
 public:
     /// <summary>
@@ -36,7 +36,7 @@ public:
     /// <summary>
     /// Gets the persistent asset object ID.
     /// </summary>
-    FORCE_INLINE AssetObjectId GetID() const
+    FORCE_INLINE Guid GetID() const
     {
         return _id;
     }
@@ -59,7 +59,7 @@ public:
 
 protected:
     void OnSet(Asset* asset);
-    void OnSet(const AssetObjectId& id);
+    void OnSet(const Guid& id);
     void OnResolve(const ScriptingTypeHandle& type);
 };
 
@@ -106,7 +106,7 @@ public:
         OnSet(other.GetID());
     }
 
-    SoftAssetReference(const AssetObjectId& id)
+    SoftAssetReference(const Guid& id)
     {
         OnSet(id);
     }
@@ -114,7 +114,7 @@ public:
     SoftAssetReference(SoftAssetReference&& other)
     {
         OnSet(other.GetID());
-        other.OnSet(AssetObjectId());
+        other.OnSet(Guid::Empty);
     }
 
     /// <summary>
@@ -133,7 +133,7 @@ public:
     {
         return GetID() == other.GetID();
     }
-    FORCE_INLINE bool operator==(const AssetObjectId& other) const
+    FORCE_INLINE bool operator==(const Guid& other) const
     {
         return GetID() == other;
     }
@@ -145,7 +145,7 @@ public:
     {
         return GetID() != other.GetID();
     }
-    FORCE_INLINE bool operator!=(const AssetObjectId& other) const
+    FORCE_INLINE bool operator!=(const Guid& other) const
     {
         return GetID() != other;
     }
@@ -174,7 +174,7 @@ public:
         OnSet((Asset*)other);
         return *this;
     }
-    FORCE_INLINE SoftAssetReference& operator=(const AssetObjectId& id)
+    FORCE_INLINE SoftAssetReference& operator=(const Guid& id)
     {
         OnSet(id);
         return *this;
@@ -239,7 +239,7 @@ public:
     /// Sets the asset.
     /// </summary>
     /// <param name="id">The object ID. Uses Scripting to find the registered asset of the given ID.</param>
-    FORCE_INLINE void Set(const AssetObjectId& id)
+    FORCE_INLINE void Set(const Guid& id)
     {
         OnSet(id);
     }

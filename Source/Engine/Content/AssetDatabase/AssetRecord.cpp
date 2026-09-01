@@ -4,7 +4,7 @@
 
 AssetInfo AssetRecord::ToAssetInfo() const
 {
-    return AssetInfo(ID, AssetObjectId(AssetGuid(SourceAssetID), LocalId), TypeName, CanonicalPath.Get(), DatabaseRevision);
+    return AssetInfo(ID, ID, TypeName, CanonicalPath.Get(), DatabaseRevision);
 }
 
 bool AssetRecord::IsMainAsset() const

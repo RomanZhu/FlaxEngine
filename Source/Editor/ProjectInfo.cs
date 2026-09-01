@@ -110,41 +110,23 @@ namespace FlaxEditor
         /// <inheritdoc />
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
         {
-            if (!(value is AssetObjectId id) || !id.IsValid)
-                throw new JsonSerializationException("Expected a valid default scene asset object identifier.");
-
-            writer.WriteStartObject();
-            writer.WritePropertyName("guid");
-            writer.WriteValue(id.Asset.ToString());
-            writer.WritePropertyName("fileId");
-            writer.WriteValue(id.LocalId);
-            writer.WriteEndObject();
+            if (!(value is Guid id) || id == Guid.Empty)
+                throw new JsonSerializationException("Expected a valid default scene GUID.");
+            writer.WriteValue(id.ToString());
         }
 
         /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
         {
-            if (reader.TokenType == JsonToken.String)
-            {
-                if (AssetGuid.TryParse((string)reader.Value, out var legacyGuid))
-                    return AssetObjectId.Main(legacyGuid);
-                throw new JsonSerializationException("Invalid legacy DefaultScene GUID.");
-            }
-            if (reader.TokenType == JsonToken.StartObject)
-            {
-                var json = JObject.Load(reader);
-                if (AssetGuid.TryParse((string)json["guid"], out var guid) &&
-                    json["fileId"]?.Type == JTokenType.Integer && (long)json["fileId"] != 0)
-                    return new AssetObjectId(guid, (long)json["fileId"]);
-                throw new JsonSerializationException("Invalid composite DefaultScene identifier.");
-            }
-            throw new JsonSerializationException("DefaultScene must contain a composite asset identifier.");
+            if (reader.TokenType == JsonToken.String && Guid.TryParseExact((string)reader.Value, "N", out var guid) && guid != Guid.Empty)
+                return guid;
+            throw new JsonSerializationException("DefaultScene must contain a valid GUID string.");
         }
 
         /// <inheritdoc />
         public override bool CanConvert(Type objectType)
         {
-            return objectType == typeof(AssetObjectId);
+            return objectType == typeof(Guid);
         }
     }
 
@@ -240,7 +222,7 @@ namespace FlaxEditor
         /// </summary>
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         [JsonConverter(typeof(ProjectDefaultSceneConverter))]
-        public AssetObjectId DefaultScene;
+        public Guid DefaultScene;
 
         /// <summary>
         /// The default scene spawn point (position and view direction).
@@ -318,10 +300,9 @@ namespace FlaxEditor
             }
             if (root.TryGetValue("DefaultScene", out var defaultScene))
             {
-                if (!(defaultScene is JObject scene) || scene["guid"]?.Type != JTokenType.String ||
-                    !Guid.TryParseExact(scene.Value<string>("guid"), "N", out var guid) || guid == Guid.Empty ||
-                    guid.ToString("N") != scene.Value<string>("guid") || scene["fileId"]?.Type != JTokenType.Integer ||
-                    scene.Value<long>("fileId") == 0)
+                if (defaultScene.Type != JTokenType.String ||
+                    !Guid.TryParseExact(defaultScene.Value<string>(), "N", out var guid) || guid == Guid.Empty ||
+                    guid.ToString("N") != defaultScene.Value<string>())
                     throw new InvalidDataException(guidance);
             }
             if (root.TryGetValue("EngineNickname", out var nickname) &&

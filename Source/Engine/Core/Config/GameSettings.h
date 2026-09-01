@@ -103,7 +103,7 @@ public:
     /// <summary>
     /// Resolves the exact GameSettings object through the project settings index.
     /// </summary>
-    static AssetObjectId GetGameSettingsObjectId();
+    static Guid GetGameSettingsObjectId();
 
     /// <summary>
     /// Loads the game settings (including other settings such as Physics, Input, etc.).

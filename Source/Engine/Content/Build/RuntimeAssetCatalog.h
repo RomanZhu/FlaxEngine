@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
+#include "Engine/Core/Types/Guid.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineDiagnostics.h"
 #include "Engine/Content/Artifacts/ArtifactKey.h"
 #include "Engine/Core/Types/Span.h"
@@ -18,28 +18,28 @@ enum class RuntimeAssetCompression : byte
 /// <summary>One object-level address in an immutable runtime package.</summary>
 struct FLAXENGINE_API RuntimeAssetCatalogEntry
 {
-    AssetObjectId Object;
+    Guid Object;
     StringAnsi TypeName;
     StringAnsi PackageName;
     uint64 Offset = 0;
     uint64 Size = 0;
     RuntimeAssetCompression Compression = RuntimeAssetCompression::None;
     ContentHash Content;
-    Array<AssetObjectId> Dependencies;
+    Array<Guid> Dependencies;
 };
 
 /// <summary>Opaque compatibility mapping from a normalized runtime path hash to an exact asset object.</summary>
 struct FLAXENGINE_API RuntimeAssetCatalogAlias
 {
     ContentHash PathHash;
-    AssetObjectId Object;
+    Guid Object;
 };
 
 /// <summary>Deterministic binary runtime catalog independent of source metadata and the editor database.</summary>
 class FLAXENGINE_API RuntimeAssetCatalog
 {
 public:
-    static constexpr uint32 FormatVersion = 4;
+    static constexpr uint32 FormatVersion = 5;
 
     const StringAnsi& GetBuildID() const
     {
@@ -57,13 +57,13 @@ public:
     {
         return _aliases;
     }
-    const AssetObjectId& GetGameSettingsObject() const
+    const Guid& GetGameSettingsObject() const
     {
         return _gameSettingsObject;
     }
 
     /// <summary>Sets the exact cooked GameSettings bootstrap object.</summary>
-    void SetGameSettingsObject(const AssetObjectId& value)
+    void SetGameSettingsObject(const Guid& value)
     {
         _gameSettingsObject = value;
     }
@@ -73,20 +73,15 @@ public:
     bool Set(const StringAnsiView& buildID, const ContentHash& targetHash, const Array<RuntimeAssetCatalogEntry>& entries,
         AssetPipelineDiagnostic& diagnostic);
 
-    /// <summary>Replaces catalog entries and opaque legacy path aliases.</summary>
+    /// <summary>Replaces catalog entries and opaque runtime path aliases.</summary>
     bool Set(const StringAnsiView& buildID, const ContentHash& targetHash, const Array<RuntimeAssetCatalogEntry>& entries,
         const Array<RuntimeAssetCatalogAlias>& aliases, AssetPipelineDiagnostic& diagnostic);
 
-    /// <summary>Finds an entry by its persistent object GUID bridge.</summary>
-    bool TryGet(const AssetObjectId& object, RuntimeAssetCatalogEntry& result) const;
-
-    /// <summary>
-    /// Finds an object by its persistent GUID through the temporary public loading bridge.
-    /// </summary>
-    bool TryGetByLegacyRuntimeGuid(const Guid& runtimeId, AssetObjectId& result) const;
+    /// <summary>Finds an entry by its persistent object GUID.</summary>
+    bool TryGet(const Guid& object, RuntimeAssetCatalogEntry& result) const;
 
     /// <summary>Finds an exact object by a normalized runtime path hash.</summary>
-    bool TryGetByPathHash(const ContentHash& pathHash, AssetObjectId& result) const;
+    bool TryGetByPathHash(const ContentHash& pathHash, Guid& result) const;
 
     /// <summary>Hashes a portable logical runtime path without retaining its source string. Returns true on failure.</summary>
     static bool HashPathAlias(const StringView& path, ContentHash& result);
@@ -113,7 +108,7 @@ public:
 private:
     StringAnsi _buildID;
     ContentHash _targetHash;
-    AssetObjectId _gameSettingsObject;
+    Guid _gameSettingsObject;
     Array<RuntimeAssetCatalogEntry> _entries;
     Array<RuntimeAssetCatalogAlias> _aliases;
 

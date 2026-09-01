@@ -200,12 +200,12 @@ namespace FlaxEditor.Content.Import
     public sealed class AssetQuery
     {
         public string Expression { get; }
-        public IReadOnlyList<AssetObjectId> Results { get; }
+        public IReadOnlyList<Guid> Results { get; }
 
-        public AssetQuery(string expression, IReadOnlyList<AssetObjectId> results)
+        public AssetQuery(string expression, IReadOnlyList<Guid> results)
         {
             Expression = expression ?? throw new ArgumentNullException(nameof(expression));
-            Results = results ?? Array.Empty<AssetObjectId>();
+            Results = results ?? Array.Empty<Guid>();
         }
     }
 
@@ -415,17 +415,15 @@ namespace FlaxEditor.Content.Import
         public SourceReadHandle OpenSourceFile() => new SourceReadHandle(null);
         public SourceReadHandle OpenDependencyFile(string path) => new SourceReadHandle(path ?? throw new ArgumentNullException(nameof(path)));
 
-        public void DependsOnSourceAsset(AssetGuid guid) => DependsOnSourceAsset(AssetObjectId.Main(guid));
-        public void DependsOnSourceAsset(AssetObjectId objectId)
+        public void DependsOnSourceAsset(AssetGuid guid) => DependsOnSourceAsset(guid.Value);
+        public void DependsOnSourceAsset(Guid objectId)
         {
-            var guid = objectId.Asset.Value;
-            ScriptedImporterInterop.DependsOnObject(ref guid, objectId.LocalId, 0);
+            ScriptedImporterInterop.DependsOnObject(ref objectId, 0, 0);
         }
 
-        public void DependsOnArtifact(AssetObjectId objectId)
+        public void DependsOnArtifact(Guid objectId)
         {
-            var guid = objectId.Asset.Value;
-            ScriptedImporterInterop.DependsOnObject(ref guid, objectId.LocalId, 1);
+            ScriptedImporterInterop.DependsOnObject(ref objectId, 0, 1);
         }
 
         public void DependsOnArtifact(ArtifactKey artifact)

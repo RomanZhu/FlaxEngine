@@ -1519,7 +1519,7 @@ SceneResult LevelImpl::loadScene(SceneLoader& loader, JsonAsset* sceneAsset, flo
         LOG(Error, "Cannot load scene asset.");
         return SceneResult::Failed;
     }
-    loader.SourceAssetId = sceneAsset->GetPersistentObjectId().Asset.Value;
+    loader.SourceAssetId = sceneAsset->GetPersistentObjectId();
 
 #if USE_EDITOR
     if (Level::IsExternalActorsSceneAsset(sceneAsset))
@@ -2443,22 +2443,6 @@ bool Level::LoadScene(const Guid& id)
     return false;
 }
 
-bool Level::LoadScene(const AssetObjectId& id)
-{
-    if (!id.IsValid())
-    {
-        Log::ArgumentException();
-        return true;
-    }
-    const auto sceneAsset = static_cast<JsonAsset*>(Content::LoadAssetAsync(id, JsonAsset::TypeInitializer));
-    if (!sceneAsset)
-    {
-        LOG(Error, "Cannot load scene asset {0}.", id.ToString());
-        return true;
-    }
-    return LoadScene(sceneAsset->GetID());
-}
-
 Scene* Level::LoadSceneFromBytes(const BytesContainer& data)
 {
     Scene* scene = nullptr;
@@ -2491,22 +2475,6 @@ bool Level::LoadSceneAsync(const Guid& id)
     _sceneActions.Enqueue(New<LoadSceneAction>(id, sceneAsset, true));
 
     return false;
-}
-
-bool Level::LoadSceneAsync(const AssetObjectId& id)
-{
-    if (!id.IsValid())
-    {
-        Log::ArgumentException();
-        return true;
-    }
-    const auto sceneAsset = static_cast<JsonAsset*>(Content::LoadAssetAsync(id, JsonAsset::TypeInitializer));
-    if (!sceneAsset)
-    {
-        LOG(Error, "Cannot load scene asset {0}.", id.ToString());
-        return true;
-    }
-    return LoadSceneAsync(sceneAsset->GetID());
 }
 
 bool Level::UnloadScene(Scene* scene)

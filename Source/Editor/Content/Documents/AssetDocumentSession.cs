@@ -15,7 +15,7 @@ namespace FlaxEditor.Content.Documents
         private byte[] _baseSourceSnapshot;
 
         /// <summary>Gets the persistent identity of the edited object.</summary>
-        public AssetObjectId ObjectID { get; }
+        public Guid ObjectID { get; }
 
         /// <summary>Gets the database revision on which the local document is based.</summary>
         public ulong ObservedRevision { get; private set; }
@@ -47,9 +47,9 @@ namespace FlaxEditor.Content.Documents
         /// <summary>Occurs when the session state changes.</summary>
         public event Action<AssetDocumentSession> Changed;
 
-        internal AssetDocumentSession(AssetObjectId objectId)
+        internal AssetDocumentSession(Guid objectId)
         {
-            if (objectId.IsNull)
+            if (objectId == Guid.Empty)
                 throw new ArgumentException("A document session requires a persistent asset object ID.", nameof(objectId));
             ObjectID = objectId;
             Refresh();

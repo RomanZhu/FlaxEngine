@@ -8,11 +8,11 @@ namespace FlaxEditor.Content.Documents
     /// <summary>Read-only preview pinned to a persistent object and published revision.</summary>
     public sealed class PreviewArtifactSession : IDisposable
     {
-        public AssetObjectId ObjectID { get; }
+        public Guid ObjectID { get; }
         public ulong Revision { get; }
         public Asset Asset { get; private set; }
 
-        public PreviewArtifactSession(AssetObjectId objectId)
+        public PreviewArtifactSession(Guid objectId)
         {
             ObjectID = objectId;
             if (!AssetWorkspaceQuery.TryGet(objectId, out var entry))

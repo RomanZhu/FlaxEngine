@@ -906,7 +906,7 @@ bool Prefab::ApplyAll(Actor* targetActor)
 
         // Assign references to the prefabs
         allPrefabs.EnsureCapacity(Math::RoundUpToPowerOf2(Math::Max(30, nestedPrefabIds.Count())));
-        const Dictionary<AssetObjectId, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
+        const Dictionary<Guid, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
         for (auto& e : assetsRaw)
         {
             if (e.Value->GetTypeHandle() == Prefab::TypeInitializer)
@@ -1063,7 +1063,7 @@ bool Prefab::ApplyAddedObject(Actor* targetActor, SceneObject* addedObject)
 
         // Assign references to the prefabs
         allPrefabs.EnsureCapacity(Math::RoundUpToPowerOf2(Math::Max(30, nestedPrefabIds.Count())));
-        const Dictionary<AssetObjectId, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
+        const Dictionary<Guid, Asset*, HeapAllocation>& assetsRaw = Content::GetAssetsRaw();
         for (auto& e : assetsRaw)
         {
             if (e.Value->GetTypeHandle() == Prefab::TypeInitializer)

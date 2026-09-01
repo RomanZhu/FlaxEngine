@@ -26,7 +26,7 @@ namespace
             File::WriteAllBytes(content / TEXT("Data_0.flaxpac"), package, ARRAY_COUNT(package)))
             return true;
 
-        const AssetObjectId gameSettings = AssetObjectId::Main(AssetGuid(Guid(91, 92, 93, 94)));
+        const Guid gameSettings(91, 92, 93, 94);
         RuntimeAssetCatalogEntry entry;
         entry.Object = gameSettings;
         entry.TypeName = "FlaxEngine.GameSettings";

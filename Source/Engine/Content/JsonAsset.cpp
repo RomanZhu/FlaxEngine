@@ -101,7 +101,7 @@ StringView JsonAssetBase::GetPath() const
     return _path;
 #else
     // In build all assets are packed into packages so use ID for original path lookup
-    return Content::GetEditorAssetPath(_persistentObjectId);
+    return Content::GetEditorAssetPath(GetPersistentObjectId());
 #endif
 }
 
@@ -259,7 +259,7 @@ Asset::LoadResult JsonAssetBase::loadAsset()
             return LoadResult::CannotLoadStorage;
         AssetInitData initData;
         const bool headerLoadFailed = storage->UsesAssetObjectIds()
-            ? storage->LoadAssetHeader(GetPersistentObjectId(), initData)
+            ? storage->LoadAssetHeader(_internalObjectId, initData)
             : storage->LoadAssetHeader(GetID(), initData);
         if (headerLoadFailed)
             return LoadResult::CannotLoadInitData;
@@ -288,7 +288,7 @@ Asset::LoadResult JsonAssetBase::loadAsset()
     // Load header
     AssetInitData initData;
     const bool headerLoadFailed = storage->UsesAssetObjectIds()
-        ? storage->LoadAssetHeader(GetPersistentObjectId(), initData)
+        ? storage->LoadAssetHeader(_internalObjectId, initData)
         : storage->LoadAssetHeader(GetID(), initData);
     if (headerLoadFailed)
         return LoadResult::CannotLoadInitData;

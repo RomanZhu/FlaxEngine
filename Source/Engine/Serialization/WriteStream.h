@@ -155,7 +155,7 @@ public:
     template<typename T>
     typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Write(const T* data)
     {
-        Write(data ? data->GetPersistentObjectId() : AssetObjectId());
+        Write(data ? data->GetPersistentObjectId() : Guid::Empty);
     }
 
     template<typename T>

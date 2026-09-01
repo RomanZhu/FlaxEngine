@@ -10,19 +10,17 @@ using LocalFileId = int64;
 /// <summary>
 /// Identifies one object within an asset file by its file GUID and stable local file ID.
 /// </summary>
-API_STRUCT() struct FLAXENGINE_API AssetObjectId
+struct FLAXENGINE_API AssetObjectId
 {
-    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetObjectId);
-
     /// <summary>
     /// The asset file identifier.
     /// </summary>
-    API_FIELD() AssetGuid Asset;
+    AssetGuid Asset;
 
     /// <summary>
     /// The stable object identifier within the asset file. Zero is invalid.
     /// </summary>
-    API_FIELD() int64 LocalId = 0;
+    int64 LocalId = 0;
 
     AssetObjectId()
     {
@@ -76,25 +74,6 @@ API_STRUCT() struct FLAXENGINE_API AssetObjectId
         }
         value = AssetObjectId(AssetGuid(guid), localId);
         return false;
-    }
-
-    /// <summary>
-    /// Produces the transitional storage/runtime key used while legacy binary containers are being removed.
-    /// This derived value can collide and must never be used as authority for exact object identity.
-    /// </summary>
-    Guid ToRuntimeObjectGuid() const
-    {
-        if (IsMainObject())
-            return Asset.Value;
-        const uint64 local = static_cast<uint64>(LocalId);
-        const uint32 low = static_cast<uint32>(local);
-        const uint32 high = static_cast<uint32>(local >> 32);
-        Guid result(Asset.Value.A ^ low, Asset.Value.B ^ high,
-                    Asset.Value.C ^ ((low << 13) | (low >> 19)),
-                    Asset.Value.D ^ ((high << 7) | (high >> 25)) ^ 0x9e3779b9u);
-        if (!result.IsValid())
-            result.D = 1;
-        return result;
     }
 
     FORCE_INLINE explicit operator bool() const

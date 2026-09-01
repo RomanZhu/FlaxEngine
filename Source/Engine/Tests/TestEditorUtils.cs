@@ -38,7 +38,7 @@ namespace FlaxEngine.Tests
             File.WriteAllText(assetPath, "canonical source");
             assetId = AssetOperationService.CreateImportedSourceMetadata(assetPath, typeof(RawDataAsset).FullName, "Flax.Text");
             Assert.AreNotEqual(Guid.Empty, assetId);
-            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(AssetObjectId.Main(new AssetGuid(assetId)), out var record));
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(assetId, out var record));
 
             var item = new BinaryAssetItem(assetPath, ref assetId, typeof(RawDataAsset).FullName,
                 typeof(RawDataAsset), ContentItemSearchFilter.Other);

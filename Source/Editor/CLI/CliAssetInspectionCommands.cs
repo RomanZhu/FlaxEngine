@@ -362,7 +362,7 @@ namespace FlaxEditor
             [CliOption("asset", Required = true)] string asset,
             [CliOption("reload", Description = "Reload the Content item before inspection.")] bool reload = false)
         {
-            if (AssetObjectId.TryParse(asset, out var requestedObject) && FlaxEngine.Content.GetAssetInfo(requestedObject, out var objectInfo))
+            if (Guid.TryParse(asset, out var requestedObject) && FlaxEngine.Content.GetAssetInfo(requestedObject, out var objectInfo))
             {
                 var direct = FlaxEngine.Content.LoadAssetAsync(requestedObject);
                 if (direct == null || direct.WaitForLoaded())
@@ -389,7 +389,7 @@ namespace FlaxEditor
             return DescribeLoaded(item.ID, item.Path, loaded, item.IsCanonicalSource);
         }
 
-        private static object DescribeLoaded(Guid id, string path, Asset loaded, bool canonical, AssetObjectId? objectId = null)
+        private static object DescribeLoaded(Guid id, string path, Asset loaded, bool canonical, Guid? objectId = null)
         {
             return new
             {

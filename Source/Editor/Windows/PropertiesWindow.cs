@@ -2030,7 +2030,7 @@ namespace FlaxEditor.Windows
                     get => _asset.LoadSurface(true);
                     set
                     {
-                        if (!AssetDatabaseQueryService.TryGetAssetObjectId(_asset, out var objectId) ||
+                        if (!AssetDatabaseQueryService.TryGetAssetGuid(_asset, out var objectId) ||
                             !AssetWorkspaceQuery.TryGet(objectId, out var entry))
                         {
                             Editor.LogError("Particle Emitter has no authored source record.");

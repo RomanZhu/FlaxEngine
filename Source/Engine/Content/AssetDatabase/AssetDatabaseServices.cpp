@@ -375,7 +375,7 @@ namespace
     AssetDatabaseDependencyInfo ToInfo(const SourceAssetDependencyRow& dependency)
     {
         AssetDatabaseDependencyInfo result;
-        result.Owner = AssetObjectId(AssetGuid(dependency.OwnerAssetGuid), dependency.OwnerLocalFileId);
+        result.Owner = dependency.OwnerObjectGuid;
         result.TargetID = dependency.TargetId;
         switch (dependency.Kind)
         {
@@ -386,7 +386,7 @@ namespace
         case AssetDependencyKind::LogicalPath: result.Kind = TEXT("LogicalPath"); break;
         default: result.Kind = TEXT("Unknown"); break;
         }
-        result.TargetObject = AssetObjectId(AssetGuid(dependency.TargetAssetGuid), dependency.TargetLocalFileId);
+        result.TargetObject = dependency.TargetObjectGuid;
         TrySanitizeFacadePath(dependency.SourcePath, dependency.OwnerAssetGuid, result.SourcePath);
         result.ExactArtifact = String(dependency.ExactArtifact.ToString());
         result.CustomDependency = dependency.CustomDependency;
@@ -400,7 +400,7 @@ namespace
     AssetDatabasePublicationInfo ToInfo(const SourceAssetPublicationRow& publication)
     {
         AssetDatabasePublicationInfo result;
-        result.Object = AssetObjectId(AssetGuid(publication.AssetGuid), publication.LocalFileId);
+        result.Object = publication.ObjectGuid;
         result.TargetID = publication.TargetId;
         result.Artifact = String(publication.Artifact.ToString());
         result.ManifestHash = String(publication.ManifestHash.ToString());
@@ -1925,7 +1925,7 @@ Array<AssetDatabaseRecordInfo> AssetDatabaseQueryService::QueryRecords(const Ass
     return result;
 }
 
-bool AssetDatabaseQueryService::TryGetRecord(const AssetObjectId& objectID, AssetDatabaseRecordInfo& result)
+bool AssetDatabaseQueryService::TryGetRecord(const Guid& objectID, AssetDatabaseRecordInfo& result)
 {
     result = AssetDatabaseRecordInfo();
     if (!objectID.IsValid() || EnsureDatabaseLoaded())
@@ -2009,17 +2009,18 @@ String AssetPipelineService::GetCustomDependencyHash(const StringView& name)
     return AssetDatabase::Get().TryGetCustomDependencyHash(name, hash) ? String(hash.ToString()) : String::Empty;
 }
 
-Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetDependencies(const AssetObjectId& objectID)
+Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetDependencies(const Guid& objectID)
 {
     Array<AssetDatabaseDependencyInfo> result;
-    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !IsFacadeAssetGuid(objectID.Asset.Value))
+    AssetRecord owner;
+    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !AssetDatabase::Get().TryGetRecord(objectID, owner) || !IsFacadeRecord(owner))
         return result;
     const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
     if (!snapshot.IsValid())
         return result;
     for (const SourceAssetDependencyRow& dependency : snapshot.GetState().Dependencies)
     {
-        if (dependency.OwnerAssetGuid == objectID.Asset.Value && dependency.OwnerLocalFileId == objectID.LocalId)
+        if (dependency.OwnerObjectGuid == objectID)
             result.Add(ToInfo(dependency));
     }
     if (result.Count() > 1)
@@ -2030,25 +2031,24 @@ Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetDependencies(co
                 return a.Kind < b.Kind;
             if (a.TargetID != b.TargetID)
                 return a.TargetID < b.TargetID;
-            if (a.TargetObject.Asset.Value != b.TargetObject.Asset.Value)
-                return a.TargetObject.Asset.ToString() < b.TargetObject.Asset.ToString();
-            return a.TargetObject.LocalId < b.TargetObject.LocalId;
+            return a.TargetObject.ToString() < b.TargetObject.ToString();
         });
     }
     return result;
 }
 
-Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetReferencers(const AssetObjectId& objectID)
+Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetReferencers(const Guid& objectID)
 {
     Array<AssetDatabaseDependencyInfo> result;
-    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !IsFacadeAssetGuid(objectID.Asset.Value))
+    AssetRecord target;
+    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !AssetDatabase::Get().TryGetRecord(objectID, target) || !IsFacadeRecord(target))
         return result;
     const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
     if (!snapshot.IsValid())
         return result;
     for (const SourceAssetDependencyRow& dependency : snapshot.GetState().Dependencies)
     {
-        if (dependency.TargetAssetGuid == objectID.Asset.Value && dependency.TargetLocalFileId == objectID.LocalId &&
+        if (dependency.TargetObjectGuid == objectID &&
             IsFacadeAssetGuid(dependency.OwnerAssetGuid))
             result.Add(ToInfo(dependency));
     }
@@ -2056,10 +2056,8 @@ Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetReferencers(con
     {
         std::sort(result.Get(), result.Get() + result.Count(), [](const AssetDatabaseDependencyInfo& a, const AssetDatabaseDependencyInfo& b)
         {
-            if (a.Owner.Asset.Value != b.Owner.Asset.Value)
-                return a.Owner.Asset.ToString() < b.Owner.Asset.ToString();
-            if (a.Owner.LocalId != b.Owner.LocalId)
-                return a.Owner.LocalId < b.Owner.LocalId;
+            if (a.Owner != b.Owner)
+                return a.Owner.ToString() < b.Owner.ToString();
             if (a.Kind != b.Kind)
                 return a.Kind < b.Kind;
             return a.TargetID < b.TargetID;
@@ -2068,17 +2066,18 @@ Array<AssetDatabaseDependencyInfo> AssetDatabaseQueryService::GetReferencers(con
     return result;
 }
 
-Array<AssetDatabasePublicationInfo> AssetDatabaseQueryService::GetPublications(const AssetObjectId& objectID)
+Array<AssetDatabasePublicationInfo> AssetDatabaseQueryService::GetPublications(const Guid& objectID)
 {
     Array<AssetDatabasePublicationInfo> result;
-    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !IsFacadeAssetGuid(objectID.Asset.Value))
+    AssetRecord object;
+    if (!objectID.IsValid() || EnsureDatabaseLoaded() || !AssetDatabase::Get().TryGetRecord(objectID, object) || !IsFacadeRecord(object))
         return result;
     const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
     if (!snapshot.IsValid())
         return result;
     for (const SourceAssetPublicationRow& publication : snapshot.GetState().Publications)
     {
-        if (publication.AssetGuid == objectID.Asset.Value && publication.LocalFileId == objectID.LocalId)
+        if (publication.ObjectGuid == objectID)
             result.Add(ToInfo(publication));
     }
     if (result.Count() > 1)
@@ -2188,19 +2187,19 @@ Array<String> AssetDatabaseQueryService::GetAllAssetPaths()
     return result;
 }
 
-bool AssetDatabaseQueryService::TryGetAssetObjectId(Asset* asset, AssetObjectId& result)
+bool AssetDatabaseQueryService::TryGetAssetGuid(Asset* asset, Guid& result)
 {
-    result = AssetObjectId();
+    result = Guid::Empty;
     if (!asset || EnsureDatabaseLoaded())
         return false;
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(asset->GetID(), record) || !IsFacadeRecord(record))
         return false;
-    result = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+    result = record.ID;
     return true;
 }
 
-Guid AssetDatabaseQueryService::GetBackingAssetID(const AssetObjectId& objectID)
+Guid AssetDatabaseQueryService::GetBackingAssetID(const Guid& objectID)
 {
     if (!objectID.IsValid() || EnsureDatabaseLoaded())
         return Guid::Empty;
@@ -2216,7 +2215,7 @@ String AssetDatabaseQueryService::GetCanonicalSourcePath(const Guid& assetID)
         : String::Empty;
 }
 
-Asset* AssetDatabaseQueryService::LoadAssetPreview(const AssetObjectId& objectID)
+Asset* AssetDatabaseQueryService::LoadAssetPreview(const Guid& objectID)
 {
 #if USE_EDITOR
     return Content::LoadAsyncPreview(objectID, Asset::TypeInitializer);
@@ -3798,7 +3797,7 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
         {
             MemoryWriteStream sourceStream(256);
             const MaterialBase* baseMaterial = typed->GetBaseMaterial();
-            sourceStream.Write(baseMaterial ? baseMaterial->GetPersistentObjectId().Asset.Value : Guid::Empty);
+            sourceStream.Write(baseMaterial ? baseMaterial->GetPersistentObjectId() : Guid::Empty);
             typed->Params.Save(&sourceStream);
             if (MaterialInstanceDocument::DecodeLegacy(ToSpan(sourceStream), sourceJson, conversionError))
                 sourceJson.SetNull();

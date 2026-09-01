@@ -182,7 +182,7 @@ namespace FlaxEditor.Modules
                 Editor.Windows.GameWin.Show();
 
             var firstScene = Content.Settings.GameSettings.Load().FirstScene;
-            if (firstScene.ID.IsNull)
+            if (firstScene.ID == Guid.Empty)
             {
                 Editor.LogWarning("No First Scene assigned in Game Settings.");
                 if (Level.IsAnySceneLoaded)

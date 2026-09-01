@@ -244,7 +244,7 @@ namespace FlaxEditor.Content.Settings
         }
 
         [LibraryImport("FlaxEngine", EntryPoint = "GameSettingsInternal_GetGameSettingsObjectId")]
-        private static partial void GetGameSettingsObjectIdInternal(out AssetObjectId result);
+        private static partial void GetGameSettingsObjectIdInternal(out Guid result);
 
         /// <summary>
         /// Loads the game settings asset.

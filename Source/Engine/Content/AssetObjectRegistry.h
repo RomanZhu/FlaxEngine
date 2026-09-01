@@ -30,7 +30,7 @@ public:
         {
         }
 
-        Entry(const Guid& runtimeId, const AssetObjectId& objectId, const StringView& typeName, const StringView& path)
+        Entry(const Guid& runtimeId, const Guid& objectId, const StringView& typeName, const StringView& path)
             : Info(runtimeId, objectId, typeName, path)
         {
         }
@@ -39,19 +39,19 @@ public:
 private:
 #if USE_EDITOR
     CriticalSection _locker;
-    Dictionary<AssetObjectId, Entry> _objects;
-    Dictionary<Guid, AssetObjectId> _runtimeObjects;
+    Dictionary<Guid, Entry> _objects;
+    Dictionary<Guid, Guid> _runtimeObjects;
 #else
     RuntimeAssetCatalog _runtimeCatalog;
 #endif
 
 public:
     int32 Size() const;
-    AssetObjectId GetGameSettingsObject() const;
+    Guid GetGameSettingsObject() const;
     void Init();
 
-    /// <summary>Finds one object by its canonical composite identity.</summary>
-    bool FindObject(const AssetObjectId& objectId, AssetInfo& info);
+    /// <summary>Finds one object by its persistent GUID.</summary>
+    bool FindObject(const Guid& objectId, AssetInfo& info);
 
     /// <summary>Finds one object by a transient/runtime scripting object identifier.</summary>
     bool FindRuntimeObject(const Guid& runtimeId, AssetInfo& info);
@@ -60,7 +60,7 @@ public:
     bool FindObject(const StringView& path, AssetInfo& info);
 
     /// <summary>Gets an editor-private package path for one exact object.</summary>
-    StringView GetEditorObjectPath(const AssetObjectId& objectId) const;
+    StringView GetEditorObjectPath(const Guid& objectId) const;
 
     void GetAllRuntimeIds(Array<Guid, HeapAllocation>& result) const;
     void GetAllRuntimeIdsByTypeName(const StringView& typeName, Array<Guid, HeapAllocation>& result) const;
@@ -81,7 +81,7 @@ public:
     void RegisterTransientObject(const AssetHeader& header, const StringView& path);
     void RegisterTransientObject(const Guid& runtimeId, const StringView& typeName, const StringView& path);
 
-    bool RemoveTransientObject(const AssetObjectId& objectId, AssetInfo* info);
+    bool RemoveTransientObject(const Guid& objectId, AssetInfo* info);
     bool RemoveTransientRuntimeObject(const Guid& runtimeId, AssetInfo* info);
     bool RemoveTransientPackage(const StringView& path, AssetInfo* info);
     bool RenameTransientPackage(const StringView& oldPath, const StringView& newPath);

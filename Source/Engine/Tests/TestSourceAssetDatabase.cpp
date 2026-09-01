@@ -12,6 +12,18 @@
 
 namespace
 {
+    Guid LegacyCompositeGuidForTest(const AssetObjectId& object)
+    {
+        if (object.IsMainObject())
+            return object.Asset.Value;
+        const uint64 local = static_cast<uint64>(object.LocalId);
+        const uint32 low = static_cast<uint32>(local);
+        const uint32 high = static_cast<uint32>(local >> 32);
+        return Guid(object.Asset.Value.A ^ low, object.Asset.Value.B ^ high,
+                    object.Asset.Value.C ^ ((low << 13) | (low >> 19)),
+                    object.Asset.Value.D ^ ((high << 7) | (high >> 25)) ^ 0x9e3779b9u);
+    }
+
 #pragma pack(push, 1)
     struct TestNormalizedManifest
     {
@@ -76,10 +88,10 @@ TEST_CASE("Source asset database schema persists object GUID identity")
     state.Database.ProjectId = Guid::New();
     const Guid firstSource(101, 102, 103, 104);
     const int64 firstLocalId = 2;
-    const Guid compatibilityCollision = AssetObjectId(AssetGuid(firstSource), firstLocalId).ToRuntimeObjectGuid();
+    const Guid compatibilityCollision = LegacyCompositeGuidForTest(AssetObjectId(AssetGuid(firstSource), firstLocalId));
     REQUIRE(compatibilityCollision.IsValid());
     REQUIRE(compatibilityCollision != firstSource);
-    CHECK(AssetObjectId(AssetGuid(compatibilityCollision), 1).ToRuntimeObjectGuid() == compatibilityCollision);
+    CHECK(LegacyCompositeGuidForTest(AssetObjectId(AssetGuid(compatibilityCollision), 1)) == compatibilityCollision);
 
     state.Sources.Add(MakeSource(firstSource, TEXT("Content/First.fbx")));
     state.Sources.Add(MakeSource(compatibilityCollision, TEXT("Content/Second.fbx")));

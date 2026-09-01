@@ -31,17 +31,15 @@ namespace FlaxEditor
             return Guid.TryParse(guid, out var id) ? AssetDatabaseQueryService.GUIDToAssetPath(id) : string.Empty;
         }
 
-        /// <summary>Resolves a loaded main asset to its file GUID and local file ID.</summary>
-        public static bool TryGetGUIDAndLocalFileIdentifier(FlaxEngine.Object obj, out string guid, out long localId)
+        /// <summary>Resolves a loaded asset to its persistent GUID.</summary>
+        public static bool TryGetGUID(FlaxEngine.Object obj, out string guid)
         {
-            if (obj is Asset asset && AssetDatabaseQueryService.TryGetAssetObjectId(asset, out var id))
+            if (obj is Asset asset && AssetDatabaseQueryService.TryGetAssetGuid(asset, out var id))
             {
-                guid = id.Asset.ToString();
-                localId = id.LocalId;
+                guid = id.ToString();
                 return true;
             }
             guid = string.Empty;
-            localId = 0;
             return false;
         }
 
@@ -56,7 +54,7 @@ namespace FlaxEditor
         {
             if (!AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record) || record.SourceKind == AssetSourceKind.Folder)
                 return null;
-            return FlaxEngine.Content.LoadAssetAsync<T>(new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId));
+            return FlaxEngine.Content.LoadAssetAsync<T>(record.ID);
         }
 
         /// <summary>Loads the main asset at a canonical source path.</summary>
@@ -66,7 +64,7 @@ namespace FlaxEditor
         }
 
         /// <summary>Loads the object currently mapped to a persistent file GUID and local file ID.</summary>
-        public static Asset LoadAssetObject(AssetObjectId objectID)
+        public static Asset LoadAssetObject(Guid objectID)
         {
             return FlaxEngine.Content.LoadAssetAsync(objectID);
         }
@@ -83,7 +81,7 @@ namespace FlaxEditor
                 if (record.Status == AssetRecordStatus.MissingSource || record.SourceKind == AssetSourceKind.Folder ||
                     !string.Equals(Path.GetFullPath(record.SourcePath), physicalPath, StringComparison.OrdinalIgnoreCase))
                     continue;
-                var asset = FlaxEngine.Content.LoadAssetAsync<Asset>(new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId));
+                var asset = FlaxEngine.Content.LoadAssetAsync<Asset>(record.ID);
                 if (asset != null)
                     result.Add(asset);
             }

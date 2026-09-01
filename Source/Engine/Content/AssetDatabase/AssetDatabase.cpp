@@ -491,12 +491,17 @@ void AssetDatabase::QueryRecords(const AssetRecordQuery& query, Array<AssetRecor
         consider(_recordsByLabel.TryGet(NormalizeIndexKey(query.Label)));
     if (query.HasStatus)
         consider(_recordsByStatus.TryGet(query.Status));
+    AssetObjectId referencedQueryObject;
     if (query.ReferencedAsset.IsValid())
-        consider(_referencersByRuntimeReference.TryGet(query.ReferencedAsset));
+    {
+        const AssetRecord* referencedRecord = _records.TryGet(query.ReferencedAsset);
+        if (referencedRecord)
+            referencedQueryObject = AssetObjectId(AssetGuid(referencedRecord->SourceAssetID), referencedRecord->LocalId);
+        consider(referencedRecord ? _referencersByRuntimeReference.TryGet(referencedQueryObject) : nullptr);
+    }
     if (query.UsedByAsset.IsValid())
     {
-        const Guid* ownerId = _recordByObject.TryGet(query.UsedByAsset);
-        const AssetRecord* owner = ownerId ? _records.TryGet(*ownerId) : nullptr;
+        const AssetRecord* owner = _records.TryGet(query.UsedByAsset);
         if (owner)
         {
             for (const AssetObjectId& referenced : owner->RuntimeReferences)
@@ -548,7 +553,7 @@ void AssetDatabase::QueryRecords(const AssetRecordQuery& query, Array<AssetRecor
             if (!found)
                 return false;
         }
-        if (query.ReferencedAsset.IsValid() && !record.RuntimeReferences.Contains(query.ReferencedAsset))
+        if (query.ReferencedAsset.IsValid() && !record.RuntimeReferences.Contains(referencedQueryObject))
             return false;
         if (query.UsedByAsset.IsValid() && !usedByCandidates.Contains(record.ID))
             return false;

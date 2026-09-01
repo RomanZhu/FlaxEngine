@@ -5,7 +5,7 @@
 ResolvedArtifact ResolvedArtifact::Package(const AssetInfo& info)
 {
     ResolvedArtifact result;
-    result.ObjectID = info.ObjectID;
+    result.ObjectID = AssetObjectId::Main(AssetGuid(info.ObjectID));
     result.AssetID = info.ID;
     result.TypeName = info.TypeName;
     result.StoragePath = ArtifactStoragePath(info.Path);

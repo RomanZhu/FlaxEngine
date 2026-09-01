@@ -481,7 +481,7 @@ TEST_CASE("Texture processor Build writes a load-compatible runtime artifact onl
 
     AssetLoadLocation location;
     location.Info = AssetInfo(record.ID, Texture::TypeName, sourcePath);
-    location.Artifact.ObjectID = location.Info.ObjectID;
+    location.Artifact.ObjectID = AssetObjectId::Main(AssetGuid(location.Info.ObjectID));
     location.Artifact.AssetID = record.ID;
     location.Artifact.TypeName = Texture::TypeName;
     location.Artifact.StoragePath = ArtifactStoragePath(runtimePath);

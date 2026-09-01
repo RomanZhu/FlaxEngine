@@ -17,7 +17,6 @@
 #include "Loading/LoadingThread.h"
 #include "Loading/ContentLoadTask.h"
 #include "Loading/AssetObjectLoader.h"
-#include "Loading/LoadedAssetRuntimeIdIndex.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Core/LogContext.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -76,8 +75,7 @@ namespace
 {
     // Assets
     CriticalSection AssetsLocker;
-    Dictionary<AssetObjectId, Asset*> Assets;
-    LoadedAssetRuntimeIdIndex RuntimeAssetIndex;
+    Dictionary<Guid, Asset*> Assets;
     CriticalSection LoadedAssetsToInvokeLocker;
     Array<Asset*> LoadedAssetsToInvoke;
     Array<Asset*> ToUnload;
@@ -127,7 +125,7 @@ namespace
                 instance = nullptr;
                 return true;
             }
-            AssetInfo info(instanceId, location.Object, String(location.TypeName), sourcePath, location.Revision);
+            AssetInfo info(instanceId, location.InstanceID, String(location.TypeName), sourcePath, location.Revision);
             AssetLoadLocation contentLocation;
             contentLocation.Info = info;
             contentLocation.Artifact.ObjectID = location.Object;
@@ -419,7 +417,6 @@ bool ContentService::Init()
 
     // Init memory containers
     Assets.EnsureCapacity(2048);
-    RuntimeAssetIndex.EnsureCapacity(2048);
     LoadedAssetsToInvoke.EnsureCapacity(64);
 #if PLATFORM_THREADS_LIMIT > 1
     LoadCallAssets.EnsureCapacity(PLATFORM_THREADS_LIMIT);
@@ -754,7 +751,7 @@ AssetObjectRegistry* Content::GetObjectRegistry()
     return &ObjectRegistry;
 }
 
-AssetObjectId Content::GetRuntimeGameSettingsObject()
+Guid Content::GetRuntimeGameSettingsObject()
 {
     return ObjectRegistry.GetGameSettingsObject();
 }
@@ -790,45 +787,9 @@ bool Content::GetRuntimeAssetInfo(const Guid& runtimeId, AssetInfo& info)
 #endif
 }
 
-bool Content::GetAssetInfo(const AssetObjectId& id, AssetInfo& info)
+bool Content::GetAssetInfo(const Guid& id, AssetInfo& info)
 {
-    if (id.IsNull())
-        return false;
-#if USE_EDITOR
-    AssetRecord record;
-    if (AssetDatabase::Get().TryGetRecord(id, record))
-    {
-        if (record.Status == AssetRecordStatus::MissingSource)
-            return false;
-        AssetInfo builtinInfo;
-        if (BuiltinAssetCatalog::Get().TryGet(id, builtinInfo) || BuiltinAssetCatalog::Get().TryGet(record.ID, builtinInfo))
-        {
-            LOG(Error, "Project asset identity {0} collides with read-only built-in '{1}'.", id, builtinInfo.Path);
-            return false;
-        }
-        info = record.ToAssetInfo();
-        return true;
-    }
-
-    if (BuiltinAssetCatalog::Get().TryGet(id, info))
-        return true;
-
-    // Keep transient editor packages isolated from project authoring assets while
-    // allowing them to use the regular binary asset loader.
-    return ObjectRegistry.FindObject(id, info) && AssetPathPolicy::IsSameOrChild(info.Path, Globals::ProjectCacheFolder);
-#else
-    return ObjectRegistry.FindObject(id, info);
-#endif
-}
-
-AssetObjectId Content::ResolveRuntimeObjectId(const Guid& runtimeId)
-{
-    if (!runtimeId.IsValid())
-        return AssetObjectId();
-    AssetInfo info;
-    if (GetRuntimeAssetInfo(runtimeId, info) && info.ObjectID.IsValid())
-        return info.ObjectID;
-    return AssetObjectId();
+    return GetRuntimeAssetInfo(id, info);
 }
 
 bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
@@ -860,7 +821,7 @@ bool Content::GetAssetInfo(const StringView& path, AssetInfo& info)
 #endif
 }
 
-StringView Content::GetEditorAssetPath(const AssetObjectId& objectId)
+StringView Content::GetEditorAssetPath(const Guid& objectId)
 {
 #if USE_EDITOR
     const StringView builtinPath = BuiltinAssetCatalog::Get().GetStoragePath(objectId);
@@ -999,31 +960,37 @@ FLAXENGINE_API Asset* LoadRuntimeAsset(const Guid& runtimeId, const ScriptingTyp
     return Content::LoadRuntimeObjectAsync(runtimeId, type);
 }
 
-FLAXENGINE_API Asset* LoadAsset(const AssetObjectId& id, const ScriptingTypeHandle& type)
+FLAXENGINE_API Asset* LoadAsset(const Guid& id, const ScriptingTypeHandle& type)
 {
     return Content::LoadAssetAsync(id, type);
 }
 
-Asset* Content::LoadAssetAsync(const AssetObjectId& objectId, const MClass* type)
+Asset* Content::LoadAssetAsync(const Guid& objectId, const MClass* type)
 {
     CHECK_RETURN(type, nullptr);
     const auto scriptingType = Scripting::FindScriptingType(type->GetFullName());
     return scriptingType ? LoadAssetAsync(objectId, scriptingType) : nullptr;
 }
 
-Asset* Content::LoadAssetAsync(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+Asset* Content::LoadAssetAsync(const Guid& objectId, const ScriptingTypeHandle& type)
 {
-    return LoadAssetObjectAsyncInternal(objectId, type);
+    AssetObjectId internalId = AssetObjectId::Main(AssetGuid(objectId));
+#if USE_EDITOR
+    AssetRecord record;
+    if (AssetDatabase::Get().TryGetRecord(objectId, record))
+        internalId = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+#endif
+    return LoadAssetObjectAsyncInternal(internalId, type);
 }
 
 Asset* Content::LoadMainAssetAsync(const AssetGuid& asset, const MClass* type)
 {
-    return LoadAssetAsync(AssetObjectId::Main(asset), type);
+    return LoadAssetAsync(asset.Value, type);
 }
 
 Asset* Content::LoadMainAssetAsync(const AssetGuid& asset, const ScriptingTypeHandle& type)
 {
-    return LoadAssetAsync(AssetObjectId::Main(asset), type);
+    return LoadAssetAsync(asset.Value, type);
 }
 
 Asset* Content::LoadAsync(const StringView& path, const MClass* type)
@@ -1054,7 +1021,7 @@ Asset* Content::LoadAsync(const StringView& path, const ScriptingTypeHandle& typ
     AssetInfo assetInfo;
     if (GetAssetInfo(filePath, assetInfo))
     {
-        return LoadAssetAsync(assetInfo.ObjectID.IsValid() ? assetInfo.ObjectID : AssetObjectId::Main(AssetGuid(assetInfo.ID)), type);
+        return LoadAssetAsync(assetInfo.ObjectID.IsValid() ? assetInfo.ObjectID : assetInfo.ID, type);
     }
 
     return nullptr;
@@ -1082,7 +1049,7 @@ Array<Asset*> Content::GetAssets(const MClass* type)
     return assets;
 }
 
-const Dictionary<AssetObjectId, Asset*>& Content::GetAssetsRaw()
+const Dictionary<Guid, Asset*>& Content::GetAssetsRaw()
 {
     AssetsLocker.Lock();
     AssetsLocker.Unlock();
@@ -1124,23 +1091,10 @@ Asset* Content::GetAsset(const StringView& outputPath)
 
 Asset* Content::GetRuntimeObject(const Guid& runtimeId)
 {
-    if (!runtimeId.IsValid())
-        return nullptr;
-    {
-        ScopeLock lock(AssetsLocker);
-        AssetObjectId objectId;
-        Asset* result = nullptr;
-        if (RuntimeAssetIndex.TryGetUnique(runtimeId, objectId))
-            Assets.TryGet(objectId, result);
-        if (result)
-            return result;
-        if (RuntimeAssetIndex.Contains(runtimeId))
-            return nullptr;
-    }
-    return GetAsset(ResolveRuntimeObjectId(runtimeId));
+    return GetAsset(runtimeId);
 }
 
-Asset* Content::GetAsset(const AssetObjectId& objectId)
+Asset* Content::GetAsset(const Guid& objectId)
 {
     if (!objectId.IsValid())
         return nullptr;
@@ -1853,7 +1807,6 @@ Asset* Content::CreateVirtualAsset(const ScriptingTypeHandle& type)
     AssetsLocker.Lock();
     ASSERT(!Assets.ContainsKey(asset->GetPersistentObjectId()));
     Assets.Add(asset->GetPersistentObjectId(), asset);
-    RuntimeAssetIndex.Add(asset->GetID(), asset->GetPersistentObjectId());
     AssetsLocker.Unlock();
 
     return asset;
@@ -2002,10 +1955,9 @@ void Content::onAssetLoaded(Asset* asset)
 void Content::onAssetUnload(Asset* asset)
 {
     // This is called by the asset on unloading
-    LoadedObjects.Remove(asset->GetPersistentObjectId(), asset);
+    LoadedObjects.Remove(asset->_internalObjectId, asset);
     ScopeLock locker(AssetsLocker);
     Assets.Remove(asset->GetPersistentObjectId());
-    RuntimeAssetIndex.Remove(asset->GetID(), asset->GetPersistentObjectId());
     UnloadQueue.Remove(asset);
     LoadedAssetsToInvoke.Remove(asset);
 #if USE_EDITOR
@@ -2017,12 +1969,11 @@ void Content::onAssetUnload(Asset* asset)
 void Content::onAssetChangeId(Asset* asset, const Guid& oldId, const Guid& newId)
 {
     ScopeLock locker(AssetsLocker);
-    const AssetObjectId oldObjectId = asset->_persistentObjectId;
-    Assets.Remove(oldObjectId);
-    RuntimeAssetIndex.Remove(oldId, oldObjectId);
-    asset->_persistentObjectId = AssetObjectId::Main(AssetGuid(newId));
+    const AssetObjectId oldObjectId = asset->_internalObjectId;
+    Assets.Remove(asset->_persistentObjectId);
+    asset->_persistentObjectId = newId;
+    asset->_internalObjectId = AssetObjectId::Main(AssetGuid(newId));
     Assets.Add(asset->_persistentObjectId, asset);
-    RuntimeAssetIndex.Add(newId, asset->_persistentObjectId);
 #if USE_EDITOR
     if (PendingDependencies.ContainsKey(oldId))
     {
@@ -2103,7 +2054,7 @@ bool Content::IsPassiveLoad()
     return PassiveLoadDepth > 0;
 }
 
-Asset* Content::LoadAsyncPreview(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
+Asset* Content::LoadAsyncPreview(const Guid& objectId, const ScriptingTypeHandle& type)
 {
     BeginPassiveLoad();
     Asset* result = LoadAssetAsync(objectId, type);
@@ -2113,15 +2064,7 @@ Asset* Content::LoadAsyncPreview(const AssetObjectId& objectId, const ScriptingT
 
 Asset* Content::LoadRuntimeObjectAsync(const Guid& runtimeId, const ScriptingTypeHandle& type)
 {
-    Asset* loaded = GetRuntimeObject(runtimeId);
-    if (!loaded)
-    {
-        ScopeLock lock(AssetsLocker);
-        if (RuntimeAssetIndex.Contains(runtimeId))
-            return nullptr;
-    }
-    const AssetObjectId objectId = loaded ? loaded->GetPersistentObjectId() : ResolveRuntimeObjectId(runtimeId);
-    return LoadAssetObjectAsyncInternal(objectId, type);
+    return LoadAssetAsync(runtimeId, type);
 }
 
 Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, const ScriptingTypeHandle& type)
@@ -2130,11 +2073,12 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
         return nullptr;
     PROFILE_MEM(Content);
     const bool passiveLoad = IsPassiveLoad();
+    const Guid persistentObjectId = objectId.Asset.Value;
 
     // Check if asset has been already loaded
     Asset* result = nullptr;
     AssetsLocker.Lock();
-    Assets.TryGet(objectId, result);
+    Assets.TryGet(persistentObjectId, result);
     if (result)
     {
         AssetsLocker.Unlock();
@@ -2166,7 +2110,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
         }
         {
             ScopeLock lock(AssetsLocker);
-            Assets.TryGet(objectId, result);
+            Assets.TryGet(persistentObjectId, result);
         }
         return result;
     }
@@ -2186,14 +2130,14 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
     AssetLoadLocation loadLocation;
     bool hasDirectPackageLocation = false;
 #if USE_EDITOR
-    if (BuiltinAssetCatalog::Get().TryGet(objectId, assetInfo))
+    if (BuiltinAssetCatalog::Get().TryGet(objectId.Asset.Value, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasDirectPackageLocation = true;
     }
     AssetRecord canonicalRecord;
     const bool isCanonicalProjectObject = AssetDatabase::Get().TryGetRecord(objectId, canonicalRecord);
-    if (!hasDirectPackageLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId, assetInfo))
+    if (!hasDirectPackageLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId.Asset.Value, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
         hasDirectPackageLocation = true;
@@ -2202,7 +2146,7 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
 
     if (hasDirectPackageLocation)
     {
-        if (assetInfo.ObjectID != objectId)
+        if (assetInfo.ObjectID != objectId.Asset.Value)
         {
             LOG(Error, "Resolved asset object identity changed from {0} to {1}.", objectId, assetInfo.ObjectID);
             LOAD_FAILED();
@@ -2236,16 +2180,18 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
             LOAD_FAILED();
         }
         result = static_cast<Asset*>(objectResult.Instance);
-        assetInfo = AssetInfo(result->GetID(), objectId, result->GetTypeName(), result->GetPath(), objectResult.Revision);
+        assetInfo = AssetInfo(result->GetID(), result->GetPersistentObjectId(), result->GetTypeName(), result->GetPath(), objectResult.Revision);
     }
     if (!result)
     {
         LOG(Error, "Cannot create asset object. Info: {0}", assetInfo.ToString());
         LOAD_FAILED();
     }
+    result->_persistentObjectId = assetInfo.ObjectID;
+    result->_internalObjectId = objectId;
     result->_isPassiveLoad = passiveLoad;
     ASSERT(result->GetID() == assetInfo.ID);
-    ASSERT(result->GetPersistentObjectId() == objectId);
+    ASSERT(result->GetPersistentObjectId() == assetInfo.ObjectID);
 #if ASSETS_LOADING_EXTRA_VERIFICATION
     if (IsAssetTypeIdInvalid(type, result->GetTypeHandle()) && !result->Is(type))
     {
@@ -2260,10 +2206,9 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
     // Register asset
     AssetsLocker.Lock();
 #if ASSETS_LOADING_EXTRA_VERIFICATION
-    ASSERT(!Assets.ContainsKey(objectId));
+    ASSERT(!Assets.ContainsKey(persistentObjectId));
 #endif
-    Assets.Add(objectId, result);
-    RuntimeAssetIndex.Add(result->GetID(), objectId);
+    Assets.Add(persistentObjectId, result);
 
     // Start asset loading
     result->startLoading();

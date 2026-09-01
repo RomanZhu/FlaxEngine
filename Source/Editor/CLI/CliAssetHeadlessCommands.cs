@@ -237,33 +237,23 @@ namespace FlaxEditor
             }
         }
 
-        private static AssetObjectId ParseObjectId(string value)
+        private static Guid ParseObjectId(string value)
         {
-            if (AssetObjectId.TryParse(value, out var objectId))
-                return objectId;
-            var separator = value?.LastIndexOf(':') ?? -1;
-            if (separator > 0 && Guid.TryParse(value.Substring(0, separator), out var compositeGuid) && compositeGuid != Guid.Empty &&
-                long.TryParse(value.Substring(separator + 1), NumberStyles.Integer, CultureInfo.InvariantCulture, out var localId) && localId != 0)
-                return new AssetObjectId(new AssetGuid(compositeGuid), localId);
             if (Guid.TryParse(value, out var guid) && guid != Guid.Empty)
-                return AssetObjectId.Main(new AssetGuid(guid));
-            throw new ArgumentException($"Asset identity '{value}' must be guid or guid:fileId.", nameof(value));
+                return guid;
+            throw new ArgumentException($"Asset identity '{value}' must be a persistent GUID.", nameof(value));
         }
 
-        private static AssetDatabaseRecordInfo ResolveRecord(AssetObjectId objectId)
+        private static AssetDatabaseRecordInfo ResolveRecord(Guid objectId)
         {
-            var records = AssetDatabaseQueryService.GetRecords();
-            for (var i = 0; i < records.Length; i++)
-            {
-                if (records[i].SourceAssetID == objectId.Asset.Value && records[i].LocalId == objectId.LocalId)
-                    return records[i];
-            }
+            if (AssetDatabaseQueryService.TryGetRecord(objectId, out var record))
+                return record;
             throw new FileNotFoundException($"Asset object '{objectId}' is not present in the source database.");
         }
 
-        private static AssetObjectId ObjectId(AssetDatabaseRecordInfo record)
+        private static Guid ObjectId(AssetDatabaseRecordInfo record)
         {
-            return new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId);
+            return record.ID;
         }
 
         private static bool IsArtifactSource(AssetDatabaseRecordInfo record)

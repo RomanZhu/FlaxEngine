@@ -19,7 +19,7 @@ namespace
     {
         AssetObjectLoadLocation result;
         result.Object = object;
-        result.InstanceID = object.ToRuntimeObjectGuid();
+        result.InstanceID = object.Asset.Value;
         result.StorageKind = AssetObjectStorageKind::EditorArtifact;
         result.TypeName = "FlaxEngine.Texture";
         result.StorageName = "artifact/object.bin";
@@ -220,7 +220,7 @@ TEST_CASE("Cooked object loader resolves persistent GUID entries through runtime
 {
     const AssetObjectId object = AssetObjectId::Main(AssetGuid(Guid(103, 0, 0, 0)));
     RuntimeAssetCatalogEntry entry;
-    entry.Object = object;
+    entry.Object = object.Asset.Value;
     entry.TypeName = "FlaxEngine.Texture";
     entry.PackageName = "base/objects.pak";
     entry.Offset = 128;

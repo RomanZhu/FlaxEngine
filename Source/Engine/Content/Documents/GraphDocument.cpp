@@ -1112,12 +1112,9 @@ namespace
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph GUID value is invalid."));
             if (typeName == "AssetReference")
             {
-                const auto fileId = value.FindMember("fileId");
-                if (fileId == value.MemberEnd() || !fileId->value.IsInt64() || (id.IsValid() && fileId->value.GetInt64() == 0))
-                    return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph asset references require a persistent fileId."));
-                result.SetAsset(id.IsValid()
-                    ? Content::LoadAssetAsync<Asset>(AssetObjectId(AssetGuid(id), fileId->value.GetInt64()))
-                    : nullptr);
+                if (value.HasMember("fileId"))
+                    return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Graph asset references must use GUID-only identity."));
+                result.SetAsset(id.IsValid() ? Content::LoadAssetAsync<Asset>(id) : nullptr);
             }
             else if (typeName == "ObjectReference")
                 result.SetObject(FindObject(id, ScriptingObject::GetStaticClass()));

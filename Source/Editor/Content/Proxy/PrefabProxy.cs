@@ -19,7 +19,7 @@ namespace FlaxEditor.Content
     {
         private sealed class PrefabVariantCreateInfo
         {
-            public AssetObjectId PrefabObjectId;
+            public Guid PrefabObjectId;
         }
 
         private static bool CanCreatePrefabAssets()

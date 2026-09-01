@@ -14,7 +14,7 @@ namespace
     {
         PreparedAsset prepared;
         prepared.ObjectID = AssetObjectId::Main(AssetGuid(Guid(1, 2, 3, 4)));
-        prepared.AssetID = prepared.ObjectID.ToRuntimeObjectGuid();
+        prepared.AssetID = prepared.ObjectID.Asset.Value;
         prepared.OutputType = TEXT("Tests.PublishedAsset");
         prepared.DatabaseRevision = 12;
         prepared.SettingsHash = ContentHash::Compute("settings", 8);

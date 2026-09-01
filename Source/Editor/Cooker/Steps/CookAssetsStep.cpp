@@ -1168,7 +1168,7 @@ public:
         objectIds.Resize(count);
         for (int32 i = 0; i < count; i++)
         {
-            objectIds[i] = addedEntries[i]->Info.ObjectID;
+            objectIds[i] = AssetObjectId::Main(AssetGuid(addedEntries[i]->Info.ObjectID));
             if (!objectIds[i].IsValid())
             {
                 data.Error(TEXT("Cannot package an asset without an exact persistent object identity."));
@@ -1332,7 +1332,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         BUILD_STEP_CANCEL_CHECK;
         data.StepProgress(Step1Info, Math::Lerp(Step1ProgressStart, Step1ProgressEnd, static_cast<float>(subStepIndex++) / data.Assets.Count()));
         const AssetObjectId objectId = i->Item;
-        Guid assetId = objectId.ToRuntimeObjectGuid();
+        Guid assetId = objectId.Asset.Value;
         const bool isBuiltin = data.BuiltinRootAssets.Contains(objectId);
 
         // Canonical sources are already target-processed artifacts. Resolve exact bytes and feed them
@@ -1346,11 +1346,11 @@ bool CookAssetsStep::Perform(CookingData& data)
             assetId = canonicalRecord.ID;
         }
 
-        // Package and catalog records are keyed by the persistent object GUID. AssetObjectId is
-        // retained here only as the temporary loading bridge until the public GUID-only API lands.
+        // Package and catalog records are keyed by the persistent object GUID. The composite key
+        // remains private to source-record and artifact reconciliation in this cooker pass.
         auto& e = AssetsRegistry[objectId];
         e.Info.ID = assetId;
-        e.Info.ObjectID = AssetObjectId::Main(AssetGuid(assetId));
+        e.Info.ObjectID = assetId;
         if (foundCanonical)
         {
             if (canonicalRecord.SourceKind == AssetSourceKind::Folder)
@@ -1408,7 +1408,7 @@ bool CookAssetsStep::Perform(CookingData& data)
             ASSERT(cachedEntry->ID == assetId);
 
             // Get actual asset info
-            if (isBuiltin ? Content::GetRuntimeAssetInfo(assetId, assetInfo) : Content::GetAssetInfo(objectId, assetInfo))
+            if (isBuiltin ? Content::GetRuntimeAssetInfo(assetId, assetInfo) : Content::GetAssetInfo(assetId, assetInfo))
             {
                 // Ensure that cached entry is valid
                 if (cachedEntry->TypeName == assetInfo.TypeName)
@@ -1444,7 +1444,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         }
 
         // Load asset (and keep ref)
-        assetRef = isBuiltin ? Content::LoadRuntimeObjectAsync<Asset>(assetId) : Content::LoadAssetAsync<Asset>(objectId);
+        assetRef = isBuiltin ? Content::LoadRuntimeObjectAsync<Asset>(assetId) : Content::LoadAssetAsync<Asset>(assetId);
         if (assetRef == nullptr)
         {
             LOG(Error, "Failed to load asset {} included in build", assetId);
@@ -1539,7 +1539,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         bytes[length + 401] = 0;
         *(int32*)(bytes.Get() + 800) = (int32)gameFlags;
         *(int32*)(bytes.Get() + 804) = contentKey;
-        *(Guid*)(bytes.Get() + 808) = gameSettings->SplashScreen.IsValid() ? gameSettings->SplashScreen.ToRuntimeObjectGuid() : Guid::Empty;
+        *(Guid*)(bytes.Get() + 808) = gameSettings->SplashScreen.IsValid() ? gameSettings->SplashScreen.GetID() : Guid::Empty;
         Encryption::EncryptBytes(bytes.Get(), bytes.Count());
         stream->Write(bytes);
 
@@ -1606,8 +1606,8 @@ bool CookAssetsStep::Perform(CookingData& data)
         else
         {
             hasAssetInfo = isBuiltin
-                ? Content::GetRuntimeAssetInfo(i->Item.ToRuntimeObjectGuid(), assetInfo)
-                : Content::GetAssetInfo(i->Item, assetInfo);
+                ? Content::GetRuntimeAssetInfo(i->Item.Asset.Value, assetInfo)
+                : Content::GetAssetInfo(i->Item.Asset.Value, assetInfo);
         }
         if (hasAssetInfo)
         {
@@ -1743,7 +1743,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         if (packageName.StartsWith(TEXT("Content/")))
             packageName = packageName.Right(packageName.Length() - 8);
         RuntimeAssetCatalogEntry catalogEntry;
-        catalogEntry.Object = AssetObjectId::Main(AssetGuid(packaged->Info.ID));
+        catalogEntry.Object = packaged->Info.ID;
         catalogEntry.TypeName = StringAnsi(packaged->Info.TypeName);
         catalogEntry.PackageName = StringAnsi(packageName);
         catalogEntry.Offset = 0;
@@ -1762,7 +1762,7 @@ bool CookAssetsStep::Perform(CookingData& data)
                         data.Error(String::Format(TEXT("Runtime dependency {0} has no persistent object GUID."), dependency.ToString()));
                         return true;
                     }
-                    catalogEntry.Dependencies.Add(AssetObjectId::Main(AssetGuid(dependencyPackage->Info.ID)));
+                    catalogEntry.Dependencies.Add(dependencyPackage->Info.ID);
                 }
                 break;
             }
@@ -1783,7 +1783,7 @@ bool CookAssetsStep::Perform(CookingData& data)
     }
 
     Array<RuntimeAssetCatalogAlias> catalogAliases;
-    Dictionary<ContentHash, AssetObjectId> aliasesByHash;
+    Dictionary<ContentHash, Guid> aliasesByHash;
     for (auto i = AssetPathsMapping.Begin(); i.IsNotEnd(); ++i)
     {
         if (!FileSystem::IsRelative(i->Key))
@@ -1794,8 +1794,8 @@ bool CookAssetsStep::Perform(CookingData& data)
         const CookerPackagedAssetEntry* packaged = AssetsRegistry.TryGet(i->Value);
         if (!packaged || !packaged->Info.ID.IsValid())
             continue;
-        const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(packaged->Info.ID));
-        const AssetObjectId* existing = aliasesByHash.TryGet(pathHash);
+        const Guid persistentObject = packaged->Info.ID;
+        const Guid* existing = aliasesByHash.TryGet(pathHash);
         if (existing && *existing != persistentObject)
         {
             data.Error(TEXT("Two runtime asset paths collide after portable normalization."));
@@ -1819,7 +1819,11 @@ bool CookAssetsStep::Perform(CookingData& data)
     }
     RuntimeAssetCatalog runtimeCatalog;
     const String runtimeCatalogPath = data.DataOutputPath / TEXT("Content/RuntimeAssetCatalog.bin");
-    const AssetObjectId gameSettingsObject = GameSettings::GetGameSettingsObjectId();
+    const Guid gameSettingsGuid = GameSettings::GetGameSettingsObjectId();
+    AssetRecord gameSettingsRecord;
+    const AssetObjectId gameSettingsObject = AssetDatabase::Get().TryGetRecord(gameSettingsGuid, gameSettingsRecord)
+        ? AssetObjectId(AssetGuid(gameSettingsRecord.SourceAssetID), gameSettingsRecord.LocalId)
+        : AssetObjectId();
     if (!gameSettingsObject.IsValid())
     {
         data.Error(TEXT("Cannot create runtime catalog without an exact GameSettings bootstrap object."));
@@ -1836,7 +1840,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         data.Error(TEXT("Cannot create runtime catalog because GameSettings has no persistent object GUID."));
         return true;
     }
-    runtimeCatalog.SetGameSettingsObject(AssetObjectId::Main(AssetGuid(packagedGameSettings->Info.ID)));
+    runtimeCatalog.SetGameSettingsObject(packagedGameSettings->Info.ID);
     if (runtimeCatalog.SaveAtomic(runtimeCatalogPath, diagnostic))
     {
         data.Error(String::Format(TEXT("Failed to create binary runtime asset catalog. {0}"), diagnostic.Message));

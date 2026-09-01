@@ -352,13 +352,25 @@ void CookingData::AddRootAsset(const AssetObjectId& id)
     RootAssets.Add(id);
 }
 
+void CookingData::AddRootAsset(const Guid& id)
+{
+    AssetRecord record;
+    if (!id.IsValid() || !AssetDatabase::Get().TryGetRecord(id, record))
+    {
+        RootCollectionFailed = true;
+        LOG(Error, "Cannot resolve asset GUID {0} as a cooker root.", id);
+        return;
+    }
+    AddRootAsset(AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId));
+}
+
 void CookingData::AddRootEngineAsset(const String& internalPath)
 {
     const String path = Globals::EngineContentFolder / internalPath + ASSET_FILES_EXTENSION_WITH_DOT;
     AssetInfo info;
     if (Content::GetAssetInfo(path, info))
     {
-        const AssetObjectId object = info.ObjectID.IsValid() ? info.ObjectID : AssetObjectId::Main(AssetGuid(info.ID));
+        const AssetObjectId object = AssetObjectId::Main(AssetGuid(info.ObjectID.IsValid() ? info.ObjectID : info.ID));
         RootAssets.Add(object);
         BuiltinRootAssets.Add(object);
     }
@@ -682,9 +694,13 @@ void GameCookerImpl::OnCollectAssets(HashSet<AssetObjectId>& assets)
 
     if (list)
     {
-        auto ids = MUtils::ToSpan<AssetObjectId>(list);
+        auto ids = MUtils::ToSpan<Guid>(list);
         for (int32 i = 0; i < ids.Length(); i++)
-            assets.Add(ids[i]);
+        {
+            AssetRecord record;
+            if (AssetDatabase::Get().TryGetRecord(ids[i], record))
+                assets.Add(AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId));
+        }
     }
 }
 

@@ -4,13 +4,13 @@ using System;
 
 namespace FlaxEngine
 {
-    partial struct SceneReference : IComparable, IComparable<AssetObjectId>, IComparable<SceneReference>
+    partial struct SceneReference : IComparable, IComparable<Guid>, IComparable<SceneReference>
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="SceneReference"/> class.
         /// </summary>
         /// <param name="id">The persistent identifier of the scene asset object.</param>
-        public SceneReference(AssetObjectId id)
+        public SceneReference(Guid id)
         {
             ID = id;
         }
@@ -18,7 +18,7 @@ namespace FlaxEngine
         /// <summary>Initializes a reference to a scene source's main object.</summary>
         public SceneReference(AssetGuid asset)
         {
-            ID = AssetObjectId.Main(asset);
+            ID = asset.Value;
         }
 
         /// <summary>
@@ -49,7 +49,7 @@ namespace FlaxEngine
         /// <param name="left">The left value.</param>
         /// <param name="right">The right value.</param>
         /// <returns>True if values are equal, otherwise false.</returns>
-        public static bool operator ==(SceneReference left, AssetObjectId right)
+        public static bool operator ==(SceneReference left, Guid right)
         {
             return left.ID == right;
         }
@@ -60,7 +60,7 @@ namespace FlaxEngine
         /// <param name="left">The left value.</param>
         /// <param name="right">The right value.</param>
         /// <returns>True if values are not equal, otherwise false.</returns>
-        public static bool operator !=(SceneReference left, AssetObjectId right)
+        public static bool operator !=(SceneReference left, Guid right)
         {
             return left.ID != right;
         }
@@ -68,7 +68,7 @@ namespace FlaxEngine
         /// <inheritdoc />
         public int CompareTo(object obj)
         {
-            if (obj is AssetObjectId id)
+            if (obj is Guid id)
                 return CompareTo(id);
             if (obj is SceneReference other)
                 return CompareTo(other);
@@ -76,10 +76,9 @@ namespace FlaxEngine
         }
 
         /// <inheritdoc />
-        public int CompareTo(AssetObjectId other)
+        public int CompareTo(Guid other)
         {
-            int source = ID.Asset.Value.CompareTo(other.Asset.Value);
-            return source != 0 ? source : ID.LocalId.CompareTo(other.LocalId);
+            return ID.CompareTo(other);
         }
 
         /// <inheritdoc />
@@ -91,7 +90,7 @@ namespace FlaxEngine
         /// <inheritdoc />
         public override bool Equals(object obj)
         {
-            if (obj is AssetObjectId id)
+            if (obj is Guid id)
                 return ID == id;
             if (obj is SceneReference other)
                 return ID == other.ID;

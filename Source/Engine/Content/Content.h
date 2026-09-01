@@ -58,7 +58,7 @@ public:
     static AssetObjectRegistry* GetObjectRegistry();
 
     /// <summary>Gets the exact GameSettings bootstrap object from the cooked runtime catalog.</summary>
-    static AssetObjectId GetRuntimeGameSettingsObject();
+    static Guid GetRuntimeGameSettingsObject();
 
 public:
     /// <summary>
@@ -69,11 +69,8 @@ public:
     /// <returns>True if found any asset, otherwise false.</returns>
     API_FUNCTION() static bool GetRuntimeAssetInfo(const Guid& runtimeId, API_PARAM(Out) AssetInfo& info);
 
-    /// <summary>Finds asset information by persistent source and local file identity. Cooked builds resolve through the runtime catalog registry.</summary>
-    API_FUNCTION() static bool GetAssetInfo(const AssetObjectId& id, API_PARAM(Out) AssetInfo& info);
-
-    /// <summary>Resolves a serialized runtime asset GUID back to its persistent source and local file identity.</summary>
-    static AssetObjectId ResolveRuntimeObjectId(const Guid& runtimeId);
+    /// <summary>Finds asset information by persistent object GUID.</summary>
+    API_FUNCTION() static bool GetAssetInfo(const Guid& id, API_PARAM(Out) AssetInfo& info);
 
     /// <summary>
     /// Finds the asset info by path.
@@ -88,7 +85,7 @@ public:
     /// </summary>
     /// <param name="objectId">The persistent object identity.</param>
     /// <returns>The asset path, or empty if failed to find.</returns>
-    API_FUNCTION() static StringView GetEditorAssetPath(const AssetObjectId& objectId);
+    API_FUNCTION() static StringView GetEditorAssetPath(const Guid& objectId);
 
     /// <summary>
     /// Finds all the asset IDs. Uses asset registry.
@@ -160,7 +157,7 @@ public:
     /// Gets the raw dictionary of assets (loaded or during load).
     /// </summary>
     /// <returns>The collection of assets.</returns>
-    static const Dictionary<AssetObjectId, Asset*, HeapAllocation>& GetAssetsRaw();
+    static const Dictionary<Guid, Asset*, HeapAllocation>& GetAssetsRaw();
 
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
@@ -178,11 +175,11 @@ public:
     /// <returns>Loaded asset or null if cannot</returns>
     static Asset* LoadRuntimeObjectAsync(const Guid& runtimeId, const ScriptingTypeHandle& type);
 
-    /// <summary>Loads one persistent imported object without collapsing its local file identity. Cooked builds require an exact runtime catalog entry.</summary>
-    API_FUNCTION() static Asset* LoadAssetAsync(const AssetObjectId& objectId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
+    /// <summary>Loads one persistent asset object by GUID.</summary>
+    API_FUNCTION() static Asset* LoadAssetAsync(const Guid& objectId, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
 
     /// <summary>Loads one persistent imported object without collapsing its local file identity. Cooked builds require an exact runtime catalog entry.</summary>
-    static Asset* LoadAssetAsync(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
+    static Asset* LoadAssetAsync(const Guid& objectId, const ScriptingTypeHandle& type);
 
     /// <summary>Loads the explicit main object for a source asset.</summary>
     API_FUNCTION() static Asset* LoadMainAssetAsync(const AssetGuid& asset, API_PARAM(Attributes="TypeReference(typeof(Asset))") const MClass* type);
@@ -192,7 +189,7 @@ public:
 
     /// <summary>Loads one persistent imported object without collapsing its local file identity.</summary>
     template<typename T>
-    FORCE_INLINE static T* LoadAssetAsync(const AssetObjectId& objectId)
+    FORCE_INLINE static T* LoadAssetAsync(const Guid& objectId)
     {
         return static_cast<T*>(LoadAssetAsync(objectId, T::TypeInitializer));
     }
@@ -205,7 +202,7 @@ public:
     }
 
     /// <summary>Loads an exact asset object for passive editor presentation without scheduling artifact builds, including dependencies.</summary>
-    static Asset* LoadAsyncPreview(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
+    static Asset* LoadAsyncPreview(const Guid& objectId, const ScriptingTypeHandle& type);
 
     /// <summary>
     /// Loads asset and holds it until it won't be referenced by any object. Returns null if asset is missing. Actual asset data loading is performed on a other thread in async.
@@ -299,9 +296,9 @@ public:
         return nullptr;
     }
 
-    /// <summary>Loads and waits for one persistent imported object without collapsing its local file identity.</summary>
+    /// <summary>Loads and waits for one persistent asset object by GUID.</summary>
     template<typename T>
-    static T* LoadAsset(const AssetObjectId& objectId, double timeoutInMilliseconds = 30000.0)
+    static T* LoadAsset(const Guid& objectId, double timeoutInMilliseconds = 30000.0)
     {
         auto asset = LoadAssetAsync<T>(objectId);
         if (asset && !asset->WaitForLoaded(timeoutInMilliseconds))
@@ -366,7 +363,7 @@ public:
     API_FUNCTION() static Asset* GetRuntimeObject(const Guid& runtimeId);
 
     /// <summary>Finds the loaded asset with the exact persistent object identity.</summary>
-    API_FUNCTION() static Asset* GetAsset(const AssetObjectId& objectId);
+    API_FUNCTION() static Asset* GetAsset(const Guid& objectId);
 
 public:
     /// <summary>

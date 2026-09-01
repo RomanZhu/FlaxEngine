@@ -35,6 +35,7 @@ bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectI
 {
     location = AssetObjectLoadLocation();
     location.Object = object;
+    location.InstanceID = object.Asset.Value;
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(object, record))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, object,
@@ -51,7 +52,7 @@ bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectI
     AssetLoadLocation resolved;
     if (ArtifactResolver::Get().ResolveLoadLocation(request, resolved, diagnostic))
         return true;
-    if (resolved.Info.ObjectID != object || !resolved.Artifact.IsExact || resolved.Artifact.IsLastGood ||
+    if (resolved.Info.ObjectID != record.ID || !resolved.Artifact.IsExact || resolved.Artifact.IsLastGood ||
         resolved.Artifact.StorageKind != ArtifactStorageKind::Generated)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, object,
             TEXT("Editor artifact resolution did not return the exact requested object publication."));
@@ -81,9 +82,10 @@ bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId
     location = AssetObjectLoadLocation();
     location.Object = object;
     RuntimeAssetCatalogEntry entry;
-    if (!_catalog.TryGet(object, entry) || _revision == 0)
+    if (!_catalog.TryGet(object.Asset.Value, entry) || _revision == 0)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, object,
             TEXT("Runtime catalog has no exact entry for the requested asset object."));
+    location.InstanceID = entry.Object;
     location.StorageKind = AssetObjectStorageKind::RuntimePackage;
     location.TypeName = entry.TypeName;
     location.StorageName = String(entry.PackageName);
@@ -93,7 +95,9 @@ bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId
     location.Compression = static_cast<byte>(entry.Compression);
     location.Content = entry.Content;
     location.Revision = _revision;
-    location.Dependencies = entry.Dependencies;
+    location.Dependencies.EnsureCapacity(entry.Dependencies.Count());
+    for (const Guid& dependency : entry.Dependencies)
+        location.Dependencies.Add(AssetObjectId::Main(AssetGuid(dependency)));
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

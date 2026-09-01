@@ -212,7 +212,7 @@ namespace FlaxEditor.Modules
 
         private static bool TryGetMainRecord(Guid sourceId, out AssetDatabaseRecordInfo record)
         {
-            return AssetDatabaseQueryService.TryGetRecord(new AssetObjectId(new AssetGuid(sourceId), 1), out record);
+            return AssetDatabaseQueryService.TryGetRecord(sourceId, out record);
         }
 
         private static bool TryGetMainRecord(string path, out AssetDatabaseRecordInfo record)
@@ -461,12 +461,6 @@ namespace FlaxEditor.Modules
             return TryGetMainRecord(id, out record);
         }
 
-        /// <summary>Gets the immutable database record for a persistent source object identity.</summary>
-        public bool TryGetAssetDatabaseRecord(AssetObjectId id, out AssetDatabaseRecordInfo record)
-        {
-            return AssetDatabaseQueryService.TryGetRecord(id, out record);
-        }
-
         /// <summary>Gets the immutable main canonical database record for a source path.</summary>
         public bool TryGetAssetDatabaseRecord(string path, out AssetDatabaseRecordInfo record)
         {
@@ -504,7 +498,7 @@ namespace FlaxEditor.Modules
             // Handle deleted asset
             if (asset.ShouldDeleteFileOnUnload)
             {
-                var item = AssetDatabaseQueryService.TryGetAssetObjectId(asset, out var objectId) ? FindAsset(objectId) : null;
+                var item = AssetDatabaseQueryService.TryGetAssetGuid(asset, out var objectId) ? FindAsset(objectId) : null;
                 if (item != null)
                 {
                     // Close all asset editors
@@ -744,7 +738,7 @@ namespace FlaxEditor.Modules
             }
 
             if (TryGetMainRecord(path, out var record) && record.SourceKind != AssetSourceKind.Folder)
-                return FindAsset(new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId));
+                return FindAsset(record.ID);
 
             return null;
         }
@@ -759,9 +753,8 @@ namespace FlaxEditor.Modules
             if (id == Guid.Empty)
                 return null;
 
-            var mainObject = new AssetObjectId(new AssetGuid(id), 1);
-            if (AssetWorkspaceQuery.TryGet(mainObject, out _))
-                return FindAsset(mainObject);
+            if (AssetWorkspaceQuery.TryGet(id, out _))
+                return FindAsset(id);
 
             foreach (var project in Projects)
             {
@@ -782,17 +775,16 @@ namespace FlaxEditor.Modules
             if (id == Guid.Empty)
                 return null;
 
-            var mainObject = new AssetObjectId(new AssetGuid(id), 1);
-            if (AssetWorkspaceQuery.TryGet(mainObject, out _))
-                return FindAsset(mainObject);
+            if (AssetWorkspaceQuery.TryGet(id, out _))
+                return FindAsset(id);
 
             return null;
         }
 
-        /// <summary>Tries to find the exact imported object without collapsing its local file ID.</summary>
-        public AssetItem FindAsset(AssetObjectId objectId)
+        /// <summary>Tries to find the exact imported object by its persistent GUID.</summary>
+        public AssetItem FindAsset(Guid objectId)
         {
-            if (!objectId.IsValid)
+            if (objectId == Guid.Empty)
                 return null;
             if (!AssetWorkspaceQuery.TryGet(objectId, out var entry))
                 return null;
@@ -856,7 +848,7 @@ namespace FlaxEditor.Modules
             return null;
         }
 
-        private static AssetItem FindAssetObject(ContentFolder folder, AssetObjectId objectId)
+        private static AssetItem FindAssetObject(ContentFolder folder, Guid objectId)
         {
             if (folder == null)
                 return null;
@@ -3205,7 +3197,7 @@ namespace FlaxEditor.Modules
         {
             if (asset == null)
                 throw new ArgumentNullException(nameof(asset));
-            if (AssetDatabaseQueryService.TryGetAssetObjectId(asset, out var objectId) &&
+            if (AssetDatabaseQueryService.TryGetAssetGuid(asset, out var objectId) &&
                 TryGetAssetDatabaseRecord(objectId, out var record) && record.SourceKind == AssetSourceKind.TextDocument)
             {
                 if (asset is Material or MaterialInstance or SkeletonMask or SceneAnimation or ParticleSystem)

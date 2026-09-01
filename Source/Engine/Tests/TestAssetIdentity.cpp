@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/AssetDatabase/Identity/AssetIdentitySerialization.h"
+#include "Engine/Content/SceneReference.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include <ThirdParty/catch2/catch.hpp>
 
@@ -15,7 +16,7 @@ TEST_CASE("Asset object identifiers preserve source and local file identity")
     CHECK(AssetObjectId::Main(source).IsMainObject());
 }
 
-TEST_CASE("Asset object identifiers use structured canonical JSON")
+TEST_CASE("Private asset object identifiers preserve reconciliation identity")
 {
     const AssetObjectId original(AssetGuid(Guid(0x01234567, 0x89abcdef, 0x01234567, 0x89abcdef)), 42);
     rapidjson_flax::StringBuffer buffer;
@@ -30,4 +31,25 @@ TEST_CASE("Asset object identifiers use structured canonical JSON")
     AssetObjectId roundTrip;
     Serialization::Deserialize(document, roundTrip, nullptr);
     CHECK(roundTrip == original);
+}
+
+TEST_CASE("Public scene asset references use GUID-only JSON")
+{
+    SceneReference original;
+    original.ID = Guid(0x01234567, 0x89abcdef, 0x01234567, 0x89abcdef);
+    rapidjson_flax::StringBuffer buffer;
+    CompactJsonWriter writer(buffer);
+    Serialization::Serialize(writer, original, nullptr);
+    CHECK(StringAnsiView(buffer.GetString()) == "\"0123456789abcdef0123456789abcdef\"");
+
+    rapidjson_flax::Document document;
+    document.Parse(buffer.GetString(), buffer.GetSize());
+    SceneReference roundTrip;
+    Serialization::Deserialize(document, roundTrip, nullptr);
+    CHECK(roundTrip == original);
+
+    document.Parse("{\"guid\":\"0123456789abcdef0123456789abcdef\",\"fileId\":1}");
+    roundTrip.ID = original.ID;
+    Serialization::Deserialize(document, roundTrip, nullptr);
+    CHECK(roundTrip.ID == Guid::Empty);
 }

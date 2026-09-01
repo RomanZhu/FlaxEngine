@@ -8,7 +8,7 @@
 
 extern FLAXENGINE_API class ScriptingObject* FindObject(const Guid& id, class MClass* type);
 extern FLAXENGINE_API class Asset* LoadRuntimeAsset(const Guid& runtimeId, const struct ScriptingTypeHandle& type);
-extern FLAXENGINE_API class Asset* LoadAsset(const AssetObjectId& id, const struct ScriptingTypeHandle& type);
+extern FLAXENGINE_API class Asset* LoadAsset(const Guid& id, const struct ScriptingTypeHandle& type);
 
 /// <summary>
 /// Base class for all data read streams
@@ -130,7 +130,7 @@ public:
     template<typename T>
     typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Read(T*& data)
     {
-        AssetObjectId id;
+        Guid id;
         Read(id);
         data = (T*)::LoadAsset(id, T::TypeInitializer);
     }
@@ -154,7 +154,7 @@ public:
     template<typename T>
     FORCE_INLINE void Read(AssetReference<T>& v)
     {
-        AssetObjectId id;
+        Guid id;
         Read(id);
         v = id;
     }
@@ -162,7 +162,7 @@ public:
     template<typename T>
     FORCE_INLINE void Read(WeakAssetReference<T>& v)
     {
-        AssetObjectId id;
+        Guid id;
         Read(id);
         v = id;
     }
@@ -170,7 +170,7 @@ public:
     template<typename T>
     FORCE_INLINE void Read(SoftAssetReference<T>& v)
     {
-        AssetObjectId id;
+        Guid id;
         Read(id);
         v.Set(id);
     }

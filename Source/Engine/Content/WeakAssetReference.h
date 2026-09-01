@@ -14,7 +14,7 @@ public:
 
 protected:
     Asset* _asset = nullptr;
-    AssetObjectId _objectId;
+    Guid _objectId;
 
 public:
     /// <summary>
@@ -39,7 +39,7 @@ public:
     /// <summary>
     /// Gets the persistent asset object ID.
     /// </summary>
-    FORCE_INLINE AssetObjectId GetID() const
+    FORCE_INLINE Guid GetID() const
     {
         return _objectId;
     }
@@ -70,7 +70,7 @@ public:
 
 protected:
     void OnSet(Asset* asset);
-    void OnSet(const AssetObjectId& objectId, const ScriptingTypeHandle& type);
+    void OnSet(const Guid& objectId, const ScriptingTypeHandle& type);
 };
 
 /// <summary>
@@ -103,7 +103,7 @@ public:
         OnSet(asset);
     }
 
-    WeakAssetReference(const AssetObjectId& objectId)
+    WeakAssetReference(const Guid& objectId)
     {
         OnSet(objectId, T::TypeInitializer);
     }
@@ -123,7 +123,7 @@ public:
         OnSet(other.Get());
         _objectId = other._objectId;
         other.OnSet(nullptr);
-        other._objectId = AssetObjectId();
+        other._objectId = Guid::Empty;
     }
 
     WeakAssetReference& operator=(WeakAssetReference&& other)
@@ -133,7 +133,7 @@ public:
             OnSet(other.Get());
             _objectId = other._objectId;
             other.OnSet(nullptr);
-            other._objectId = AssetObjectId();
+            other._objectId = Guid::Empty;
         }
         return *this;
     }
@@ -159,7 +159,7 @@ public:
         return *this;
     }
 
-    FORCE_INLINE WeakAssetReference& operator=(const AssetObjectId& id)
+    FORCE_INLINE WeakAssetReference& operator=(const Guid& id)
     {
         OnSet(id, T::TypeInitializer);
         return *this;

@@ -14,6 +14,18 @@
 
 namespace
 {
+    Guid LegacyCompositeGuidForTest(const AssetObjectId& object)
+    {
+        if (object.IsMainObject())
+            return object.Asset.Value;
+        const uint64 local = static_cast<uint64>(object.LocalId);
+        const uint32 low = static_cast<uint32>(local);
+        const uint32 high = static_cast<uint32>(local >> 32);
+        return Guid(object.Asset.Value.A ^ low, object.Asset.Value.B ^ high,
+                    object.Asset.Value.C ^ ((low << 13) | (low >> 19)),
+                    object.Asset.Value.D ^ ((high << 7) | (high >> 25)) ^ 0x9e3779b9u);
+    }
+
     ArtifactTarget ResolverTarget()
     {
         ArtifactTarget target;
@@ -249,10 +261,10 @@ TEST_CASE("ArtifactResolver isolates objects by persisted GUID despite legacy co
     SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
 
     const AssetObjectId firstObject(AssetGuid(Guid(101, 202, 303, 404)), 2);
-    const Guid runtimeId = firstObject.ToRuntimeObjectGuid();
+    const Guid runtimeId = LegacyCompositeGuidForTest(firstObject);
     const AssetObjectId secondObject = MakeRuntimeGuidCollision(runtimeId, 0x0000000200000003LL);
     REQUIRE(firstObject != secondObject);
-    REQUIRE(firstObject.ToRuntimeObjectGuid() == secondObject.ToRuntimeObjectGuid());
+    REQUIRE(LegacyCompositeGuidForTest(firstObject) == LegacyCompositeGuidForTest(secondObject));
 
     const String firstSource = content / TEXT("first.source");
     const String secondSource = content / TEXT("second.source");

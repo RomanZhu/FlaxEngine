@@ -3,7 +3,7 @@
 #pragma once
 
 #include "Engine/Core/Types/String.h"
-#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
+#include "Engine/Core/Types/Guid.h"
 
 /// <summary>
 /// Contains short information about an asset.
@@ -18,9 +18,9 @@ API_STRUCT() struct AssetInfo
     API_FIELD() Guid ID;
 
     /// <summary>
-    /// Persistent source and local file identity. This is independent from the runtime scripting object ID.
+    /// Persistent asset object identity.
     /// </summary>
-    API_FIELD() AssetObjectId ObjectID;
+    API_FIELD() Guid ObjectID;
 
     /// <summary>Database/artifact revision represented by this load record.</summary>
     API_FIELD() uint64 Revision = 0;
@@ -52,13 +52,13 @@ public:
     /// <param name="path">The path.</param>
     AssetInfo(const Guid& id, const StringView& typeName, const StringView& path)
         : ID(id)
-        , ObjectID(AssetObjectId::Main(AssetGuid(id)))
+        , ObjectID(id)
         , TypeName(typeName)
         , Path(path)
     {
     }
 
-    AssetInfo(const Guid& instanceId, const AssetObjectId& objectId, const StringView& typeName, const StringView& path, uint64 revision = 0)
+    AssetInfo(const Guid& instanceId, const Guid& objectId, const StringView& typeName, const StringView& path, uint64 revision = 0)
         : ID(instanceId)
         , ObjectID(objectId)
         , Revision(revision)

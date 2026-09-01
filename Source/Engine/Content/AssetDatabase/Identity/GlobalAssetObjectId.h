@@ -38,7 +38,12 @@ API_STRUCT() struct FLAXENGINE_API GlobalAssetObjectId
             return Guid::Empty;
         if (Kind == GlobalObjectKind::SceneObject && LocalFileId == 1 && PrefabInstanceFileId == 0)
             return SourceAsset.Value;
-        Guid result = AssetObjectId(SourceAsset, LocalFileId).ToRuntimeObjectGuid();
+        const uint64 local = static_cast<uint64>(LocalFileId);
+        const uint32 low = static_cast<uint32>(local);
+        const uint32 high = static_cast<uint32>(local >> 32);
+        Guid result(SourceAsset.Value.A ^ low, SourceAsset.Value.B ^ high,
+                    SourceAsset.Value.C ^ ((low << 13) | (low >> 19)),
+                    SourceAsset.Value.D ^ ((high << 7) | (high >> 25)) ^ 0x9e3779b9u);
         const uint64 instance = static_cast<uint64>(PrefabInstanceFileId);
         result.C ^= static_cast<uint32>(Kind) * 0x85ebca6bu;
         result.C ^= static_cast<uint32>(instance);

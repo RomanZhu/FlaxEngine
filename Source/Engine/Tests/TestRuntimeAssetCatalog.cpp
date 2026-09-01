@@ -14,13 +14,13 @@ namespace
         return ContentHash::Compute(value, StringUtils::Length(value));
     }
 
-    RuntimeAssetCatalogEntry CatalogEntry(const AssetObjectId& object, const char* type, const char* package, const char* content)
+    RuntimeAssetCatalogEntry CatalogEntry(const Guid& object, const char* type, const char* package, const char* content)
     {
         RuntimeAssetCatalogEntry result;
         result.Object = object;
         result.TypeName = type;
         result.PackageName = package;
-        result.Offset = static_cast<uint64>(object.LocalId) * 16;
+        result.Offset = static_cast<uint64>(object.A) * 16;
         result.Size = 16;
         result.Content = TestHash(content);
         return result;
@@ -29,8 +29,8 @@ namespace
 
 TEST_CASE("Runtime asset catalog is deterministic object-level binary data")
 {
-    const AssetObjectId model = AssetObjectId::Main(AssetGuid(Guid(1, 0, 0, 0)));
-    const AssetObjectId texture = AssetObjectId::Main(AssetGuid(Guid(2, 0, 0, 0)));
+    const Guid model(1, 0, 0, 0);
+    const Guid texture(2, 0, 0, 0);
     RuntimeAssetCatalogEntry modelEntry = CatalogEntry(model, "FlaxEngine.Model", "base/objects.pak", "model");
     modelEntry.Dependencies.Add(texture);
     const RuntimeAssetCatalogEntry textureEntry = CatalogEntry(texture, "FlaxEngine.Texture", "base/objects.pak", "texture");
@@ -84,8 +84,8 @@ TEST_CASE("Runtime asset catalog is deterministic object-level binary data")
     REQUIRE(found.Dependencies.Count() == 1);
     CHECK(found.Dependencies[0] == texture);
     CHECK(loaded.TryGet(texture, found));
-    CHECK_FALSE(loaded.TryGet(AssetObjectId(AssetGuid(Guid(9, 0, 0, 0)), 1), found));
-    AssetObjectId aliasObject;
+    CHECK_FALSE(loaded.TryGet(Guid(9, 0, 0, 0), found));
+    Guid aliasObject;
     REQUIRE(loaded.TryGetByPathHash(modelAlias.PathHash, aliasObject));
     CHECK(aliasObject == model);
     CHECK_FALSE(loaded.TryGetByPathHash(TestHash("missing-path"), aliasObject));
@@ -97,7 +97,7 @@ TEST_CASE("Runtime asset catalog is deterministic object-level binary data")
 
 TEST_CASE("Runtime asset catalog rejects source and Library paths")
 {
-    const AssetObjectId object = AssetObjectId::Main(AssetGuid(Guid(3, 0, 0, 0)));
+    const Guid object(3, 0, 0, 0);
     AssetPipelineDiagnostic diagnostic;
     RuntimeAssetCatalog catalog;
     Array<RuntimeAssetCatalogEntry> entries;
@@ -119,7 +119,7 @@ TEST_CASE("Runtime asset catalog rejects source and Library paths")
     entries[0].PackageName = "packages/Library/texture.pak";
     CHECK(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
 
-    const AssetObjectId subAsset(AssetGuid(Guid(5, 0, 0, 0)), 2);
+    const Guid subAsset = Guid::Empty;
     entries.Clear();
     entries.Add(CatalogEntry(subAsset, "FlaxEngine.Texture", "base/objects.pak", "sub"));
     CHECK(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
@@ -128,26 +128,25 @@ TEST_CASE("Runtime asset catalog rejects source and Library paths")
 
 TEST_CASE("Runtime asset catalog resolves persistent object GUIDs")
 {
-    const AssetObjectId object = AssetObjectId::Main(AssetGuid(Guid(6, 0, 0, 0)));
+    const Guid object(6, 0, 0, 0);
     Array<RuntimeAssetCatalogEntry> entries;
     entries.Add(CatalogEntry(object, "FlaxEngine.Texture", "base/objects.pak", "object"));
     AssetPipelineDiagnostic diagnostic;
     RuntimeAssetCatalog catalog;
     REQUIRE_FALSE(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
 
-    AssetObjectId compatibilityObject;
-    CHECK(catalog.TryGetByLegacyRuntimeGuid(object.ToRuntimeObjectGuid(), compatibilityObject));
-    CHECK(compatibilityObject == object);
-    CHECK_FALSE(catalog.TryGetByLegacyRuntimeGuid(Guid(99, 98, 97, 96), compatibilityObject));
-    CHECK_FALSE(compatibilityObject.IsValid());
-    CHECK_FALSE(catalog.TryGetByLegacyRuntimeGuid(Guid::Empty, compatibilityObject));
+    RuntimeAssetCatalogEntry found;
+    CHECK(catalog.TryGet(object, found));
+    CHECK(found.Object == object);
+    CHECK_FALSE(catalog.TryGet(Guid(99, 98, 97, 96), found));
+    CHECK_FALSE(catalog.TryGet(Guid::Empty, found));
 }
 
 TEST_CASE("Loaded runtime GUID index rejects collisions and recovers uniqueness")
 {
     const AssetObjectId subAsset(AssetGuid(Guid(7, 0, 0, 0)), 2);
-    const AssetObjectId collidingMain = AssetObjectId::Main(AssetGuid(subAsset.ToRuntimeObjectGuid()));
-    const Guid runtimeId = subAsset.ToRuntimeObjectGuid();
+    const Guid runtimeId(70, 71, 72, 73);
+    const AssetObjectId collidingMain = AssetObjectId::Main(AssetGuid(runtimeId));
     LoadedAssetRuntimeIdIndex index;
     index.EnsureCapacity(2);
 

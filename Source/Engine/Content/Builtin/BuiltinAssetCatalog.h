@@ -16,14 +16,14 @@ struct FLAXENGINE_API BuiltinAssetCatalogEntry
 
 /// <summary>
 /// Read-only loading authority for engine and referenced-plugin content.
-/// Physical storage paths are implementation details; builtin:// URIs and AssetObjectId are stable query identities.
+/// Physical storage paths are implementation details; builtin:// URIs and GUIDs are stable query identities.
 /// </summary>
 class FLAXENGINE_API BuiltinAssetCatalog
 {
 private:
     Array<BuiltinAssetCatalogEntry> _entries;
     Array<String> _roots;
-    Dictionary<AssetObjectId, int32> _byObject;
+    Dictionary<Guid, int32> _byObject;
     Dictionary<String, int32> _byPath;
     Dictionary<String, int32> _byUri;
     int32 _prebuiltRoots = 0;
@@ -38,12 +38,11 @@ public:
 
     void Dispose();
 
-    bool TryGet(const AssetObjectId& objectId, AssetInfo& info) const;
     bool TryGet(const Guid& runtimeId, AssetInfo& info) const;
     bool TryGetByPath(const StringView& pathOrUri, AssetInfo& info) const;
     bool IsReadOnlyPath(const StringView& pathOrUri) const;
-    StringView GetStoragePath(const AssetObjectId& objectId) const;
-    StringView GetUri(const AssetObjectId& objectId) const;
+    StringView GetStoragePath(const Guid& objectId) const;
+    StringView GetUri(const Guid& objectId) const;
     void GetAll(Array<Guid>& result) const;
     void GetAllByTypeName(const StringView& typeName, Array<Guid>& result) const;
 

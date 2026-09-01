@@ -216,7 +216,7 @@ namespace FlaxEditor.Modules
         /// <returns>The results list.</returns>
         public List<SearchResult> Search(string charsToFind)
         {
-            if (AssetObjectId.TryParse(charsToFind, out var objectId) && AssetWorkspaceQuery.TryGet(objectId, out var objectEntry))
+            if (Guid.TryParse(charsToFind, out var objectId) && AssetWorkspaceQuery.TryGet(objectId, out var objectEntry))
             {
                 var objectItem = Editor.Instance.ContentDatabase.FindAsset(objectEntry.ObjectID);
                 if (objectItem != null)
@@ -261,8 +261,8 @@ namespace FlaxEditor.Modules
             string importer = null;
             string label = null;
             AssetRecordStatus? status = null;
-            AssetObjectId referencedAsset = default;
-            AssetObjectId usedByAsset = default;
+            Guid referencedAsset = default;
+            Guid usedByAsset = default;
             var nameParts = new List<string>();
             var tokens = charsToFind.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
             for (var i = 0; i < tokens.Length; i++)
@@ -279,9 +279,9 @@ namespace FlaxEditor.Modules
                 else if (token.StartsWith("status:", StringComparison.OrdinalIgnoreCase) && Enum.TryParse(token.Substring(7), true, out AssetRecordStatus parsedStatus))
                     status = parsedStatus;
                 else if (token.StartsWith("ref:", StringComparison.OrdinalIgnoreCase))
-                    AssetObjectId.TryParse(token.Substring(4), out referencedAsset);
+                    Guid.TryParse(token.Substring(4), out referencedAsset);
                 else if (token.StartsWith("usedby:", StringComparison.OrdinalIgnoreCase))
-                    AssetObjectId.TryParse(token.Substring(7), out usedByAsset);
+                    Guid.TryParse(token.Substring(7), out usedByAsset);
                 else
                     nameParts.Add(token);
             }

@@ -17,19 +17,15 @@ namespace
     constexpr uint32 MaximumStringBytes = 1024 * 1024;
     constexpr uint32 MaximumDependenciesPerEntry = 1000000;
 
-    bool Less(const AssetObjectId& a, const AssetObjectId& b)
+    bool Less(const Guid& a, const Guid& b)
     {
-        const Guid& left = a.Asset.Value;
-        const Guid& right = b.Asset.Value;
-        if (left.A != right.A)
-            return left.A < right.A;
-        if (left.B != right.B)
-            return left.B < right.B;
-        if (left.C != right.C)
-            return left.C < right.C;
-        if (left.D != right.D)
-            return left.D < right.D;
-        return a.LocalId < b.LocalId;
+        if (a.A != b.A)
+            return a.A < b.A;
+        if (a.B != b.B)
+            return a.B < b.B;
+        if (a.C != b.C)
+            return a.C < b.C;
+        return a.D < b.D;
     }
 
     bool LessHash(const ContentHash& a, const ContentHash& b)
@@ -93,9 +89,9 @@ namespace
             WriteUInt32(value.D);
         }
 
-        void WriteObject(const AssetObjectId& value)
+        void WriteObject(const Guid& value)
         {
-            WriteGuid(value.Asset.Value);
+            WriteGuid(value);
         }
 
         void WriteString(const StringAnsiView& value)
@@ -165,13 +161,9 @@ namespace
             return ReadUInt32(value.A) || ReadUInt32(value.B) || ReadUInt32(value.C) || ReadUInt32(value.D);
         }
 
-        bool ReadObject(AssetObjectId& value)
+        bool ReadObject(Guid& value)
         {
-            Guid guid;
-            if (ReadGuid(guid))
-                return true;
-            value = AssetObjectId::Main(AssetGuid(guid));
-            return false;
+            return ReadGuid(value);
         }
 
         bool ReadString(StringAnsi& value)
@@ -281,11 +273,11 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
         _aliases.Count() > MaximumAliases)
         return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog requires a build ID, target hash, and bounded object entries."));
 
-    HashSet<AssetObjectId> objects;
+    HashSet<Guid> objects;
     for (int32 i = 0; i < _entries.Count(); i++)
     {
         const RuntimeAssetCatalogEntry& entry = _entries[i];
-        if (!entry.Object.IsValid() || !entry.Object.IsMainObject() || !IsTextValid(entry.TypeName) || !IsPackageNameValid(entry.PackageName) || entry.Size == 0 ||
+        if (!entry.Object.IsValid() || !IsTextValid(entry.TypeName) || !IsPackageNameValid(entry.PackageName) || entry.Size == 0 ||
             entry.Offset > MAX_uint64 - entry.Size || entry.Content.IsZero() || entry.Compression > RuntimeAssetCompression::Zstd ||
             entry.Dependencies.Count() > MaximumDependenciesPerEntry || !objects.Add(entry.Object))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid or duplicate object entry."));
@@ -293,8 +285,8 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog object entries are not in canonical order."));
         for (int32 dependencyIndex = 0; dependencyIndex < entry.Dependencies.Count(); dependencyIndex++)
         {
-            const AssetObjectId& dependency = entry.Dependencies[dependencyIndex];
-            if (!dependency.IsValid() || !dependency.IsMainObject() || dependency == entry.Object ||
+            const Guid& dependency = entry.Dependencies[dependencyIndex];
+            if (!dependency.IsValid() || dependency == entry.Object ||
                 (dependencyIndex != 0 && !Less(entry.Dependencies[dependencyIndex - 1], dependency)))
                 return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid, duplicate, or self object dependency."));
         }
@@ -303,7 +295,7 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
         return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog GameSettings bootstrap object is absent from the object-level catalog."));
     for (const RuntimeAssetCatalogEntry& entry : _entries)
     {
-        for (const AssetObjectId& dependency : entry.Dependencies)
+        for (const Guid& dependency : entry.Dependencies)
         {
             if (!objects.Contains(dependency))
                 return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog dependency is absent from the object-level catalog."));
@@ -312,7 +304,7 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
     for (int32 i = 0; i < _aliases.Count(); i++)
     {
         const RuntimeAssetCatalogAlias& alias = _aliases[i];
-        if (alias.PathHash.IsZero() || !alias.Object.IsMainObject() || !objects.Contains(alias.Object) ||
+        if (alias.PathHash.IsZero() || !alias.Object.IsValid() || !objects.Contains(alias.Object) ||
             (i != 0 && !LessHash(_aliases[i - 1].PathHash, alias.PathHash)))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid, duplicate, or unresolved path alias."));
     }
@@ -320,7 +312,7 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
     return false;
 }
 
-bool RuntimeAssetCatalog::TryGet(const AssetObjectId& object, RuntimeAssetCatalogEntry& result) const
+bool RuntimeAssetCatalog::TryGet(const Guid& object, RuntimeAssetCatalogEntry& result) const
 {
     int32 left = 0;
     int32 right = _entries.Count() - 1;
@@ -341,20 +333,7 @@ bool RuntimeAssetCatalog::TryGet(const AssetObjectId& object, RuntimeAssetCatalo
     return false;
 }
 
-bool RuntimeAssetCatalog::TryGetByLegacyRuntimeGuid(const Guid& runtimeId, AssetObjectId& result) const
-{
-    result = AssetObjectId();
-    if (!runtimeId.IsValid())
-        return false;
-    RuntimeAssetCatalogEntry entry;
-    result = AssetObjectId::Main(AssetGuid(runtimeId));
-    if (TryGet(result, entry))
-        return true;
-    result = AssetObjectId();
-    return false;
-}
-
-bool RuntimeAssetCatalog::TryGetByPathHash(const ContentHash& pathHash, AssetObjectId& result) const
+bool RuntimeAssetCatalog::TryGetByPathHash(const ContentHash& pathHash, Guid& result) const
 {
     int32 left = 0;
     int32 right = _aliases.Count() - 1;
@@ -372,7 +351,7 @@ bool RuntimeAssetCatalog::TryGetByPathHash(const ContentHash& pathHash, AssetObj
         else
             right = middle - 1;
     }
-    result = AssetObjectId();
+    result = Guid::Empty;
     return false;
 }
 
@@ -397,7 +376,7 @@ bool RuntimeAssetCatalog::ToBytes(Array<byte>& output, AssetPipelineDiagnostic& 
         payload.WriteByte(static_cast<byte>(entry.Compression));
         payload.WriteHash(entry.Content);
         payload.WriteUInt32(entry.Dependencies.Count());
-        for (const AssetObjectId& dependency : entry.Dependencies)
+        for (const Guid& dependency : entry.Dependencies)
             payload.WriteObject(dependency);
     }
     payload.WriteUInt32(_aliases.Count());
@@ -455,7 +434,7 @@ bool RuntimeAssetCatalog::FromBytes(const Span<byte>& input, RuntimeAssetCatalog
         entry.Size = localSize;
         entry.Compression = static_cast<RuntimeAssetCompression>(compression);
         entry.Dependencies.Resize(dependencyCount, false);
-        for (AssetObjectId& dependency : entry.Dependencies)
+        for (Guid& dependency : entry.Dependencies)
         {
             if (payload.ReadObject(dependency))
                 return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains a truncated object dependency."));

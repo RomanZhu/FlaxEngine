@@ -18,9 +18,9 @@ public:
     /// Function called during game cooking in Editor to collect any assets that this plugin uses. Can be used to inject content for plugins.
     /// </summary>
     /// <returns>The result assets list.</returns>
-    API_FUNCTION() virtual Array<AssetObjectId> GetReferences() const
+    API_FUNCTION() virtual Array<Guid> GetReferences() const
     {
-        return Array<AssetObjectId>();
+        return Array<Guid>();
     }
 #endif
 };

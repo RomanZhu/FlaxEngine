@@ -475,8 +475,8 @@ namespace Serialization
         if (!otherObj)
             return true;
         const T* other = *static_cast<const T* const*>(otherObj);
-        return (v ? v->GetPersistentObjectId() : AssetObjectId()) !=
-               (other ? other->GetPersistentObjectId() : AssetObjectId());
+        return (v ? v->GetPersistentObjectId() : Guid::Empty) !=
+               (other ? other->GetPersistentObjectId() : Guid::Empty);
     }
     template<typename T>
     inline typename TEnableIf<TAnd<TIsBaseOf<ScriptingObject, T>, TNot<TIsBaseOf<SceneObject, T>>, TNot<TIsBaseOf<Asset, T>>>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
@@ -507,12 +507,12 @@ namespace Serialization
     template<typename T>
     inline typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Serialize(ISerializable::SerializeStream& stream, const T* v, const void* otherObj)
     {
-        Serialize(stream, v ? v->GetPersistentObjectId() : AssetObjectId(), nullptr);
+        Serialize(stream, v ? v->GetPersistentObjectId() : Guid::Empty, nullptr);
     }
     template<typename T>
     inline typename TEnableIf<TIsBaseOf<Asset, T>::Value>::Type Deserialize(ISerializable::DeserializeStream& stream, T*& v, ISerializeModifier* modifier)
     {
-        AssetObjectId id;
+        Guid id;
         Deserialize(stream, id, modifier);
         v = (T*)::LoadAsset(id, T::TypeInitializer);
     }
@@ -632,7 +632,7 @@ namespace Serialization
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, AssetReference<T>& v, ISerializeModifier* modifier)
     {
-        AssetObjectId id;
+        Guid id;
         Deserialize(stream, id, modifier);
         v = id;
     }
@@ -652,7 +652,7 @@ namespace Serialization
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, WeakAssetReference<T>& v, ISerializeModifier* modifier)
     {
-        AssetObjectId id;
+        Guid id;
         Deserialize(stream, id, modifier);
         v = id;
     }
@@ -672,7 +672,7 @@ namespace Serialization
     template<typename T>
     inline void Deserialize(ISerializable::DeserializeStream& stream, SoftAssetReference<T>& v, ISerializeModifier* modifier)
     {
-        AssetObjectId id;
+        Guid id;
         Deserialize(stream, id, modifier);
         v = id;
     }

@@ -14,7 +14,7 @@ bool BinaryAssetFactoryBase::Init(BinaryAsset* asset)
     // Load serialized asset data
     AssetInitData initData;
     const bool headerLoadFailed = storage->UsesAssetObjectIds()
-        ? storage->LoadAssetHeader(asset->GetPersistentObjectId(), initData)
+        ? storage->LoadAssetHeader(asset->_internalObjectId, initData)
         : storage->LoadAssetHeader(asset->GetID(), initData);
     if (headerLoadFailed)
     {
@@ -55,7 +55,7 @@ Asset* BinaryAssetFactoryBase::New(const AssetLoadLocation& location)
     const AssetInfo& info = location.Info;
     const String& storagePath = location.Artifact.StoragePath.Get();
 
-    if (storagePath.IsEmpty() || location.Artifact.ObjectID != info.ObjectID ||
+    if (storagePath.IsEmpty() || location.Artifact.ObjectID.Asset.Value != info.ObjectID ||
         location.Artifact.AssetID != info.ID || location.Artifact.TypeName != info.TypeName)
     {
         LOG(Warning, "Invalid resolved artifact identity or storage path.\nInfo: {0}", info.ToString());

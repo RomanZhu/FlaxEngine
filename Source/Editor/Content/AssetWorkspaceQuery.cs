@@ -9,7 +9,7 @@ namespace FlaxEditor.Content
     /// <summary>Immutable database-backed browser/search result.</summary>
     public sealed class AssetWorkspaceEntry
     {
-        public AssetObjectId ObjectID { get; internal set; }
+        public Guid ObjectID { get; internal set; }
         public string TypeName { get; internal set; }
         public string SourcePath { get; internal set; }
         public string MetadataPath { get; internal set; }
@@ -25,8 +25,8 @@ namespace FlaxEditor.Content
     public static class AssetWorkspaceQuery
     {
         public static AssetWorkspaceEntry[] Query(string pathPrefix = null, string typeName = null, AssetRecordStatus? status = null,
-            string name = null, string importerId = null, string label = null, AssetObjectId referencedAsset = default,
-            AssetObjectId usedByAsset = default, bool mainAssetsOnly = false)
+            string name = null, string importerId = null, string label = null, Guid referencedAsset = default,
+            Guid usedByAsset = default, bool mainAssetsOnly = false)
         {
             if (!string.IsNullOrEmpty(pathPrefix) && !pathPrefix.StartsWith("builtin://", StringComparison.OrdinalIgnoreCase))
             {
@@ -53,7 +53,7 @@ namespace FlaxEditor.Content
             return result;
         }
 
-        public static bool TryGet(AssetObjectId id, out AssetWorkspaceEntry entry)
+        public static bool TryGet(Guid id, out AssetWorkspaceEntry entry)
         {
             if (AssetDatabaseQueryService.TryGetRecord(id, out var record))
             {
@@ -79,7 +79,7 @@ namespace FlaxEditor.Content
         {
             return new AssetWorkspaceEntry
             {
-                ObjectID = new AssetObjectId(new AssetGuid(record.SourceAssetID), record.LocalId),
+                ObjectID = record.ID,
                 TypeName = record.TypeName,
                 SourcePath = record.SourcePath,
                 MetadataPath = record.MetaPath,
