@@ -195,14 +195,12 @@ namespace
 
     ContentHash BuildProjectSettingsHash(const BuildSettings& buildSettings, const GameSettings& gameSettings, int32 contentKey)
     {
-        ArtifactKeyBuilder builder(StringAnsiView("flax-cook-project-settings-v1"));
+        ArtifactKeyBuilder builder(StringAnsiView("flax-cook-project-settings-v2"));
         builder.AddString(StringAnsiView("product"), gameSettings.ProductName);
         builder.AddString(StringAnsiView("company"), gameSettings.CompanyName);
         builder.AddBool(StringAnsiView("no-splash"), gameSettings.NoSplashScreen);
-        builder.AddGuid(StringAnsiView("splash-guid"), gameSettings.SplashScreen.Asset.Value);
-        builder.AddUInt64(StringAnsiView("splash-file-id"), static_cast<uint64>(gameSettings.SplashScreen.LocalId));
-        builder.AddGuid(StringAnsiView("streaming-guid"), gameSettings.Streaming.Asset.Value);
-        builder.AddUInt64(StringAnsiView("streaming-file-id"), static_cast<uint64>(gameSettings.Streaming.LocalId));
+        builder.AddGuid(StringAnsiView("splash-guid"), gameSettings.SplashScreen);
+        builder.AddGuid(StringAnsiView("streaming-guid"), gameSettings.Streaming);
         builder.AddUInt32(StringAnsiView("content-key"), static_cast<uint32>(contentKey));
         builder.AddUInt32(StringAnsiView("max-assets-per-package"), static_cast<uint32>(buildSettings.MaxAssetsPerPackage));
         builder.AddUInt32(StringAnsiView("max-package-size"), static_cast<uint32>(buildSettings.MaxPackageSizeMB));

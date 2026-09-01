@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #if FLAX_TESTS
+using System;
 using NUnit.Framework;
 
 namespace FlaxEngine.Tests

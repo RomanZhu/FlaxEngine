@@ -113,7 +113,7 @@ namespace FlaxEditor
 
                 foreach (var dependency in AssetDatabaseQueryService.GetDependencies(ObjectId(record)))
                 {
-                    if (dependency.TargetObject.IsValid && !records.Any(x => x.SourceAssetID == dependency.TargetObject.Asset.Value && x.LocalId == dependency.TargetObject.LocalId))
+                    if (dependency.TargetObject != Guid.Empty && !records.Any(x => x.ID == dependency.TargetObject))
                     {
                         issues.Add(new
                         {
@@ -305,7 +305,7 @@ namespace FlaxEditor
                 owner = dependency.Owner.ToString(),
                 targetId = dependency.TargetID,
                 kind = dependency.Kind,
-                targetObject = dependency.TargetObject.IsValid ? dependency.TargetObject.ToString() : null,
+                targetObject = dependency.TargetObject != Guid.Empty ? dependency.TargetObject.ToString() : null,
                 dependency.SourcePath,
                 exactArtifact = dependency.ExactArtifact,
                 customDependency = dependency.CustomDependency,
