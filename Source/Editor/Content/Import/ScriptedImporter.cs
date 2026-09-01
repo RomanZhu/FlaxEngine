@@ -222,11 +222,103 @@ namespace FlaxEditor.Content.Import
     }
 
     /// <summary>Read-only source capability returned by the parent import context.</summary>
-    public sealed class SourceReadHandle : MemoryStream
+    public sealed class SourceReadHandle : Stream
     {
-        internal SourceReadHandle(byte[] data)
-            : base(data, false)
+        private readonly int _handle;
+        private readonly long _length;
+        private long _position;
+        private bool _disposed;
+
+        internal SourceReadHandle(string path)
         {
+            _handle = ScriptedImporterInterop.OpenRead(path, out _length);
+            if (_handle < 0)
+                throw new IOException(ScriptedImporterInterop.GetLastError());
+        }
+
+        public override bool CanRead => !_disposed;
+        public override bool CanSeek => !_disposed;
+        public override bool CanWrite => false;
+        public override long Length
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _length;
+            }
+        }
+        public override long Position
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _position;
+            }
+            set
+            {
+                ThrowIfDisposed();
+                if (value < 0)
+                    throw new ArgumentOutOfRangeException(nameof(value));
+                _position = value;
+            }
+        }
+
+        public override void Flush()
+        {
+            ThrowIfDisposed();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(buffer);
+            if ((uint)offset > buffer.Length || (uint)count > buffer.Length - offset)
+                throw new ArgumentOutOfRangeException();
+            if (count == 0 || _position >= _length)
+                return 0;
+            var chunk = ScriptedImporterInterop.ReadRange(_handle, _position, count, out var received, out var failed);
+            if (failed)
+                throw new IOException(ScriptedImporterInterop.GetLastError());
+            if (received > 0)
+                Buffer.BlockCopy(chunk, 0, buffer, offset, received);
+            _position += received;
+            return received;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            ThrowIfDisposed();
+            var basis = origin switch
+            {
+                SeekOrigin.Begin => 0,
+                SeekOrigin.Current => _position,
+                SeekOrigin.End => _length,
+                _ => throw new ArgumentOutOfRangeException(nameof(origin)),
+            };
+            var result = checked(basis + offset);
+            if (result < 0)
+                throw new IOException("Cannot seek before the start of an importer source stream.");
+            _position = result;
+            return result;
+        }
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                ScriptedImporterInterop.CloseRead(_handle);
+            }
+            base.Dispose(disposing);
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(SourceReadHandle));
         }
     }
 
@@ -314,16 +406,8 @@ namespace FlaxEditor.Content.Import
         public string SettingsJson => ScriptedImporterInterop.GetSettings();
         public T GetSettings<T>() => JsonConvert.DeserializeObject<T>(SettingsJson);
 
-        public SourceReadHandle OpenSourceFile() => Read(null);
-        public SourceReadHandle OpenDependencyFile(string path) => Read(path ?? throw new ArgumentNullException(nameof(path)));
-
-        private static SourceReadHandle Read(string path)
-        {
-            var bytes = ScriptedImporterInterop.Read(path, out _, out var failed);
-            if (failed)
-                throw new IOException(ScriptedImporterInterop.GetLastError());
-            return new SourceReadHandle(bytes ?? Array.Empty<byte>());
-        }
+        public SourceReadHandle OpenSourceFile() => new SourceReadHandle(null);
+        public SourceReadHandle OpenDependencyFile(string path) => new SourceReadHandle(path ?? throw new ArgumentNullException(nameof(path)));
 
         public void DependsOnSourceAsset(AssetGuid guid) => DependsOnSourceAsset(AssetObjectId.Main(guid));
         public void DependsOnSourceAsset(AssetObjectId objectId)
@@ -443,9 +527,15 @@ namespace FlaxEditor.Content.Import
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_GetSettings", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
         internal static partial string GetSettings();
 
-        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_Read", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_OpenRead", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(StringMarshaller))]
+        internal static partial int OpenRead(string path, out long length);
+
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_ReadRange")]
         [return: MarshalUsing(typeof(FlaxEngine.Interop.ArrayMarshaller<,>), CountElementName = "count")]
-        internal static partial byte[] Read(string path, out int count, [MarshalAs(UnmanagedType.U1)] out bool failed);
+        internal static partial byte[] ReadRange(int handle, long offset, int requested, out int count, [MarshalAs(UnmanagedType.U1)] out bool failed);
+
+        [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_CloseRead")]
+        internal static partial void CloseRead(int handle);
 
         [LibraryImport(Library, EntryPoint = "ScriptedImporterContextInternal_DependsOnObject")]
         internal static partial void DependsOnObject(ref Guid asset, long localId, int kind);

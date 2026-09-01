@@ -26,8 +26,14 @@ namespace
     ScriptedImporterInvoke PendingInvoke = nullptr;
     bool RegistrationOpen = false;
     String LastError;
+    struct ScriptedImporterReadBuffer
+    {
+        Array<byte> Data;
+        bool Open = false;
+    };
     thread_local AssetImportContext* CurrentContext = nullptr;
     thread_local const AssetImportJobRequest* CurrentWorkerRequest = nullptr;
+    thread_local Array<ScriptedImporterReadBuffer> CurrentReadBuffers;
 
     void SetError(const StringView& message)
     {
@@ -259,9 +265,11 @@ DEFINE_INTERNAL_CALL(bool) ScriptedImporterInternal_AddRegistration(MString* idO
             return true;
         }
         AssetImportContext* previous = CurrentContext;
+        CurrentReadBuffers.Clear();
         CurrentContext = &context;
         const int32 failed = callback(id.Get(), id.Length());
         CurrentContext = previous;
+        CurrentReadBuffers.Clear();
         if (failed != 0)
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::BuildFailed;
@@ -403,36 +411,67 @@ DEFINE_INTERNAL_CALL(MString*) ScriptedImporterContextInternal_GetSettings()
     return MUtils::ToString(CurrentContext ? String(CurrentContext->GetSettings()) : String::Empty);
 }
 
-DEFINE_INTERNAL_CALL(MArray*) ScriptedImporterContextInternal_Read(MString* pathObject, int32* count, bool* failed)
+DEFINE_INTERNAL_CALL(int32) ScriptedImporterContextInternal_OpenRead(MString* pathObject, int64* length)
+{
+    if (length)
+        *length = 0;
+    AssetPipelineDiagnostic diagnostic;
+    if (!RequireContext(&diagnostic))
+        return -1;
+    String path;
+    MUtils::ToString(pathObject, path);
+    ScriptedImporterReadBuffer buffer;
+    ContentHash hash;
+    const bool readFailed = path.IsEmpty()
+        ? CurrentContext->ReadSource(buffer.Data, hash, diagnostic)
+        : CurrentContext->ReadDependencyFile(path, buffer.Data, hash, diagnostic);
+    if (readFailed)
+    {
+        CurrentContext->AddDiagnostic(diagnostic);
+        SetError(diagnostic.Message);
+        return -1;
+    }
+    buffer.Open = true;
+    if (length)
+        *length = buffer.Data.Count();
+    const int32 handle = CurrentReadBuffers.Count();
+    CurrentReadBuffers.Add(MoveTemp(buffer));
+    SetError(StringView::Empty);
+    return handle;
+}
+
+DEFINE_INTERNAL_CALL(MArray*) ScriptedImporterContextInternal_ReadRange(int32 handle, int64 offset, int32 requested, int32* count, bool* failed)
 {
     if (count)
         *count = 0;
     if (failed)
         *failed = true;
-    AssetPipelineDiagnostic diagnostic;
-    if (!RequireContext(&diagnostic))
+    Array<byte> chunk;
+    if (!RequireContext() || handle < 0 || handle >= CurrentReadBuffers.Count() ||
+        !CurrentReadBuffers[handle].Open || offset < 0 || requested < 0)
     {
-        const Array<byte> empty;
-        return MUtils::ToArray(empty, MCore::TypeCache::Byte);
+        SetError(TEXT("Scripted importer source read handle or range is invalid."));
+        return MUtils::ToArray(chunk, MCore::TypeCache::Byte);
     }
-    String path;
-    MUtils::ToString(pathObject, path);
-    Array<byte> bytes;
-    ContentHash hash;
-    const bool readFailed = path.IsEmpty()
-        ? CurrentContext->ReadSource(bytes, hash, diagnostic)
-        : CurrentContext->ReadDependencyFile(path, bytes, hash, diagnostic);
-    if (readFailed)
-    {
-        CurrentContext->AddDiagnostic(diagnostic);
-        const Array<byte> empty;
-        return MUtils::ToArray(empty, MCore::TypeCache::Byte);
-    }
+    const Array<byte>& data = CurrentReadBuffers[handle].Data;
+    const int64 available = Math::Max<int64>(0, static_cast<int64>(data.Count()) - offset);
+    const int32 readCount = static_cast<int32>(Math::Min<int64>(available, requested));
+    if (readCount > 0)
+        chunk.Add(data.Get() + offset, readCount);
     if (count)
-        *count = bytes.Count();
+        *count = readCount;
     if (failed)
         *failed = false;
-    return MUtils::ToArray(bytes, MCore::TypeCache::Byte);
+    SetError(StringView::Empty);
+    return MUtils::ToArray(chunk, MCore::TypeCache::Byte);
+}
+
+DEFINE_INTERNAL_CALL(void) ScriptedImporterContextInternal_CloseRead(int32 handle)
+{
+    if (handle < 0 || handle >= CurrentReadBuffers.Count())
+        return;
+    CurrentReadBuffers[handle].Data.Clear();
+    CurrentReadBuffers[handle].Open = false;
 }
 
 DEFINE_INTERNAL_CALL(void) ScriptedImporterContextInternal_DependsOnObject(Guid* asset, int64 localId, int32 kind)
