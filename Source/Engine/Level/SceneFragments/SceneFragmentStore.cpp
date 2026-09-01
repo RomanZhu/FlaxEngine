@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "SceneFragmentStore.h"
+#include "Engine/Content/AssetDatabase/DurableAssetFileSystem.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -15,12 +16,6 @@
 #include "Engine/Serialization/Json.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Serialization/JsonWriters.h"
-#if PLATFORM_WINDOWS
-#include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
-#elif PLATFORM_LINUX || PLATFORM_MAC
-#include <fcntl.h>
-#include <unistd.h>
-#endif
 
 namespace
 {
@@ -208,36 +203,27 @@ namespace
 
     bool EnsureDirectory(const StringView& path)
     {
-        return path.HasChars() && !FileSystem::DirectoryExists(path) && FileSystem::CreateDirectory(path);
+        return DurableAssetFileSystem::EnsureDirectory(path);
     }
 
-    bool FlushFile(const StringView& path)
+    bool DurableMove(const StringView& destination, const StringView& source, bool overwrite)
     {
-#if PLATFORM_WINDOWS
-        const String value(path);
-        HANDLE handle = CreateFileW(*value, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle == INVALID_HANDLE_VALUE)
-            return true;
-        const bool failed = FlushFileBuffers(handle) == 0;
-        CloseHandle(handle);
-        return failed;
-#elif PLATFORM_LINUX || PLATFORM_MAC
-        const StringAnsi value(path);
-        const int handle = open(value.Get(), O_RDONLY);
-        if (handle == -1)
-            return true;
-        const bool failed = fsync(handle) != 0;
-        close(handle);
-        return failed;
-#else
-        return false;
-#endif
+        return DurableAssetFileSystem::Move(destination, source, overwrite);
+    }
+
+    bool DurableDeleteFile(const StringView& path)
+    {
+        return DurableAssetFileSystem::DeleteFile(path);
+    }
+
+    bool DurableDeleteDirectory(const StringView& path, bool deleteContents)
+    {
+        return DurableAssetFileSystem::DeleteDirectory(path, deleteContents);
     }
 
     bool WriteDurable(const StringView& path, const void* data, int32 length)
     {
-        return EnsureDirectory(StringUtils::GetDirectoryName(path)) || File::WriteAllBytes(path, data, length) || FlushFile(path);
+        return DurableAssetFileSystem::WriteFile(path, data, length);
     }
 
     bool SameBytes(const StringView& path, const void* data, int32 length)
@@ -276,9 +262,9 @@ namespace
         const String path = String(directory) / TEXT("journal.bin");
         const String staging = path + TEXT(".tmp");
         if (WriteDurable(staging, writer.Data.Get(), writer.Data.Count()) ||
-            FileSystem::MoveFile(path, staging, true))
+            DurableMove(path, staging, true))
         {
-            FileSystem::DeleteFile(staging);
+            DurableDeleteFile(staging);
             return Fail(error, TEXT("Cannot durably persist the scene save transaction journal."));
         }
         return false;
@@ -340,20 +326,20 @@ namespace
         {
             const String staging = GetStagePath(journal, i);
             if (FileSystem::FileExists(staging))
-                failed |= FileSystem::DeleteFile(staging);
+                failed |= DurableDeleteFile(staging);
         }
         for (int32 i = journal.Entries.Count() - 1; i >= 0; i--)
         {
             if (!journal.Entries[i].Existed &&
                 AssetPathPolicy::IsSameOrChild(journal.Entries[i].Destination, journal.StorePath))
-                FileSystem::DeleteDirectory(StringUtils::GetDirectoryName(journal.Entries[i].Destination), false);
+                DurableDeleteDirectory(StringUtils::GetDirectoryName(journal.Entries[i].Destination), false);
         }
         if (committed && journal.RemoveStore && FileSystem::DirectoryExists(journal.StorePath))
-            failed |= FileSystem::DeleteDirectory(journal.StorePath, true);
+            failed |= DurableDeleteDirectory(journal.StorePath, true);
         else if (!committed && FileSystem::DirectoryExists(journal.StorePath))
-            FileSystem::DeleteDirectory(journal.StorePath, false);
+            DurableDeleteDirectory(journal.StorePath, false);
         if (!failed && FileSystem::DirectoryExists(directory))
-            failed |= FileSystem::DeleteDirectory(directory, true);
+            failed |= DurableDeleteDirectory(directory, true);
         return failed;
     }
 
@@ -371,15 +357,15 @@ namespace
                                            journal.TransactionId.ToString(Guid::FormatType::N).ToLower();
                 if (File::ReadAllBytes(backupPath, backup) ||
                     WriteDurable(restorePath, backup.Get(), static_cast<int32>(backup.Length())) ||
-                    FileSystem::MoveFile(entry.Destination, restorePath, true))
+                    DurableMove(entry.Destination, restorePath, true))
                 {
                     failed = true;
-                    FileSystem::DeleteFile(restorePath);
+                    DurableDeleteFile(restorePath);
                 }
             }
             else if (FileSystem::FileExists(entry.Destination))
             {
-                failed |= FileSystem::DeleteFile(entry.Destination);
+                failed |= DurableDeleteFile(entry.Destination);
             }
         }
         if (!failed)
@@ -391,7 +377,7 @@ namespace
     {
         if (!FileSystem::FileExists(String(directory) / TEXT("journal.bin")))
         {
-            if (FileSystem::DeleteDirectory(directory, true))
+            if (DurableDeleteDirectory(directory, true))
                 return Fail(error, TEXT("Unprepared scene save staging state could not be removed."));
             return false;
         }
@@ -657,13 +643,13 @@ bool SceneFragmentStore::PrepareCloneDirectory(const StringView& projectRoot, co
     Array<Array<byte>> sourceFragments;
     if (LoadAt(sourceSceneGuid, GetScenePath(projectRoot, sourceSceneGuid), sourceIndex, sourceFragments, error))
         return true;
-    if (FileSystem::CreateDirectory(stagingDirectory))
+    if (EnsureDirectory(stagingDirectory))
         return Fail(error, TEXT("Cannot create the scene fragment clone staging directory."));
     bool published = false;
     SCOPE_EXIT
     {
         if (!published)
-            FileSystem::DeleteDirectory(stagingDirectory, true);
+            DurableDeleteDirectory(stagingDirectory, true);
     };
 
     SceneFragmentIndex cloneIndex;
@@ -692,16 +678,14 @@ bool SceneFragmentStore::PrepareCloneDirectory(const StringView& projectRoot, co
         cloneEntry.Content = ContentHash::Compute(buffer.GetString(), buffer.GetSize());
         cloneEntry.Size = buffer.GetSize();
         const String destination = String(stagingDirectory) / cloneEntry.RelativePhysicalPath;
-        const String parent = StringUtils::GetDirectoryName(destination);
-        if ((!FileSystem::DirectoryExists(parent) && FileSystem::CreateDirectory(parent)) ||
-            File::WriteAllBytes(destination, buffer.GetString(), static_cast<int32>(buffer.GetSize())))
+        if (WriteDurable(destination, buffer.GetString(), static_cast<int32>(buffer.GetSize())))
             return Fail(error, TEXT("Cannot write a staged scene fragment clone."));
         cloneIndex.Fragments.Add(MoveTemp(cloneEntry));
     }
 
     rapidjson_flax::StringBuffer indexBytes;
     WriteIndex(cloneIndex, indexBytes);
-    if (File::WriteAllBytes(String(stagingDirectory) / IndexFileName, indexBytes.GetString(),
+    if (WriteDurable(String(stagingDirectory) / IndexFileName, indexBytes.GetString(),
         static_cast<int32>(indexBytes.GetSize())))
         return Fail(error, TEXT("Cannot write the staged scene fragment clone index."));
     published = true;
@@ -978,8 +962,8 @@ namespace
         {
             const TransactionEntry& entry = journal.Entries[i];
             const bool failed = entry.Kind == TransactionEntryKind::Replace
-                                    ? FileSystem::MoveFile(entry.Destination, GetStagePath(journal, i), true)
-                                    : FileSystem::DeleteFile(entry.Destination);
+                                    ? DurableMove(entry.Destination, GetStagePath(journal, i), true)
+                                    : DurableDeleteFile(entry.Destination);
             if (failed)
             {
                 if (RollbackJournal(directory, journal))

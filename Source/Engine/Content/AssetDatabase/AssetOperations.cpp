@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetOperations.h"
+#include "DurableAssetFileSystem.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Level/SceneFragments/SceneFragmentStore.h"
@@ -8,9 +9,6 @@
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
 #include <algorithm>
-#if PLATFORM_WINDOWS
-#include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
-#endif
 
 namespace
 {
@@ -58,7 +56,9 @@ namespace
 
     bool EnsureDirectory(const StringView& path)
     {
-        return path.IsEmpty() || (!FileSystem::DirectoryExists(path) && FileSystem::CreateDirectory(path));
+        if (path.IsEmpty())
+            return true;
+        return DurableAssetFileSystem::EnsureDirectory(path);
     }
 
     bool EnsureParent(const StringView& path)
@@ -68,18 +68,22 @@ namespace
 
     bool FlushFile(const StringView& path)
     {
-#if PLATFORM_WINDOWS
-        const String value(path);
-        HANDLE handle = CreateFileW(*value, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle == INVALID_HANDLE_VALUE)
-            return true;
-        const bool failed = FlushFileBuffers(handle) == 0;
-        CloseHandle(handle);
-        return failed;
-#else
-        return false;
-#endif
+        return DurableAssetFileSystem::FlushFile(path);
+    }
+
+    bool DurableMove(const StringView& destination, const StringView& source, bool overwrite)
+    {
+        return DurableAssetFileSystem::Move(destination, source, overwrite);
+    }
+
+    bool DurableDeleteFile(const StringView& path)
+    {
+        return DurableAssetFileSystem::DeleteFile(path);
+    }
+
+    bool DurableDeleteDirectory(const StringView& path)
+    {
+        return DurableAssetFileSystem::DeleteDirectory(path, true);
     }
 
     class JournalWriter
@@ -196,9 +200,9 @@ namespace
         const String destination = String(directory) / TEXT("journal.bin");
         const String staging = destination + TEXT(".tmp");
         if (File::WriteAllBytes(staging, writer.Data.Get(), writer.Data.Count()) || FlushFile(staging) ||
-            FileSystem::MoveFile(destination, staging, true))
+            DurableMove(destination, staging, true))
         {
-            FileSystem::DeleteFile(staging);
+            DurableAssetFileSystem::DeleteFile(staging);
             return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destination,
                 TEXT("Cannot durably persist the asset operation journal."));
         }
@@ -260,34 +264,34 @@ namespace
         if (IsCreateKind(journal.Kind))
         {
             if (FileSystem::FileExists(journal.DestinationPath))
-                failed |= FileSystem::DeleteFile(journal.DestinationPath);
+                failed |= DurableDeleteFile(journal.DestinationPath);
             if (FileSystem::FileExists(destinationMeta))
-                failed |= FileSystem::DeleteFile(destinationMeta);
+                failed |= DurableDeleteFile(destinationMeta);
             if (journal.DestinationFragmentsPath.HasChars() &&
                 FileSystem::DirectoryExists(journal.DestinationFragmentsPath))
-                failed |= FileSystem::DeleteDirectory(journal.DestinationFragmentsPath, true);
+                failed |= DurableDeleteDirectory(journal.DestinationFragmentsPath);
             return failed;
         }
         if (!FileSystem::FileExists(journal.SourcePath))
         {
             if (FileSystem::FileExists(journal.DestinationPath))
-                failed |= FileSystem::MoveFile(journal.SourcePath, journal.DestinationPath, false);
+                failed |= DurableMove(journal.SourcePath, journal.DestinationPath, false);
             else if (FileSystem::FileExists(journal.StageSourcePath))
-                failed |= FileSystem::MoveFile(journal.SourcePath, journal.StageSourcePath, false);
+                failed |= DurableMove(journal.SourcePath, journal.StageSourcePath, false);
         }
         if (!FileSystem::FileExists(sourceMeta))
         {
             if (FileSystem::FileExists(destinationMeta))
-                failed |= FileSystem::MoveFile(sourceMeta, destinationMeta, false);
+                failed |= DurableMove(sourceMeta, destinationMeta, false);
             else if (FileSystem::FileExists(journal.StageMetaPath))
-                failed |= FileSystem::MoveFile(sourceMeta, journal.StageMetaPath, false);
+                failed |= DurableMove(sourceMeta, journal.StageMetaPath, false);
         }
         if (journal.SourceFragmentsPath.HasChars() && !FileSystem::DirectoryExists(journal.SourceFragmentsPath))
         {
             if (FileSystem::DirectoryExists(journal.DestinationFragmentsPath))
-                failed |= FileSystem::MoveFile(journal.SourceFragmentsPath, journal.DestinationFragmentsPath, false);
+                failed |= DurableMove(journal.SourceFragmentsPath, journal.DestinationFragmentsPath, false);
             else if (FileSystem::DirectoryExists(journal.StageFragmentsPath))
-                failed |= FileSystem::MoveFile(journal.SourceFragmentsPath, journal.StageFragmentsPath, false);
+                failed |= DurableMove(journal.SourceFragmentsPath, journal.StageFragmentsPath, false);
         }
         return failed;
     }
@@ -460,11 +464,11 @@ bool AssetOperations::CreateFromBytes(AssetOperationKind kind, const StringView&
     if (SaveJournal(transactionDirectory, journal, diagnostic) ||
         File::WriteAllBytes(journal.StageSourcePath, sourceData.Get(), sourceData.Length()) || FlushFile(journal.StageSourcePath) ||
         AssetMeta::SaveAtomic(journal.StageMetaPath, meta, diagnostic) ||
-        FileSystem::MoveFile(normalized.AbsolutePath, journal.StageSourcePath, false) ||
-        FileSystem::MoveFile(destinationMeta, journal.StageMetaPath, false))
+        DurableMove(normalized.AbsolutePath, journal.StageSourcePath, false) ||
+        DurableMove(destinationMeta, journal.StageMetaPath, false))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, normalized.AbsolutePath,
                 TEXT("Asset create/import transaction could not publish source and metadata."));
@@ -474,17 +478,17 @@ bool AssetOperations::CreateFromBytes(AssetOperationKind kind, const StringView&
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
     journal.Phase = JournalPhase::Committed;
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
-    FileSystem::DeleteDirectory(transactionDirectory, true);
+    DurableDeleteDirectory(transactionDirectory);
     commit = AssetOperationCommit();
     commit.TransactionId = journal.TransactionId;
     commit.Kind = kind;
@@ -608,15 +612,15 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
     journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
     if (SaveJournal(transactionDirectory, journal, diagnostic) ||
-        (hasFragments && FileSystem::MoveFile(journal.StageFragmentsPath, sourceFragments, false)) ||
-        FileSystem::MoveFile(journal.StageSourcePath, source.AbsolutePath, false) ||
-        FileSystem::MoveFile(journal.StageMetaPath, sourceMeta, false) ||
-        FileSystem::MoveFile(destinationAbsolute, journal.StageSourcePath, false) ||
-        FileSystem::MoveFile(destinationMeta, journal.StageMetaPath, false) ||
-        (hasFragments && FileSystem::MoveFile(destinationFragments, journal.StageFragmentsPath, false)))
+        (hasFragments && DurableMove(journal.StageFragmentsPath, sourceFragments, false)) ||
+        DurableMove(journal.StageSourcePath, source.AbsolutePath, false) ||
+        DurableMove(journal.StageMetaPath, sourceMeta, false) ||
+        DurableMove(destinationAbsolute, journal.StageSourcePath, false) ||
+        DurableMove(destinationMeta, journal.StageMetaPath, false) ||
+        (hasFragments && DurableMove(destinationFragments, journal.StageFragmentsPath, false)))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, source.AbsolutePath,
                 TEXT("Asset move transaction could not publish source and metadata together."));
@@ -626,17 +630,17 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
     journal.Phase = JournalPhase::Committed;
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
-    FileSystem::DeleteDirectory(transactionDirectory, true);
+    DurableDeleteDirectory(transactionDirectory);
 
     AssetOperationCommit commit;
     commit.TransactionId = journal.TransactionId;
@@ -759,12 +763,12 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
             journal.StageFragmentsPath, fragmentError)) ||
         FileSystem::CopyFile(journal.StageSourcePath, source.AbsolutePath) || FlushFile(journal.StageSourcePath) ||
         AssetMeta::SaveAtomic(journal.StageMetaPath, copiedMeta, diagnostic) ||
-        FileSystem::MoveFile(destinationPath.AbsolutePath, journal.StageSourcePath, false) ||
-        FileSystem::MoveFile(destinationMeta, journal.StageMetaPath, false) ||
-        (hasFragments && FileSystem::MoveFile(destinationFragments, journal.StageFragmentsPath, false)))
+        DurableMove(destinationPath.AbsolutePath, journal.StageSourcePath, false) ||
+        DurableMove(destinationMeta, journal.StageMetaPath, false) ||
+        (hasFragments && DurableMove(destinationFragments, journal.StageFragmentsPath, false)))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destinationPath.AbsolutePath,
                 fragmentError.HasChars() ? fragmentError :
@@ -775,17 +779,17 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
     journal.Phase = JournalPhase::Committed;
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
-    FileSystem::DeleteDirectory(transactionDirectory, true);
+    DurableDeleteDirectory(transactionDirectory);
 
     if (_databaseCallbacks.ClearCopiedState(currentMeta.ID, copiedMeta.ID, diagnostic))
         return true;
@@ -889,15 +893,15 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
     journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
     journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
     if (SaveJournal(transactionDirectory, journal, diagnostic) ||
-        (hasFragments && FileSystem::MoveFile(journal.StageFragmentsPath, trash.TrashFragmentsPath, false)) ||
-        FileSystem::MoveFile(journal.StageSourcePath, trash.TrashSourcePath, false) ||
-        FileSystem::MoveFile(journal.StageMetaPath, trash.TrashMetaPath, false) ||
-        FileSystem::MoveFile(trash.OriginalSourcePath, journal.StageSourcePath, false) ||
-        FileSystem::MoveFile(trash.OriginalMetaPath, journal.StageMetaPath, false) ||
-        (hasFragments && FileSystem::MoveFile(trash.OriginalFragmentsPath, journal.StageFragmentsPath, false)))
+        (hasFragments && DurableMove(journal.StageFragmentsPath, trash.TrashFragmentsPath, false)) ||
+        DurableMove(journal.StageSourcePath, trash.TrashSourcePath, false) ||
+        DurableMove(journal.StageMetaPath, trash.TrashMetaPath, false) ||
+        DurableMove(trash.OriginalSourcePath, journal.StageSourcePath, false) ||
+        DurableMove(trash.OriginalMetaPath, journal.StageMetaPath, false) ||
+        (hasFragments && DurableMove(trash.OriginalFragmentsPath, journal.StageFragmentsPath, false)))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, trash.OriginalSourcePath,
                 TEXT("Asset restore transaction could not publish source and metadata."));
@@ -907,17 +911,17 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
     journal.Phase = JournalPhase::Committed;
     if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
         RollbackJournal(journal);
-        FileSystem::DeleteDirectory(transactionDirectory, true);
+        DurableDeleteDirectory(transactionDirectory);
         return true;
     }
-    FileSystem::DeleteDirectory(transactionDirectory, true);
+    DurableDeleteDirectory(transactionDirectory);
     AssetOperationCommit commit;
     commit.TransactionId = journal.TransactionId;
     commit.Kind = AssetOperationKind::Restore;
@@ -1019,7 +1023,7 @@ bool AssetOperations::RecoverIncompleteTransactions(Array<AssetPipelineDiagnosti
             diagnostics.Add(MoveTemp(diagnostic));
             continue;
         }
-        if (FileSystem::DeleteDirectory(directory, true))
+        if (DurableDeleteDirectory(directory))
         {
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
                 TEXT("Recovered asset operation directory could not be removed."));

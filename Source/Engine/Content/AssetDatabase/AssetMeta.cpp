@@ -1,15 +1,13 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetMeta.h"
+#include "DurableAssetFileSystem.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Utilities/Crc.h"
 #include <algorithm>
-#if PLATFORM_WINDOWS
-#include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
-#endif
 
 namespace
 {
@@ -95,31 +93,6 @@ namespace
             AddFragmentMember(object, field.Key, field.Value, allocator);
     }
 
-    bool FlushWrittenFile(const StringView& path)
-    {
-#if PLATFORM_WINDOWS
-        const String value(path);
-        HANDLE handle = CreateFileW(*value, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle == INVALID_HANDLE_VALUE)
-            return true;
-        const bool failed = FlushFileBuffers(handle) == 0;
-        CloseHandle(handle);
-        return failed;
-#else
-        return false;
-#endif
-    }
-
-    bool AtomicReplace(const StringView& destination, const StringView& staging)
-    {
-#if PLATFORM_WINDOWS
-        const String destinationPath(destination);
-        const String stagingPath(staging);
-        return MoveFileExW(*stagingPath, *destinationPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0;
-#else
-        return FileSystem::MoveFile(destination, staging, true);
-#endif
-    }
 }
 
 bool AssetMeta::Parse(const StringAnsiView& json, const StringView& path, AssetMeta& result, AssetPipelineDiagnostic& diagnostic)
@@ -439,8 +412,8 @@ bool AssetMeta::SaveAtomic(const StringView& path, const AssetMeta& value, Asset
     if (value.ToJson(json, diagnostic))
         return true;
     const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
-    SCOPE_EXIT { FileSystem::DeleteFile(staging); };
-    if (File::WriteAllBytes(staging, json.Get(), json.Length()) || FlushWrittenFile(staging))
+    SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
+    if (File::WriteAllBytes(staging, json.Get(), json.Length()) || DurableAssetFileSystem::FlushFile(staging))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Cannot write or flush metadata staging file."));
     if (failurePoint == AssetMetaWriteFailurePoint::AfterWrite)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Injected metadata failure after write."));
@@ -452,7 +425,7 @@ bool AssetMeta::SaveAtomic(const StringView& path, const AssetMeta& value, Asset
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Injected metadata failure before replace."));
     if (FileSystem::FileExists(path) && FileSystem::IsReadOnly(path))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Metadata sidecar is read-only."));
-    if (AtomicReplace(path, staging))
+    if (DurableAssetFileSystem::Replace(path, staging))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Cannot atomically replace metadata sidecar."));
     if (selfWriteHash)
         *selfWriteHash = Crc::MemCrc32(json.Get(), json.Length());

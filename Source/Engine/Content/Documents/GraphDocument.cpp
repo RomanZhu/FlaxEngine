@@ -5,6 +5,7 @@
 #include "Engine/Content/Config.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
+#include "Engine/Content/AssetDatabase/DurableAssetFileSystem.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Assets/AnimationGraph.h"
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
@@ -48,6 +49,7 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/StringUtils.h"
 #include "Engine/Serialization/Json.h"
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/MemoryReadStream.h"
@@ -62,9 +64,6 @@
 #include "Engine/Utilities/Encryption.h"
 #include "Engine/Visject/VisjectGraph.h"
 #include <algorithm>
-#if PLATFORM_WINDOWS
-#include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
-#endif
 
 namespace
 {
@@ -1468,32 +1467,6 @@ namespace
         return a.ToPin < b.ToPin;
     }
 
-    bool FlushWrittenFile(const StringView& path)
-    {
-#if PLATFORM_WINDOWS
-        const String value(path);
-        HANDLE handle = CreateFileW(*value, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle == INVALID_HANDLE_VALUE)
-            return true;
-        const bool failed = FlushFileBuffers(handle) == 0;
-        CloseHandle(handle);
-        return failed;
-#else
-        return false;
-#endif
-    }
-
-    bool AtomicReplace(const StringView& destination, const StringView& staging)
-    {
-#if PLATFORM_WINDOWS
-        const String destinationPath(destination);
-        const String stagingPath(staging);
-        return MoveFileExW(*stagingPath, *destinationPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0;
-#else
-        return FileSystem::MoveFile(destination, staging, true);
-#endif
-    }
-
     struct GraphArtifactArguments
     {
         const Array<byte>* Surface = nullptr;
@@ -2519,12 +2492,12 @@ bool GraphDocumentCodec::SaveJsonAtomic(const StringView& path, const StringAnsi
         }
     }
     const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
-    SCOPE_EXIT { FileSystem::DeleteFile(staging); };
-    if (File::WriteAllBytes(staging, canonicalText.Get(), canonicalText.Length()) || FlushWrittenFile(staging))
+    SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
+    if (File::WriteAllBytes(staging, canonicalText.Get(), canonicalText.Length()) || DurableAssetFileSystem::FlushFile(staging))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot write or flush authored document staging file."));
     if (FileSystem::FileExists(path) && FileSystem::IsReadOnly(path))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Authored document is read-only."));
-    if (AtomicReplace(path, staging))
+    if (DurableAssetFileSystem::Replace(path, staging))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot atomically replace authored document."));
     diagnostic = AssetPipelineDiagnostic();
     return false;

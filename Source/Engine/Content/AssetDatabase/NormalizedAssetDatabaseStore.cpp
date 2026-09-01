@@ -2,6 +2,7 @@
 
 #include "NormalizedAssetDatabaseStore.h"
 #include "AssetDatabaseBinary.h"
+#include "DurableAssetFileSystem.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -100,25 +101,7 @@ namespace
         return Crc::MemCrc32(&value, sizeof(T) - sizeof(uint32));
     }
 
-    bool AtomicReplace(const StringView& destination, const StringView& staging)
-    {
-#if PLATFORM_WINDOWS
-        const String destinationPath(destination);
-        const String stagingPath(staging);
-        return MoveFileExW(*stagingPath, *destinationPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0;
-#else
-        return FileSystem::MoveFile(destination, staging, true);
-#endif
-    }
-
-    bool WriteAtomic(const StringView& path, const void* data, uint32 length)
-    {
-        const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
-        SCOPE_EXIT { FileSystem::DeleteFile(staging); };
-        return File::WriteAllBytes(staging, data, length) || AtomicReplace(path, staging);
-    }
-
-    bool FlushDurable(const StringView& path)
+    bool FlushWalFile(const StringView& path)
     {
 #if PLATFORM_WINDOWS
         const String normalizedPath(path);
@@ -130,8 +113,22 @@ namespace
         CloseHandle(handle);
         return failed;
 #else
-        return false;
+        return DurableAssetFileSystem::FlushFile(path);
 #endif
+    }
+
+    bool WriteAtomic(const StringView& path, const void* data, uint32 length)
+    {
+        const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
+        SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
+#if PLATFORM_LINUX || PLATFORM_MAC
+        if (File::WriteAllBytes(staging, data, length) || DurableAssetFileSystem::FlushFile(staging))
+            return true;
+#else
+        if (File::WriteAllBytes(staging, data, length))
+            return true;
+#endif
+        return DurableAssetFileSystem::Replace(path, staging);
     }
 
     const Char* TableName(TableId table)
@@ -349,6 +346,8 @@ bool NormalizedAssetDatabaseStore::SaveCheckpoint(const StringView& directory, c
         if (WriteAtomic(path, file.Get(), file.Count()))
             return Fail(diagnostic, path, TEXT("Cannot write normalized source database table checkpoint."));
     }
+    if (DurableAssetFileSystem::FlushDirectory(directory))
+        return Fail(diagnostic, directory, TEXT("Cannot durably publish normalized source database table checkpoints."));
 
     Manifest manifest;
     manifest.ProjectId = state.Database.ProjectId;
@@ -360,8 +359,13 @@ bool NormalizedAssetDatabaseStore::SaveCheckpoint(const StringView& directory, c
         return Fail(diagnostic, manifestPath, TEXT("Cannot publish normalized source database checkpoint manifest."));
     generation = nextGeneration;
     if (previousGeneration)
+    {
+        bool removedOldTable = false;
         for (uint32 i = 0; i < (uint32)TableId::Count; i++)
-            FileSystem::DeleteFile(TablePath(directory, (TableId)i, previousGeneration));
+            removedOldTable |= !FileSystem::DeleteFile(TablePath(directory, (TableId)i, previousGeneration));
+        if (removedOldTable && DurableAssetFileSystem::FlushDirectory(directory))
+            return Fail(diagnostic, directory, TEXT("Cannot durably remove prior normalized source database checkpoints."));
+    }
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -447,7 +451,7 @@ bool NormalizedAssetDatabaseStore::AppendWal(const StringView& path, const Guid&
     file->SetPosition(file->GetSize());
     const bool failed = file->Write(&frame, sizeof(frame)) || (payload.HasItems() && file->Write(payload.Get(), payload.Count()));
     Delete(file);
-    if (failed || FlushDurable(path))
+    if (failed || FlushWalFile(path))
         return Fail(diagnostic, path, TEXT("Cannot append normalized source database WAL transaction."));
     lastRevision = record.Revision;
     diagnostic = AssetPipelineDiagnostic();
