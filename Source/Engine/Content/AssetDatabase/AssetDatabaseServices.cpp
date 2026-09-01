@@ -575,6 +575,25 @@ namespace
             AssetPathPolicy::IsSameOrChild(path, AssetSourceRoots::GetEngineRoot());
     }
 
+    bool TryGetFacadeMainRecordByPath(const StringView& path, AssetRecord& record)
+    {
+        const String resolved = ResolveFacadeAssetPath(path);
+        if (!IsFacadeAssetPath(resolved))
+            return false;
+        String projectRoot;
+        String contentRoot;
+        AssetSourceRoots::Resolve(resolved, projectRoot, contentRoot);
+        AssetPathPolicy::ProjectPath normalized;
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetPathPolicy::TryNormalizeProjectPath(projectRoot, contentRoot, Globals::ProjectLibraryFolder,
+            resolved, normalized, diagnostic))
+            return false;
+        String key = normalized.PortabilityKey;
+        if (AssetPathPolicy::IsSameOrChild(resolved, AssetSourceRoots::GetEngineRoot()))
+            key = String(TEXT("engine/")) + key;
+        return AssetDatabase::Get().TryGetMainRecordByPath(key, record) && IsFacadeRecord(record);
+    }
+
     bool TrySanitizeFacadePath(const StringView& path, const Guid& ownerAssetGuid, String& result)
     {
         result.Clear();
@@ -1944,10 +1963,8 @@ bool AssetDatabaseQueryService::TryGetMainRecordAtPath(const StringView& path, A
     result = AssetDatabaseRecordInfo();
     if (path.IsEmpty() || EnsureDatabaseLoaded())
         return false;
-    String key = ResolveFacadeAssetPath(path).ToLower();
-    key.Replace(TEXT('\\'), TEXT('/'));
     AssetRecord record;
-    if (!AssetDatabase::Get().TryGetMainRecordByPath(key, record) || !IsFacadeRecord(record))
+    if (!TryGetFacadeMainRecordByPath(path, record))
         return false;
     result = ToInfo(record);
     return true;
@@ -2155,10 +2172,8 @@ Guid AssetDatabaseQueryService::AssetPathToGUID(const StringView& path)
 {
     if (path.IsEmpty() || EnsureDatabaseLoaded())
         return Guid::Empty;
-    String key = ResolveFacadeAssetPath(path).ToLower();
-    key.Replace(TEXT('\\'), TEXT('/'));
     AssetRecord record;
-    return AssetDatabase::Get().TryGetMainRecordByPath(key, record) && IsFacadeRecord(record)
+    return TryGetFacadeMainRecordByPath(path, record)
         ? record.SourceAssetID
         : Guid::Empty;
 }

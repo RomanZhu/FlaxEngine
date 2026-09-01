@@ -412,6 +412,8 @@ namespace FlaxEngine.Tests
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectCopyPath, out var projectCopyRecord),
                     "Project copy was not published to the asset database.");
                 Assert.AreNotEqual(sourceId, projectCopyRecord.SourceAssetID);
+                Assert.AreEqual(projectCopyRecord.SourceAssetID, AssetDatabaseQueryService.AssetPathToGUID(projectCopyPath),
+                    "Project copy path did not resolve to its persistent source GUID.");
 
                 lifecycleStage = "Project move";
                 var projectCopyItem = workspace.FindAsset(projectCopyRecord.SourceAssetID);
