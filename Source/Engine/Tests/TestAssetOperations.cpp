@@ -683,6 +683,23 @@ TEST_CASE("Content importer overlaps independent canonical preparation")
 #endif
 }
 
+TEST_CASE("Project panel preserves authored particle and collision text lifecycle")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestEditorUtils");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunParticleAndCollisionAuthoredTextLifecycle", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestEditorUtils"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
+}
+
 TEST_CASE("Asset operations atomically remap external-actors scene copies")
 {
     const String root = Globals::TemporaryFolder / (TEXT("ExternalActorCopy-") + Guid::New().ToString(Guid::FormatType::N));

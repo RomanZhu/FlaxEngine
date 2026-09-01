@@ -8,13 +8,17 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Import;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Modules;
 using FlaxEditor.Windows;
+using FlaxEditor.Windows.Assets;
 using NUnit.Framework;
+using Newtonsoft.Json.Linq;
 
 namespace FlaxEngine.Tests
 {
@@ -1492,6 +1496,174 @@ namespace FlaxEngine.Tests
             });
 
             Assert.IsTrue(new FileProxy().IsProxyFor(item));
+        }
+
+        private static AssetItem AssertAuthoredEditorRoute(string path, Guid id, string typeName, string processor,
+            string itemType, string proxyType, Type windowType)
+        {
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record));
+            Assert.AreEqual(id, record.ID);
+            Assert.AreEqual(typeName, record.TypeName);
+            Assert.AreEqual(processor, record.ProcessorID);
+            Assert.AreEqual(AssetSourceKind.TextDocument, record.SourceKind);
+            Assert.AreEqual(AssetRecordStatus.Ready, record.Status);
+
+            var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
+            var item = workspace.FindAsset(id);
+            Assert.NotNull(item);
+            Assert.AreEqual(itemType, item.GetType().Name);
+            Assert.AreEqual(typeName, item.TypeName);
+            Assert.IsTrue(item.IsCanonicalSource);
+            var proxy = workspace.GetProxy(item);
+            Assert.NotNull(proxy);
+            Assert.AreEqual(proxyType, proxy.GetType().Name);
+
+            var contentWindow = FlaxEditor.Editor.Instance.Windows.ContentWin;
+            contentWindow.Select(item, true);
+            Assert.AreSame(item, contentWindow.Selection.Single());
+            contentWindow.ClearSelection(false);
+
+            var editorWindow = FlaxEditor.Editor.Instance.ContentEditing.Open(item, true);
+            try
+            {
+                Assert.NotNull(editorWindow);
+                Assert.AreEqual(windowType, editorWindow.GetType());
+            }
+            finally
+            {
+                editorWindow?.Close();
+            }
+            return item;
+        }
+
+        private static void AssertAuthoredText(string path, string typeName)
+        {
+            var bytes = File.ReadAllBytes(path);
+            Assert.Greater(bytes.Length, 2);
+            Assert.AreNotEqual((byte)'G', bytes[0], "Authored source was replaced by a binary Flax artifact.");
+            var json = JObject.Parse(File.ReadAllText(path));
+            Assert.AreEqual(typeName, (string)json["type"]);
+        }
+
+        [Test]
+        public void TestParticleAndCollisionAuthoredTextLifecycle()
+        {
+            var root = Path.Combine(Globals.ProjectContentFolder, "__AuthoredTextLifecycle_" + Guid.NewGuid().ToString("N"));
+            var emitterPath = Path.Combine(root, "Emitter.particleemitter");
+            var systemPath = Path.Combine(root, "System.particlesystem");
+            var collisionPath = Path.Combine(root, "Collision.collisiondata");
+            var consoleDiagnostics = new List<string>();
+            LogMessageDelegate captureConsoleDiagnostic = (level, message, stackTrace, threadId) =>
+            {
+                if (level == LogType.Warning || level == LogType.Error || level == LogType.Fatal)
+                {
+                    lock (consoleDiagnostics)
+                        consoleDiagnostics.Add(level + ": " + message);
+                }
+            };
+            Debug.LogMessageReceived += captureConsoleDiagnostic;
+            try
+            {
+                Directory.CreateDirectory(root);
+                var emitterId = AssetDocumentRegistry.CreateGraph(emitterPath, typeof(ParticleEmitter).FullName);
+                var systemId = AuthoredAssetDocumentService.Create(systemPath, typeof(ParticleSystem).FullName);
+                var collisionId = AuthoredAssetDocumentService.Create(collisionPath, typeof(CollisionData).FullName);
+                Assert.AreNotEqual(Guid.Empty, emitterId);
+                Assert.AreNotEqual(Guid.Empty, systemId);
+                Assert.AreNotEqual(Guid.Empty, collisionId);
+
+                var emitterItem = AssertAuthoredEditorRoute(emitterPath, emitterId, typeof(ParticleEmitter).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "ParticleEmitterProxy", typeof(ParticleEmitterWindow));
+                var systemItem = AssertAuthoredEditorRoute(systemPath, systemId, typeof(ParticleSystem).FullName,
+                    "Flax.ParticleSystem", "ParticleSystemItem", "ParticleSystemProxy", typeof(ParticleSystemWindow));
+                AssertAuthoredEditorRoute(collisionPath, collisionId, typeof(CollisionData).FullName,
+                    "Flax.CollisionData", "CollisionDataItem", "CollisionDataProxy", typeof(CollisionDataWindow));
+
+                var emitter = AssetDocumentRegistry.OpenGraph<ParticleEmitter>(emitterItem, out var emitterSession);
+                try
+                {
+                    Assert.NotNull(emitter);
+                    Assert.IsFalse(emitter.WaitForLoaded());
+                    emitterSession.SetGraphSurface((byte[])emitterSession.GetGraphSurface().Clone());
+                    Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
+                    Assert.IsFalse(emitterSession.IsDirty);
+                    Assert.IsTrue(emitterSession.ReloadFromDisk());
+                }
+                finally
+                {
+                    AssetDocumentRegistry.Close(emitterItem, ref emitterSession);
+                }
+
+                var timeline = AuthoredAssetDocumentService.LoadParticleSystemTimeline(systemPath);
+                Assert.IsFalse(FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(systemPath,
+                    () => AuthoredAssetDocumentService.SaveParticleSystemTimeline(systemPath, timeline)));
+
+                var cube = FlaxEngine.Content.LoadAsyncInternal<Model>("Editor/Primitives/Cube");
+                Assert.NotNull(cube);
+                Assert.IsFalse(cube.WaitForLoaded());
+                var collisionFailed = Task.Run(() => FlaxEditor.Editor.Instance.ContentDatabase.SaveAsset(collisionPath,
+                    () => FlaxEditor.Editor.CookMeshCollision(collisionPath, CollisionDataType.TriangleMesh, cube))).GetAwaiter().GetResult();
+                Assert.IsFalse(collisionFailed);
+
+                foreach (var id in new[] { emitterId, systemId, collisionId })
+                {
+                    Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
+                    Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(id));
+                }
+
+                var system = FlaxEngine.Content.LoadAssetAsync<ParticleSystem>(systemId);
+                var collision = FlaxEngine.Content.LoadAssetAsync<CollisionData>(collisionId);
+                Assert.NotNull(system);
+                Assert.NotNull(collision);
+                Assert.IsFalse(system.WaitForLoaded());
+                Assert.IsFalse(collision.WaitForLoaded());
+                system.Reload();
+                collision.Reload();
+                Assert.IsFalse(system.WaitForLoaded());
+                Assert.IsFalse(collision.WaitForLoaded());
+
+                AssetPipelineService.RefreshSources(new[] { emitterPath, systemPath, collisionPath });
+                emitterItem = AssertAuthoredEditorRoute(emitterPath, emitterId, typeof(ParticleEmitter).FullName,
+                    "Flax.GraphDocument", "BinaryAssetItem", "ParticleEmitterProxy", typeof(ParticleEmitterWindow));
+                AssertAuthoredEditorRoute(systemPath, systemId, typeof(ParticleSystem).FullName,
+                    "Flax.ParticleSystem", "ParticleSystemItem", "ParticleSystemProxy", typeof(ParticleSystemWindow));
+                AssertAuthoredEditorRoute(collisionPath, collisionId, typeof(CollisionData).FullName,
+                    "Flax.CollisionData", "CollisionDataItem", "CollisionDataProxy", typeof(CollisionDataWindow));
+                AssetDocumentRegistry.OpenGraph<ParticleEmitter>(emitterItem, out var restartedEmitterSession);
+                Assert.AreEqual(Path.GetFullPath(emitterPath), Path.GetFullPath(restartedEmitterSession.SourcePath));
+                AssetDocumentRegistry.Close(emitterItem, ref restartedEmitterSession);
+                Assert.IsTrue(FlaxEditor.Editor.GetCollisionDataOptions(collisionPath, out var collisionType, out var sourceModel,
+                    out _, out _, out _, out _));
+                Assert.AreEqual(CollisionDataType.TriangleMesh, collisionType);
+                Assert.AreEqual(cube.ID, sourceModel);
+
+                AssertAuthoredText(emitterPath, typeof(ParticleEmitter).FullName);
+                AssertAuthoredText(systemPath, typeof(ParticleSystem).FullName);
+                AssertAuthoredText(collisionPath, typeof(CollisionData).FullName);
+                var ids = new[] { emitterId, systemId, collisionId };
+                var paths = new[] { emitterPath, systemPath, collisionPath };
+                var diagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
+                    x.Severity != AssetPipelineDiagnosticSeverity.Info &&
+                    (ids.Contains(x.AssetGuid) || paths.Any(path => string.Equals(path, x.SourcePath, StringComparison.OrdinalIgnoreCase)))).ToArray();
+                Assert.IsEmpty(diagnostics, string.Join(Environment.NewLine, diagnostics.Select(x => x.Code + ": " + x.Message)));
+                lock (consoleDiagnostics)
+                    Assert.IsEmpty(consoleDiagnostics, string.Join(Environment.NewLine, consoleDiagnostics));
+            }
+            finally
+            {
+                Debug.LogMessageReceived -= captureConsoleDiagnostic;
+                foreach (var path in new[] { emitterPath, systemPath, collisionPath })
+                    CleanupCanonicalCopyAsset(path);
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
+            }
+        }
+
+        public static int RunParticleAndCollisionAuthoredTextLifecycle()
+        {
+            new TestEditorUtils().TestParticleAndCollisionAuthoredTextLifecycle();
+            return 0;
         }
 
         [Test]
