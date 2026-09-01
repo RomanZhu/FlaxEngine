@@ -10,7 +10,7 @@
 class FLAXENGINE_API AssetDatabaseSchema
 {
 public:
-    static constexpr uint32 Version = 5;
+    static constexpr uint32 Version = 6;
 };
 
 /// <summary>Persisted singleton database state.</summary>

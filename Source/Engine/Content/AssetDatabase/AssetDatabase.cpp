@@ -833,38 +833,38 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, AssetPipelineDiagnostic& diagnostic)
 {
     Array<AssetPipelineDiagnostic> diagnostics;
-    return ReconcileScanRowsInternal(records, diagnostics, nullptr, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, nullptr, Guid::Empty, 0, diagnostic);
 }
 
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics, AssetPipelineDiagnostic& diagnostic)
 {
-    return ReconcileScanRowsInternal(records, diagnostics, nullptr, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, nullptr, Guid::Empty, 0, diagnostic);
 }
 
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records,
     const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic)
 {
     Array<AssetPipelineDiagnostic> diagnostics;
-    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, Guid::Empty, 0, diagnostic);
 }
 
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records,
     const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>& fileStates,
     AssetPipelineDiagnostic& diagnostic)
 {
-    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, Guid::Empty, 0, diagnostic);
 }
 
 bool AssetDatabase::ReconcileScanRows(const Array<AssetRecord>& records,
     const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>& fileStates,
-    AssetPipelineDiagnostic& diagnostic)
+    AssetPipelineDiagnostic& diagnostic, const Guid& refreshId, uint32 pass)
 {
-    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, diagnostic);
+    return ReconcileScanRowsInternal(records, diagnostics, &fileStates, refreshId, pass, diagnostic);
 }
 
 bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
     const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>* fileStates,
-    AssetPipelineDiagnostic& diagnostic)
+    const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& diagnostic)
 {
     ScopeLock writeLock(_writeLocker);
     if (!_sourceDatabase.IsOpen())
@@ -886,6 +886,7 @@ bool AssetDatabase::ReconcileScanRowsInternal(const Array<AssetRecord>& records,
     std::unique_ptr<AssetDatabaseTransaction> transaction = _sourceDatabase.BeginTransaction();
     if (!transaction)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Cannot begin the authoritative source asset database transaction."));
+    transaction->SetChangeContext(refreshId, pass);
 
     Dictionary<Guid, const AssetRecord*> firstBySource;
     Dictionary<Guid, const AssetRecord*> mainBySource;
@@ -1247,14 +1248,34 @@ bool AssetDatabase::ReadChangesAfter(uint64 revision, Array<AssetChangeSet>& res
 }
 
 bool AssetDatabase::RecordPublication(const SourceAssetPublicationRow& publication, const Array<SourceAssetDependencyRow>& dependencies,
-    AssetPipelineDiagnostic& diagnostic)
+    AssetPipelineDiagnostic& diagnostic, const Guid& refreshId, uint32 pass)
 {
     ScopeLock writeLock(_writeLocker);
     std::unique_ptr<AssetDatabaseTransaction> transaction = _sourceDatabase.BeginTransaction();
     if (!transaction)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Cannot begin a publication transaction."));
+    transaction->SetChangeContext(refreshId, pass);
     transaction->ReplaceDependencies(publication.AssetGuid, publication.LocalFileId, publication.TargetId, dependencies);
     transaction->UpsertPublication(publication);
+    if (transaction->Commit(diagnostic))
+        return true;
+    AssetDatabaseChangeBatch changes;
+    RebuildCacheFromDurable(&changes);
+    Changed(changes);
+    return false;
+}
+
+bool AssetDatabase::RecordRefreshSession(const SourceRefreshSessionRow& session, uint32 pass,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    ScopeLock writeLock(_writeLocker);
+    if (!session.RefreshId.IsValid())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Refresh session identity is invalid."));
+    std::unique_ptr<AssetDatabaseTransaction> transaction = _sourceDatabase.BeginTransaction();
+    if (!transaction)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::SnapshotInvalid, StringView::Empty, TEXT("Cannot begin a refresh session transaction."));
+    transaction->SetChangeContext(session.RefreshId, pass);
+    transaction->UpsertRefreshSession(session);
     if (transaction->Commit(diagnostic))
         return true;
     AssetDatabaseChangeBatch changes;

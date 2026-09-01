@@ -11,7 +11,7 @@
 namespace
 {
     constexpr uint32 JournalMagic = 0x4a434146; // FACJ
-    constexpr uint32 JournalVersion = 1;
+    constexpr uint32 JournalVersion = 2;
     constexpr uint32 FrameMagic = 0x46434146; // FACF
     constexpr uint32 MaximumFrameBytes = 256 * 1024 * 1024;
     constexpr uint64 MaximumRetainedRevisions = 4096;

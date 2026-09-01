@@ -22,25 +22,39 @@ DECLARE_ENUM_OPERATORS(AssetRefreshReason);
 
 struct FLAXENGINE_API AssetRefreshIterationContext
 {
+    Guid RefreshId = Guid::Empty;
+    int32 Pass = 0;
     int32 Iteration = 0;
     uint64 ImporterRegistryGeneration = 0;
     AssetRefreshReason Reasons = AssetRefreshReason::None;
 };
 
+struct FLAXENGINE_API AssetRefreshResult
+{
+    Guid RefreshId = Guid::Empty;
+    int32 Pass = 0;
+    int32 Iterations = 0;
+    bool Queued = false;
+    Array<AssetImportCompletion> Completed;
+};
+
+enum class AssetRefreshRunState : byte
+{
+    Started,
+    Succeeded,
+    Failed,
+};
+
 using AssetRefreshReconcileCallback = Function<bool(const AssetRefreshIterationContext&, Array<AssetImportPlanRequest>&, bool&, AssetPipelineDiagnostic&)>;
 using AssetRefreshExecuteCallback = Function<bool(const AssetRefreshIterationContext&, const Array<AssetImportPlan>&, Array<AssetImportCompletion>&, bool&, AssetPipelineDiagnostic&)>;
+using AssetRefreshSessionCallback = Function<bool(const AssetRefreshResult&, AssetRefreshRunState,
+    const AssetPipelineDiagnostic&, AssetPipelineDiagnostic&)>;
 
 struct FLAXENGINE_API AssetRefreshCallbacks
 {
     AssetRefreshReconcileCallback Reconcile;
     AssetRefreshExecuteCallback Execute;
-};
-
-struct FLAXENGINE_API AssetRefreshResult
-{
-    int32 Iterations = 0;
-    bool Queued = false;
-    Array<AssetImportCompletion> Completed;
+    AssetRefreshSessionCallback Session;
 };
 
 /// <summary>Coalesced, bounded fixed-point refresh with registry-generation restart.</summary>

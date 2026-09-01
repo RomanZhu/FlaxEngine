@@ -21,7 +21,7 @@ namespace
     constexpr uint32 TableMagic = 0x54444146; // FADT
     constexpr uint32 TableVersion = 1;
     constexpr uint32 WalMagic = 0x4c574146; // FAWL
-    constexpr uint32 WalVersion = 1;
+    constexpr uint32 WalVersion = 2;
     constexpr uint32 WalFrameMagic = 0x46574146; // FAWF
     constexpr uint32 MaximumPayloadBytes = 1024 * 1024 * 1024;
 

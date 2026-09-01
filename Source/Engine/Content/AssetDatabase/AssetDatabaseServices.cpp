@@ -302,6 +302,8 @@ namespace
     {
         AssetDatabaseChangeInfo result;
         result.Revision = change.Revision;
+        result.RefreshId = change.RefreshId;
+        result.Pass = change.Pass;
         for (const AssetAddedChange& value : change.Added)
             result.Added.Add(value.AssetGuid);
         for (const AssetRemovedChange& value : change.Removed)
@@ -1270,6 +1272,37 @@ namespace
         }
 
         AssetRefreshCallbacks callbacks;
+        const uint64 startingRevision = AssetDatabase::Get().GetRevision();
+        callbacks.Session = [startingRevision, reason](const AssetRefreshResult& refresh,
+            AssetRefreshRunState state, const AssetPipelineDiagnostic&, AssetPipelineDiagnostic& localDiagnostic)
+        {
+            SourceRefreshSessionRow session;
+            if (state == AssetRefreshRunState::Started)
+            {
+                session.RefreshId = refresh.RefreshId;
+                session.StartingRevision = startingRevision;
+                session.Reason = reason == AssetRefreshReason::Filesystem ? TEXT("Filesystem") : TEXT("Explicit");
+                session.Status = TEXT("Running");
+                session.StartedUtcTicks = DateTime::NowUTC().Ticks;
+            }
+            else
+            {
+                const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+                if (!snapshot.TryGetRefreshSession(refresh.RefreshId, session))
+                {
+                    localDiagnostic = AssetPipelineDiagnostic();
+                    localDiagnostic.Code = AssetPipelineDiagnosticCode::SnapshotInvalid;
+                    localDiagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+                    localDiagnostic.Message = TEXT("Cannot complete a refresh session that has no durable start row.");
+                    return true;
+                }
+                session.EndingRevision = snapshot.GetRevision();
+                session.IterationCount = refresh.Iterations;
+                session.Status = state == AssetRefreshRunState::Succeeded ? TEXT("Completed") : TEXT("Failed");
+                session.CompletedUtcTicks = DateTime::NowUTC().Ticks;
+            }
+            return AssetDatabase::Get().RecordRefreshSession(session, refresh.Pass, localDiagnostic);
+        };
         callbacks.Reconcile = [selectedIds, force](const AssetRefreshIterationContext& context,
             Array<AssetImportPlanRequest>& requests, bool&, AssetPipelineDiagnostic& localDiagnostic)
         {

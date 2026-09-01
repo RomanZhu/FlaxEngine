@@ -69,6 +69,8 @@ struct FLAXENGINE_API AssetDiagnosticsChangedChange
 struct FLAXENGINE_API AssetChangeSet
 {
     uint64 Revision = 0;
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     Array<AssetAddedChange> Added;
     Array<AssetRemovedChange> Removed;
     Array<AssetMovedChange> Moved;

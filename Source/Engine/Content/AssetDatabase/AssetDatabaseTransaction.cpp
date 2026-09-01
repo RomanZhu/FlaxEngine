@@ -59,6 +59,14 @@ bool AssetDatabaseTransaction::IsCompleted() const
     return _completed;
 }
 
+void AssetDatabaseTransaction::SetChangeContext(const Guid& refreshId, uint32 pass)
+{
+    ASSERT(!_completed);
+    ASSERT(refreshId.IsValid() || pass == 0);
+    _changes.RefreshId = refreshId;
+    _changes.Pass = pass;
+}
+
 void AssetDatabaseTransaction::SetLastCompleteScanId(uint64 scanId)
 {
     ASSERT(!_completed);

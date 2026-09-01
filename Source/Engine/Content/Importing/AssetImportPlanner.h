@@ -8,6 +8,8 @@
 struct FLAXENGINE_API AssetImportPlanRequest
 {
     AssetGuid Asset;
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     String SourcePath;
     String ExplicitImporterID;
     String Reason;

@@ -62,6 +62,7 @@ public:
     const AssetChangeSet& GetChanges() const;
     bool IsCompleted() const;
 
+    void SetChangeContext(const Guid& refreshId, uint32 pass);
     void SetLastCompleteScanId(uint64 scanId);
     void SetImporterRegistryGeneration(uint64 generation);
     void UpsertSource(const SourceAssetRow& source);

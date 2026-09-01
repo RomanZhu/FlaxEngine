@@ -136,6 +136,8 @@ API_STRUCT() struct FLAXENGINE_API AssetDatabaseChangeInfo
     DECLARE_SCRIPTING_TYPE_MINIMAL(AssetDatabaseChangeInfo);
 
     API_FIELD() uint64 Revision = 0;
+    API_FIELD() Guid RefreshId = Guid::Empty;
+    API_FIELD() uint32 Pass = 0;
     API_FIELD() Array<Guid> Added;
     API_FIELD() Array<Guid> Removed;
     API_FIELD() Array<Guid> Changed;

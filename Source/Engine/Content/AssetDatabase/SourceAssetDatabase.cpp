@@ -17,7 +17,7 @@ namespace
     constexpr uint32 SnapshotMagic = 0x53444146; // FADS
     constexpr uint32 SnapshotVersion = 1;
     constexpr uint32 WalMagic = 0x57444146; // FADW
-    constexpr uint32 WalVersion = 1;
+    constexpr uint32 WalVersion = 2;
     constexpr uint32 MaximumDatabaseBytes = 1024 * 1024 * 1024;
 
     struct SnapshotHeader

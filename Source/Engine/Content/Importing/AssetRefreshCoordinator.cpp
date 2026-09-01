@@ -65,12 +65,48 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
         _pendingReasons = 0;
     }
 
+    result.RefreshId = Guid::New();
+    diagnostic = AssetPipelineDiagnostic();
+    AssetPipelineDiagnostic startPersistenceDiagnostic;
+    if (callbacks.Session.IsBinded() && callbacks.Session(result, AssetRefreshRunState::Started, diagnostic,
+        startPersistenceDiagnostic))
+    {
+        diagnostic = MoveTemp(startPersistenceDiagnostic);
+        EndRun(reasons);
+        return true;
+    }
+    const auto finish = [&](bool failed, uint32 retryReasons)
+    {
+        result.Pass = result.Iterations;
+        if (callbacks.Session.IsBinded())
+        {
+            const AssetPipelineDiagnostic terminalDiagnostic = diagnostic;
+            AssetPipelineDiagnostic persistenceDiagnostic;
+            const AssetRefreshRunState state = failed ? AssetRefreshRunState::Failed : AssetRefreshRunState::Succeeded;
+            if (callbacks.Session(result, state, terminalDiagnostic, persistenceDiagnostic))
+            {
+                if (failed)
+                    diagnostic.Related.Add(TEXT("Refresh session terminal persistence failed: ") + persistenceDiagnostic.Message);
+                else
+                    diagnostic = MoveTemp(persistenceDiagnostic);
+                failed = true;
+            }
+        }
+        EndRun(retryReasons);
+        if (!failed)
+            diagnostic = AssetPipelineDiagnostic();
+        return failed;
+    };
+
     for (int32 iteration = 1; iteration <= _maximumIterations; iteration++)
     {
         result.Iterations = iteration;
+        result.Pass = iteration;
         const uint64 importerGeneration = _importers.GetGeneration();
         const uint64 postprocessorGeneration = _postprocessors.GetGeneration();
         AssetRefreshIterationContext context;
+        context.RefreshId = result.RefreshId;
+        context.Pass = iteration;
         context.Iteration = iteration;
         context.ImporterRegistryGeneration = importerGeneration;
         context.Reasons = static_cast<AssetRefreshReason>(reasons);
@@ -78,29 +114,22 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
         bool sourceChanged = false;
         Array<AssetImportPlanRequest> requests;
         if (callbacks.Reconcile(context, requests, sourceChanged, diagnostic))
-        {
-            EndRun(reasons);
-            return true;
-        }
+            return finish(true, reasons);
         const ContentHash effectivePostprocessors = _postprocessors.GetVersionKey().Digest;
         for (AssetImportPlanRequest& request : requests)
         {
+            request.RefreshId = context.RefreshId;
+            request.Pass = context.Pass;
             if (request.EffectivePostprocessorHash.IsZero())
                 request.EffectivePostprocessorHash = effectivePostprocessors;
         }
         Array<AssetImportPlan> plans;
         if (_planner.Build(requests, plans, diagnostic))
-        {
-            EndRun(reasons);
-            return true;
-        }
+            return finish(true, reasons);
         for (const AssetImportPlan& plan : plans)
         {
             if (_postprocessors.RunPreprocess(plan, sourceChanged, diagnostic))
-            {
-                EndRun(reasons);
-                return true;
-            }
+                return finish(true, reasons);
         }
         if (sourceChanged)
         {
@@ -114,19 +143,14 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
         }
         Array<AssetImportCompletion> completed;
         if (callbacks.Execute(context, plans, completed, sourceChanged, diagnostic))
-        {
-            EndRun(reasons);
-            return true;
-        }
+            return finish(true, reasons);
         if (_postprocessors.RunBatch(completed, sourceChanged, diagnostic))
-        {
-            EndRun(reasons);
-            return true;
-        }
+            return finish(true, reasons);
         result.Completed = MoveTemp(completed);
 
         const bool registryChanged = _importers.GetGeneration() != importerGeneration ||
             _postprocessors.GetGeneration() != postprocessorGeneration;
+        bool complete = false;
         {
             ScopeLock lock(_locker);
             reasons = _pendingReasons;
@@ -136,18 +160,15 @@ bool AssetRefreshCoordinator::Refresh(AssetRefreshReason reason, const AssetRefr
             if (registryChanged)
                 reasons |= ToReasons(AssetRefreshReason::ImporterRegistry);
             if (reasons == 0)
-            {
-                _running = false;
-                diagnostic = AssetPipelineDiagnostic();
-                return false;
-            }
+                complete = true;
         }
+        if (complete)
+            return finish(false, 0);
     }
 
-    EndRun(reasons);
     diagnostic = AssetPipelineDiagnostic();
     diagnostic.Code = AssetPipelineDiagnosticCode::BuildCycle;
     diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
     diagnostic.Message = TEXT("Asset refresh did not reach a fixed point within the configured iteration cap.");
-    return true;
+    return finish(true, reasons);
 }

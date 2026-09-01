@@ -69,7 +69,7 @@ namespace
 
 TEST_CASE("Source asset database schema persists exact composite object identity")
 {
-    CHECK(AssetDatabaseSchema::Version == 5);
+    CHECK(AssetDatabaseSchema::Version == 6);
 
     SourceAssetDatabaseState state;
     state.Database.ProjectId = Guid::New();

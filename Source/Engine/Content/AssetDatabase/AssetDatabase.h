@@ -65,7 +65,7 @@ private:
     bool PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic);
     bool ReconcileScanRowsInternal(const Array<AssetRecord>& records,
         const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>* fileStates,
-        AssetPipelineDiagnostic& diagnostic);
+        const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& diagnostic);
     void RebuildCacheFromDurable(AssetDatabaseChangeBatch* changes = nullptr);
 
 public:
@@ -121,12 +121,14 @@ public:
 
     /// <summary>Reconciles scanner output through typed source/object/dependency/diagnostic row mutations.</summary>
     bool ReconcileScanRows(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics,
-        const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic);
+        const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic,
+        const Guid& refreshId = Guid::Empty, uint32 pass = 0);
 
     AssetDatabaseReadSnapshot GetDurableSnapshot() const;
     bool ReadChangesAfter(uint64 revision, Array<AssetChangeSet>& result, bool& requiresSnapshot, AssetPipelineDiagnostic& diagnostic) const;
     bool RecordPublication(const SourceAssetPublicationRow& publication, const Array<SourceAssetDependencyRow>& dependencies,
-        AssetPipelineDiagnostic& diagnostic);
+        AssetPipelineDiagnostic& diagnostic, const Guid& refreshId = Guid::Empty, uint32 pass = 0);
+    bool RecordRefreshSession(const SourceRefreshSessionRow& session, uint32 pass, AssetPipelineDiagnostic& diagnostic);
 
     void Clear();
 };

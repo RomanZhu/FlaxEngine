@@ -5,9 +5,15 @@
 
 using namespace SourceAssetDatabaseBinary;
 
+namespace
+{
+    constexpr uint32 ChangeSetMagic = 0x53434146; // FACS
+    constexpr uint32 ChangeSetVersion = 1;
+}
+
 bool AssetChangeSet::IsEmpty() const
 {
-    return Added.IsEmpty() && Removed.IsEmpty() && Moved.IsEmpty() && SourceChanged.IsEmpty() &&
+    return !RefreshId.IsValid() && Pass == 0 && Added.IsEmpty() && Removed.IsEmpty() && Moved.IsEmpty() && SourceChanged.IsEmpty() &&
         MetadataChanged.IsEmpty() && Imported.IsEmpty() && ObjectsChanged.IsEmpty() &&
         StatusChanged.IsEmpty() && DiagnosticsChanged.IsEmpty();
 }
@@ -15,7 +21,11 @@ bool AssetChangeSet::IsEmpty() const
 void AssetChangeSet::Serialize(Array<byte>& output) const
 {
     Writer writer;
+    writer.Write(ChangeSetMagic);
+    writer.Write(ChangeSetVersion);
     writer.Write(Revision);
+    writer.Write(RefreshId);
+    writer.Write(Pass);
     writer.Write((uint32)Added.Count());
     for (const AssetAddedChange& value : Added)
     {
@@ -85,8 +95,12 @@ bool AssetChangeSet::Deserialize(const byte* data, uint32 length, AssetChangeSet
 {
     Reader reader(data, length);
     AssetChangeSet value;
+    uint32 magic, version;
     uint32 count;
-    if (reader.Read(value.Revision) || reader.ReadCount(count))
+    if (reader.Read(magic) || reader.Read(version) || magic != ChangeSetMagic || version != ChangeSetVersion ||
+        reader.Read(value.Revision) || reader.Read(value.RefreshId) || reader.Read(value.Pass) || reader.ReadCount(count))
+        return true;
+    if (value.Pass != 0 && !value.RefreshId.IsValid())
         return true;
     value.Added.Resize(count, false);
     for (AssetAddedChange& item : value.Added)
