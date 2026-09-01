@@ -1168,6 +1168,66 @@ namespace
                 diagnostics.Add(MoveTemp(diagnostic));
         }
     }
+
+    bool ReconcileFullScan(bool strictMetadata, const Guid& refreshId, uint32 pass,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        Array<AssetPipelineDiagnostic> metadataDiagnostics;
+        EnsureV3MetadataForRoot(Globals::ProjectContentFolder, metadataDiagnostics);
+        AssetDatabaseScanOptions options;
+        options.StrictMetadata = strictMetadata;
+        options.HashCache = &HashCache;
+        AssetDatabaseScanResult result;
+        Array<AssetRecord> records;
+        const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
+        bool failed = AssetDatabaseScanner::Collect(Globals::ProjectFolder, Globals::ProjectContentFolder,
+            Globals::ProjectLibraryFolder, options, previous, records, result);
+        const String engineRoot = AssetSourceRoots::GetEngineRoot();
+        if (!failed && FileSystem::DirectoryExists(engineRoot))
+        {
+            AssetDatabaseScanResult engineResult;
+            Array<AssetRecord> engineRecords;
+            failed = AssetDatabaseScanner::Collect(Globals::StartupFolder, engineRoot, Globals::ProjectLibraryFolder,
+                options, previous, engineRecords, engineResult);
+            for (AssetRecord& record : engineRecords)
+            {
+                record.PortabilityKey = String(TEXT("engine/")) + record.PortabilityKey;
+                records.Add(MoveTemp(record));
+            }
+            result.FilesExamined += engineResult.FilesExamined;
+            result.SidecarsParsed += engineResult.SidecarsParsed;
+            result.Cancelled |= engineResult.Cancelled;
+            result.Diagnostics.Add(engineResult.Diagnostics);
+            result.FileStates.Add(engineResult.FileStates);
+        }
+        result.Diagnostics.Add(metadataDiagnostics);
+        if (!failed)
+        {
+            AssetPipelineDiagnostic publishDiagnostic;
+            failed = AssetDatabase::Get().ReconcileScanRows(records, result.Diagnostics, result.FileStates,
+                publishDiagnostic, refreshId, pass);
+            if (failed)
+                result.Diagnostics.Add(publishDiagnostic);
+            else
+                result.Revision = AssetDatabase::Get().GetRevision();
+        }
+        SetDiagnostics(result.Diagnostics);
+        if (!failed)
+            LastFileStates = result.FileStates;
+        if (failed)
+        {
+            diagnostic = result.Diagnostics.HasItems() ? result.Diagnostics.Last() : AssetPipelineDiagnostic();
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            {
+                diagnostic.Code = AssetPipelineDiagnosticCode::SnapshotInvalid;
+                diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+                diagnostic.Message = TEXT("Asset database full scan failed without a diagnostic.");
+            }
+            return true;
+        }
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
 #endif
 
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
@@ -1176,6 +1236,13 @@ namespace
         Unsupported,
         Queued,
         Failed,
+    };
+
+    enum class GenericRefreshScanMode : byte
+    {
+        None,
+        ScanOnly,
+        ScanAndBuildAll,
     };
 
     bool WaitForGenericBuild(const Guid& assetID, const AssetImporterBuildStatus& getStatus,
@@ -1230,9 +1297,10 @@ namespace
     }
 
     bool RunGenericBuildRefresh(const Array<AssetRecord>& selected, bool force, bool synchronous,
-        AssetRefreshReason reason, AssetPipelineDiagnostic& diagnostic)
+        AssetRefreshReason reason, AssetPipelineDiagnostic& diagnostic,
+        GenericRefreshScanMode scanMode = GenericRefreshScanMode::None, bool strictMetadata = false)
     {
-        if (selected.IsEmpty())
+        if (selected.IsEmpty() && scanMode == GenericRefreshScanMode::None)
         {
             diagnostic = AssetPipelineDiagnostic();
             return false;
@@ -1272,6 +1340,7 @@ namespace
         }
 
         AssetRefreshCallbacks callbacks;
+        bool scanPending = scanMode != GenericRefreshScanMode::None;
         const uint64 startingRevision = AssetDatabase::Get().GetRevision();
         callbacks.Session = [startingRevision, reason](const AssetRefreshResult& refresh,
             AssetRefreshRunState state, const AssetPipelineDiagnostic&, AssetPipelineDiagnostic& localDiagnostic)
@@ -1303,9 +1372,35 @@ namespace
             }
             return AssetDatabase::Get().RecordRefreshSession(session, refresh.Pass, localDiagnostic);
         };
-        callbacks.Reconcile = [selectedIds, force](const AssetRefreshIterationContext& context,
-            Array<AssetImportPlanRequest>& requests, bool&, AssetPipelineDiagnostic& localDiagnostic)
+        callbacks.Reconcile = [&selectedIds, &importerDescriptors, &scanPending, force, scanMode, strictMetadata](
+            const AssetRefreshIterationContext& context, Array<AssetImportPlanRequest>& requests,
+            bool&, AssetPipelineDiagnostic& localDiagnostic)
         {
+            if (scanPending)
+            {
+                if (ReconcileFullScan(strictMetadata, context.RefreshId, context.Pass, localDiagnostic))
+                    return true;
+                scanPending = false;
+                if (scanMode == GenericRefreshScanMode::ScanAndBuildAll)
+                {
+                    selectedIds.Clear();
+                    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
+                    for (const AssetRecord& record : snapshot.Records)
+                    {
+                        if (!record.IsMainAsset() || record.Status != AssetRecordStatus::Ready)
+                            continue;
+                        for (const AssetImporterDescriptor& descriptor : importerDescriptors)
+                        {
+                            if (descriptor.ID == record.ProcessorID && descriptor.RequestBuild.IsBinded() &&
+                                descriptor.GetBuildStatus.IsBinded())
+                            {
+                                selectedIds.Add(record.ID);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
             requests.Clear();
             for (const Guid& id : selectedIds)
             {
@@ -1359,7 +1454,8 @@ namespace
             return false;
         };
         AssetRefreshResult result;
-        if (selectedIds.HasItems() && coordinator->Refresh(reason, callbacks, result, diagnostic))
+        if ((selectedIds.HasItems() || scanMode != GenericRefreshScanMode::None) &&
+            coordinator->Refresh(reason, callbacks, result, diagnostic))
             return true;
         diagnostic = AssetPipelineDiagnostic();
         return false;
@@ -1819,47 +1915,18 @@ bool AssetPipelineService::Scan(bool strictMetadata)
     EnsureBound();
     if (Initialize())
         return true;
-    Array<AssetPipelineDiagnostic> metadataDiagnostics;
-    EnsureV3MetadataForRoot(Globals::ProjectContentFolder, metadataDiagnostics);
-    AssetDatabaseScanOptions options;
-    options.StrictMetadata = strictMetadata;
-    options.HashCache = &HashCache;
-    AssetDatabaseScanResult result;
-    Array<AssetRecord> records;
-    const AssetDatabaseSnapshot previous = AssetDatabase::Get().GetSnapshot();
-    bool failed = AssetDatabaseScanner::Collect(Globals::ProjectFolder, Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, options, previous, records, result);
-    const String engineRoot = AssetSourceRoots::GetEngineRoot();
-    if (!failed && FileSystem::DirectoryExists(engineRoot))
-    {
-        AssetDatabaseScanResult engineResult;
-        Array<AssetRecord> engineRecords;
-        failed = AssetDatabaseScanner::Collect(Globals::StartupFolder, engineRoot, Globals::ProjectLibraryFolder, options, previous, engineRecords, engineResult);
-        for (AssetRecord& record : engineRecords)
-        {
-            record.PortabilityKey = String(TEXT("engine/")) + record.PortabilityKey;
-            records.Add(MoveTemp(record));
-        }
-        result.FilesExamined += engineResult.FilesExamined;
-        result.SidecarsParsed += engineResult.SidecarsParsed;
-        result.Cancelled |= engineResult.Cancelled;
-        result.Diagnostics.Add(engineResult.Diagnostics);
-        result.FileStates.Add(engineResult.FileStates);
-    }
-    result.Diagnostics.Add(metadataDiagnostics);
-    if (!failed)
-    {
-        AssetPipelineDiagnostic publishDiagnostic;
-        failed = AssetDatabase::Get().ReconcileScanRows(records, result.Diagnostics, result.FileStates,
-            publishDiagnostic);
-        if (failed)
-            result.Diagnostics.Add(MoveTemp(publishDiagnostic));
-        else
-            result.Revision = AssetDatabase::Get().GetRevision();
-    }
-    SetDiagnostics(result.Diagnostics);
-    if (!failed)
-        LastFileStates = result.FileStates;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    Array<AssetRecord> selected;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = RunGenericBuildRefresh(selected, false, false, AssetRefreshReason::Filesystem, diagnostic,
+        GenericRefreshScanMode::ScanOnly, strictMetadata);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
     return failed;
+#else
+    AssetPipelineDiagnostic diagnostic;
+    return ReconcileFullScan(strictMetadata, Guid::Empty, 0, diagnostic);
+#endif
 #else
     return true;
 #endif
@@ -2260,6 +2327,9 @@ bool AssetPipelineService::Refresh(ImportAssetOptions options)
 {
 #if USE_EDITOR
     std::lock_guard<std::recursive_mutex> refreshLock(RefreshLocker);
+    EnsureBound();
+    if (Initialize())
+        return true;
     Array<String> sources;
     if (FileSystem::DirectoryGetFiles(sources, Globals::ProjectContentFolder, TEXT("*"), DirectorySearchOption::AllDirectories))
         return true;
@@ -2277,23 +2347,23 @@ bool AssetPipelineService::Refresh(ImportAssetOptions options)
         SetDiagnostics(preparationDiagnostics);
         return true;
     }
-    if (Scan(false))
-        return true;
 #if COMPILE_WITH_ASSETS_IMPORTER
     const bool force = EnumHasAnyFlags(options, ImportAssetOptions::ForceUpdate) ||
         EnumHasAnyFlags(options, ImportAssetOptions::ForceUncompressedImport);
     const bool synchronous = EnumHasAnyFlags(options, ImportAssetOptions::ForceSynchronousImport);
     Array<AssetRecord> selected;
-    const AssetDatabaseSnapshot snapshot = AssetDatabase::Get().GetSnapshot();
-    for (const AssetRecord& record : snapshot.Records)
-    {
-        if (record.IsMainAsset() && SupportsGenericBuild(record))
-            selected.Add(record);
-    }
     AssetPipelineDiagnostic buildDiagnostic;
-    if (RunGenericBuildRefresh(selected, force, synchronous, AssetRefreshReason::Explicit, buildDiagnostic))
+    if (RunGenericBuildRefresh(selected, force, synchronous, AssetRefreshReason::Explicit, buildDiagnostic,
+        GenericRefreshScanMode::ScanAndBuildAll, false))
     {
         SetDiagnostics(Array<AssetPipelineDiagnostic>({ buildDiagnostic }));
+        return true;
+    }
+#else
+    AssetPipelineDiagnostic scanDiagnostic;
+    if (ReconcileFullScan(false, Guid::Empty, 0, scanDiagnostic))
+    {
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ scanDiagnostic }));
         return true;
     }
 #endif

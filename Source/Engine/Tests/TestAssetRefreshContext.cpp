@@ -8,6 +8,24 @@
 #include "Engine/Platform/FileSystem.h"
 #include <ThirdParty/catch2/catch.hpp>
 
+namespace
+{
+    AssetRecord MakeRefreshRecord(const Guid& id)
+    {
+        const String path = TEXT("C:/Project/Content/Refresh.asset");
+        AssetRecord record;
+        record.ID = id;
+        record.SourceAssetID = id;
+        record.TypeName = TEXT("FlaxEngine.RawDataAsset");
+        record.CanonicalPath = CanonicalAssetPath(path);
+        record.SourcePath = SourceFilePath(path);
+        record.MetaPath = MetaFilePath(path + TEXT(".meta"));
+        record.ProcessorID = TEXT("Tests.Refresh");
+        record.PortabilityKey = path.ToLower();
+        return record;
+    }
+}
+
 TEST_CASE("Asset change sets round-trip framed refresh context")
 {
     AssetChangeSet expected;
@@ -46,6 +64,8 @@ TEST_CASE("Asset refresh keeps one ID across passes and persists a terminal sess
     AssetImportPlanner planner(importers);
     AssetPostprocessorRegistry postprocessors;
     AssetRefreshCoordinator coordinator(importers, planner, postprocessors, 4);
+    const Guid scannedAsset = Guid::New();
+    bool scanCalled = false;
     Array<Guid> observedIds;
     Array<int32> observedPasses;
 
@@ -75,8 +95,23 @@ TEST_CASE("Asset refresh keeps one ID across passes and persists a terminal sess
         return database.RecordRefreshSession(session, refresh.Pass, localDiagnostic);
     };
     callbacks.Reconcile = [&](const AssetRefreshIterationContext& context, Array<AssetImportPlanRequest>&,
-        bool& sourceChanged, AssetPipelineDiagnostic&)
+        bool& sourceChanged, AssetPipelineDiagnostic& localDiagnostic)
     {
+        if (!scanCalled)
+        {
+            scanCalled = true;
+            SourceRefreshSessionRow running;
+            const AssetDatabaseReadSnapshot snapshot = database.GetDurableSnapshot();
+            if (!snapshot.TryGetRefreshSession(context.RefreshId, running) || running.Status != TEXT("Running"))
+                return true;
+            Array<AssetRecord> records;
+            records.Add(MakeRefreshRecord(scannedAsset));
+            Array<AssetPipelineDiagnostic> diagnostics;
+            Array<SourceHashFileState> fileStates;
+            if (database.ReconcileScanRows(records, diagnostics, fileStates, localDiagnostic,
+                context.RefreshId, context.Pass))
+                return true;
+        }
         observedIds.Add(context.RefreshId);
         observedPasses.Add(context.Pass);
         CHECK(context.Iteration == context.Pass);
@@ -93,6 +128,7 @@ TEST_CASE("Asset refresh keeps one ID across passes and persists a terminal sess
 
     AssetRefreshResult result;
     REQUIRE_FALSE(coordinator.Refresh(AssetRefreshReason::Explicit, callbacks, result, diagnostic));
+    CHECK(scanCalled);
     REQUIRE(result.RefreshId.IsValid());
     CHECK(result.Pass == 2);
     CHECK(result.Iterations == 2);
@@ -112,15 +148,19 @@ TEST_CASE("Asset refresh keeps one ID across passes and persists a terminal sess
     CHECK(session.StartedUtcTicks != 0);
     CHECK(session.CompletedUtcTicks >= session.StartedUtcTicks);
     CHECK(session.StartingRevision == 0);
-    CHECK(session.EndingRevision == 1);
+    CHECK(session.EndingRevision == 2);
+    AssetRecord scanned;
+    REQUIRE(database.TryGetRecord(scannedAsset, scanned));
 
     Array<AssetChangeSet> changes;
     bool requiresSnapshot = false;
     REQUIRE_FALSE(database.ReadChangesAfter(0, changes, requiresSnapshot, diagnostic));
-    REQUIRE(changes.Count() == 2);
+    REQUIRE(changes.Count() == 3);
     CHECK(changes[0].RefreshId == result.RefreshId);
     CHECK(changes[0].Pass == 0);
     CHECK(changes[1].RefreshId == result.RefreshId);
-    CHECK(changes[1].Pass == 2);
+    CHECK(changes[1].Pass == 1);
+    CHECK(changes[2].RefreshId == result.RefreshId);
+    CHECK(changes[2].Pass == 2);
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
