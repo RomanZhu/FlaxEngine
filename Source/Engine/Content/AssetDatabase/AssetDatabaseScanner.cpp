@@ -2,6 +2,7 @@
 
 #include "AssetDatabaseScanner.h"
 #include "AssetMeta.h"
+#include "AssetSourceRoots.h"
 #include "Engine/Core/Types/DateTime.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Utilities/Crc.h"
@@ -179,6 +180,14 @@ bool AssetDatabaseScanner::Collect(const StringView& projectRoot, const StringVi
 {
     result = AssetDatabaseScanResult();
     records.Clear();
+    AssetPipelineDiagnostic rootDiagnostic;
+    const AssetSourceRootRegistry roots = AssetSourceRoots::CreateScannerRegistry(projectRoot, contentRoot, libraryRoot, rootDiagnostic);
+    ResolvedAssetSourcePath resolvedRoot;
+    if (rootDiagnostic.Code != AssetPipelineDiagnosticCode::None || roots.ResolveForScan(contentRoot, resolvedRoot, rootDiagnostic))
+    {
+        result.Diagnostics.Add(MoveTemp(rootDiagnostic));
+        return true;
+    }
     Array<String> files;
     if (FileSystem::DirectoryGetFiles(files, String(contentRoot), TEXT("*"), DirectorySearchOption::AllDirectories))
     {
@@ -204,6 +213,14 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
 {
     result = AssetDatabaseScanResult();
     records.Clear();
+    AssetPipelineDiagnostic rootDiagnostic;
+    const AssetSourceRootRegistry roots = AssetSourceRoots::CreateScannerRegistry(projectRoot, contentRoot, libraryRoot, rootDiagnostic);
+    ResolvedAssetSourcePath resolvedRoot;
+    if (rootDiagnostic.Code != AssetPipelineDiagnosticCode::None || roots.ResolveForScan(contentRoot, resolvedRoot, rootDiagnostic))
+    {
+        result.Diagnostics.Add(MoveTemp(rootDiagnostic));
+        return true;
+    }
     SourceHashCache localHashCache;
     SourceHashCache& hashCache = options.HashCache ? *options.HashCache : localHashCache;
     HashSet<String> fileSet;
@@ -268,12 +285,13 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             continue;
         }
         result.SidecarsParsed++;
-        AssetPathPolicy::ProjectPath normalizedPath;
-        if (AssetPathPolicy::TryNormalizeProjectPath(projectRoot, contentRoot, libraryRoot, sourcePath, normalizedPath, diagnostic))
+        ResolvedAssetSourcePath normalizedSource;
+        if (roots.ResolveForScan(sourcePath, normalizedSource, diagnostic))
         {
             result.Diagnostics.Add(diagnostic);
             continue;
         }
+        AssetPathPolicy::ProjectPath& normalizedPath = normalizedSource.Path;
         StringAnsi canonicalMeta;
         if (meta.ToJson(canonicalMeta, diagnostic))
         {
@@ -325,12 +343,13 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             result.Diagnostics.Add(diagnostic);
             continue;
         }
-        AssetPathPolicy::ProjectPath normalizedPath;
-        if (AssetPathPolicy::TryNormalizeProjectPath(projectRoot, contentRoot, libraryRoot, sourcePath, normalizedPath, diagnostic))
+        ResolvedAssetSourcePath normalizedSource;
+        if (roots.ResolveForScan(sourcePath, normalizedSource, diagnostic))
         {
             result.Diagnostics.Add(diagnostic);
             continue;
         }
+        AssetPathPolicy::ProjectPath& normalizedPath = normalizedSource.Path;
         StringAnsi canonicalMeta;
         if (meta.ToJson(canonicalMeta, diagnostic))
         {

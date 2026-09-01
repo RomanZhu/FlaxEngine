@@ -285,13 +285,20 @@ AssetOperations::AssetOperations(const StringView& projectRoot, const StringView
     , _libraryRoot(libraryRoot)
     , _transactionsRoot(String(libraryRoot) / TEXT("AssetOperations/Transactions"))
     , _trashRoot(String(libraryRoot) / TEXT("AssetOperations/Trash"))
+    , _rootRegistry(projectRoot, libraryRoot)
     , _modificationProcessor(modificationProcessor)
     , _databaseCallbacks(databaseCallbacks)
 {
+    _rootRegistryValid = !_rootRegistry.RegisterProjectRoots(contentRoot, _rootRegistryDiagnostic);
 }
 
 bool AssetOperations::Initialize(AssetPipelineDiagnostic& diagnostic)
 {
+    if (!_rootRegistryValid)
+    {
+        diagnostic = _rootRegistryDiagnostic;
+        return true;
+    }
     if (_projectRoot.IsEmpty() || _contentRoot.IsEmpty() || _libraryRoot.IsEmpty() ||
         EnsureDirectory(_transactionsRoot) || EnsureDirectory(_trashRoot))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, _libraryRoot,
@@ -303,7 +310,7 @@ bool AssetOperations::Initialize(AssetPipelineDiagnostic& diagnostic)
 bool AssetOperations::NormalizeSource(const StringView& input, AssetPathPolicy::ProjectPath& result,
     AssetPipelineDiagnostic& diagnostic) const
 {
-    return AssetPathPolicy::TryNormalizeProjectPath(_projectRoot, _contentRoot, _libraryRoot, input, result, diagnostic);
+    return _rootRegistry.ResolveForGenericMutation(input, result, diagnostic);
 }
 
 bool AssetOperations::ValidateExisting(const AssetOperationTarget& target, AssetPathPolicy::ProjectPath& normalized,

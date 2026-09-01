@@ -4,6 +4,7 @@
 
 #include "AssetMeta.h"
 #include "AssetPath.h"
+#include "AssetSourceRootRegistry.h"
 #include "Engine/Content/Artifacts/ArtifactKey.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Core/NonCopyable.h"
@@ -94,6 +95,9 @@ private:
     String _libraryRoot;
     String _transactionsRoot;
     String _trashRoot;
+    AssetSourceRootRegistry _rootRegistry;
+    bool _rootRegistryValid = false;
+    AssetPipelineDiagnostic _rootRegistryDiagnostic;
     IAssetModificationProcessor& _modificationProcessor;
     IAssetOperationDatabaseCallbacks& _databaseCallbacks;
 

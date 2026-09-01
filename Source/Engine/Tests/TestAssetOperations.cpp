@@ -158,4 +158,39 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     CHECK(recoveryDiagnostics.IsEmpty());
 }
 
+TEST_CASE("Asset operations reject private and unregistered source roots")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetOperationRoots-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    const String externalActors = library / TEXT("ExternalActors");
+    const String readOnly = root / TEXT("SharedContent");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(externalActors));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(readOnly));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    const byte sourceBytes[] = { 1, 2, 3 };
+    const AssetMeta meta = MakeOperationMeta();
+    const String privateSource = externalActors / TEXT("Scene/Actor.sceneactor");
+    CHECK(operations.CreateAsset(privateSource,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), meta, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
+    CHECK_FALSE(FileSystem::FileExists(privateSource));
+    CHECK(processor.Calls == 0);
+
+    const String unregisteredSource = readOnly / TEXT("Material.json");
+    CHECK(operations.CreateAsset(unregisteredSource,
+        Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)), meta, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
+    CHECK_FALSE(FileSystem::FileExists(unregisteredSource));
+    CHECK(processor.Calls == 0);
+}
+
 #endif
