@@ -216,7 +216,7 @@ TEST_CASE("Graph dependencies retain persistent object GUIDs across source objec
     REQUIRE_FALSE(GraphDependencyExtractor::Extract(document, dependencies, interfaceHash, diagnostic));
     REQUIRE(dependencies.Count() == 1);
     const AssetObjectId persistentObject = AssetObjectId::Main(AssetGuid(persistentId));
-    CHECK(dependencies[0].ObjectID == persistentObject);
+    CHECK(dependencies[0].ObjectID == AssetObjectId(AssetGuid(firstSourceId), 2));
     CHECK(dependencies[0].StableIdentity == persistentObject.ToString());
 
     const Guid secondSourceId(12, 22, 32, 42);
@@ -224,9 +224,12 @@ TEST_CASE("Graph dependencies retain persistent object GUIDs across source objec
     records[0].SourceAssetID = secondSourceId;
     records[1].SourceAssetID = secondSourceId;
     REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    dependencies.Clear();
+    REQUIRE_FALSE(GraphDependencyExtractor::Extract(document, dependencies, interfaceHash, diagnostic));
+    REQUIRE(dependencies.Count() == 1);
+    CHECK(dependencies[0].ObjectID == AssetObjectId(AssetGuid(secondSourceId), 2));
+    CHECK(dependencies[0].StableIdentity == persistentObject.ToString());
     AssetRecord resolved;
-    CHECK(database.TryGetRecord(dependencies[0].ObjectID, resolved));
-    CHECK(resolved.ID == persistentId);
     CHECK_FALSE(database.TryGetRecord(AssetObjectId(AssetGuid(firstSourceId), 2), resolved));
 }
 

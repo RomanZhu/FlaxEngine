@@ -2148,8 +2148,10 @@ bool GraphDependencyExtractor::Extract(const GraphDocument& document, Array<Asse
             dependency.Origin.GraphNode = String(node.GetStableID());
             AssetRecord record;
             const bool hasRecord = AssetDatabase::Get().TryGetRecord(id, record);
-            dependency.ObjectID = AssetObjectId::Main(AssetGuid(hasRecord ? record.ID : id));
-            dependency.StableIdentity = dependency.ObjectID.ToString();
+            dependency.ObjectID = hasRecord
+                ? AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId)
+                : AssetObjectId::Main(AssetGuid(id));
+            dependency.StableIdentity = AssetObjectId::Main(AssetGuid(hasRecord ? record.ID : id)).ToString();
             if (hasRecord && IsFunctionAssetType(record.TypeName))
             {
                 dependency.Kind = AssetDependencyKind::BuildInput;
@@ -2182,8 +2184,10 @@ bool GraphDependencyExtractor::Extract(const GraphDocument& document, Array<Asse
             dependency.Kind = AssetDependencyKind::RuntimeReference;
             AssetRecord record;
             const bool hasRecord = AssetDatabase::Get().TryGetRecord(id, record);
-            dependency.ObjectID = AssetObjectId::Main(AssetGuid(hasRecord ? record.ID : id));
-            dependency.StableIdentity = dependency.ObjectID.ToString();
+            dependency.ObjectID = hasRecord
+                ? AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId)
+                : AssetObjectId::Main(AssetGuid(id));
+            dependency.StableIdentity = AssetObjectId::Main(AssetGuid(hasRecord ? record.ID : id)).ToString();
             dependency.Origin.GraphPin = String(GuidToken(parameter.ID));
             dependencies.Add(MoveTemp(dependency));
         }

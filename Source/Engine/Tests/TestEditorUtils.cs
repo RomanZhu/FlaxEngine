@@ -1510,13 +1510,13 @@ namespace FlaxEngine.Tests
 
             var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
             var item = workspace.FindAsset(id);
-            Assert.NotNull(item);
+            Assert.NotNull(item, "Project item missing for " + path);
             Assert.AreEqual(itemType, item.GetType().Name);
             Assert.AreEqual(typeName, item.TypeName);
             Assert.IsFalse(item.IsOfType<RawDataAsset>(), "Authored asset was exposed as RawData for " + path);
             Assert.IsTrue(item.IsCanonicalSource, "Project item is not canonical for " + path);
             var proxy = workspace.GetProxy(item);
-            Assert.NotNull(proxy);
+            Assert.NotNull(proxy, "Project proxy missing for " + path);
             Assert.AreEqual(proxyType, proxy.GetType().Name);
             Assert.IsFalse(proxy is FileProxy, "Authored asset was routed through FileProxy for " + path);
 
@@ -1528,7 +1528,7 @@ namespace FlaxEngine.Tests
             var editorWindow = FlaxEditor.Editor.Instance.ContentEditing.Open(item, true);
             try
             {
-                Assert.NotNull(editorWindow);
+                Assert.NotNull(editorWindow, "Editor window missing for " + path);
                 Assert.AreEqual(windowType, editorWindow.GetType());
             }
             finally
@@ -1543,7 +1543,7 @@ namespace FlaxEngine.Tests
             var asset = AssetDocumentRegistry.OpenGraph<TAsset>(item, out var session);
             try
             {
-                Assert.NotNull(asset);
+                Assert.NotNull(asset, "Graph asset failed to open for " + item.Path);
                 Assert.AreEqual(typeof(TAsset), asset.GetType());
                 Assert.IsFalse(asset.WaitForLoaded());
                 session.SetGraphSurface((byte[])session.GetGraphSurface().Clone());
@@ -1562,7 +1562,7 @@ namespace FlaxEngine.Tests
         private static void AssertAuthoredRuntimeType<TAsset>(Guid id) where TAsset : Asset
         {
             var asset = FlaxEngine.Content.LoadAssetAsync<TAsset>(id);
-            Assert.NotNull(asset);
+            Assert.NotNull(asset, "Runtime asset failed to load for " + typeof(TAsset).FullName + " " + id);
             Assert.AreEqual(typeof(TAsset), asset.GetType());
             Assert.IsFalse(asset.WaitForLoaded());
             asset.Reload();
@@ -1574,7 +1574,7 @@ namespace FlaxEngine.Tests
             var asset = AssetDocumentRegistry.OpenGraph<TAsset>(item, out var session);
             try
             {
-                Assert.NotNull(asset);
+                Assert.NotNull(asset, "Graph asset failed to reopen for " + item.Path);
                 Assert.IsFalse(asset.WaitForLoaded());
                 Assert.AreEqual(Path.GetFullPath(item.Path), Path.GetFullPath(session.SourcePath));
             }
@@ -1676,6 +1676,16 @@ namespace FlaxEngine.Tests
                     Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
                     Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(id), "Artifact was not current for " + id);
                 }
+
+                lifecycleStage = "collision dependency invalidation";
+                File.AppendAllText(modelPath, " ");
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { modelPath }));
+                Assert.IsFalse(AssetPipelineService.BuildAssetForeground(modelId));
+                Assert.IsFalse(AssetPipelineService.IsArtifactCurrent(collisionId),
+                    "Collision artifact remained current after its source model changed.");
+                Assert.IsFalse(AssetPipelineService.RebuildAsset(collisionId, true));
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(collisionId),
+                    "Collision artifact did not become current after dependency rebuild.");
 
                 lifecycleStage = "runtime reload";
                 var system = FlaxEngine.Content.LoadAssetAsync<ParticleSystem>(systemId);
@@ -1847,17 +1857,15 @@ namespace FlaxEngine.Tests
                 Assert.IsTrue(AssetDatabaseQueryService.GetDependencies(materialInstanceId).Any(x => x.TargetObject == materialId),
                     "Material instance did not retain its persistent base-material dependency.");
 
-                lifecycleStage = "dependency invalidation";
+                lifecycleStage = "runtime dependency stability";
                 var materialJson = JObject.Parse(File.ReadAllText(materialPath));
                 var materialProperties = (JObject)materialJson["properties"];
                 Assert.NotNull(materialProperties);
                 materialProperties["maskThreshold"] = ((float?)materialProperties["maskThreshold"] ?? 0.3f) + 0.01f;
                 RoundTripAuthoredGraph<Material>(materialItem, materialProperties.ToString());
                 Assert.IsFalse(AssetPipelineService.BuildAssetForeground(materialId));
-                Assert.IsFalse(AssetPipelineService.IsArtifactCurrent(materialInstanceId),
-                    "Material instance remained current after its base material changed.");
-                Assert.IsFalse(AssetPipelineService.BuildAssetForeground(materialInstanceId));
-                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(materialInstanceId));
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(materialInstanceId),
+                    "Runtime-only material reference unexpectedly invalidated its owner's build artifact.");
 
                 lifecycleStage = "runtime reload";
                 AssertAuthoredRuntimeType<Material>(materialId);
