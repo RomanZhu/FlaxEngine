@@ -411,6 +411,103 @@ TEST_CASE("Asset database scanner indexes persisted subasset GUIDs and keeps tom
     CHECK(record.Status == AssetRecordStatus::MissingSource);
 }
 
+TEST_CASE("Persistent GUID identity survives reimport move restart and Library reconstruction")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("PersistentGuidMatrix-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid projectId = Guid::New();
+    const String source = content / TEXT("Robot.fbx");
+    const String moved = content / TEXT("Moved/Robot.fbx");
+    const String copied = content / TEXT("Robot Copy.fbx");
+    REQUIRE_FALSE(File::WriteAllText(source, TEXT("model-v1"), Encoding::ANSI));
+
+    AssetMeta sourceMeta = MakeDatabaseMeta(Guid::New());
+    sourceMeta.AssetType = TEXT("FlaxEngine.Model");
+    sourceMeta.Processor.ID = TEXT("Flax.Model");
+    SubAssetMeta body;
+    body.ID = Guid::New();
+    body.LocalId = 21;
+    body.TypeName = TEXT("FlaxEngine.Mesh");
+    body.DisplayName = TEXT("Body");
+    SubAssetMeta head = body;
+    head.ID = Guid::New();
+    head.LocalId = 22;
+    head.DisplayName = TEXT("Head");
+    sourceMeta.SubAssets.Add(TEXT("mesh:/Body"), body);
+    sourceMeta.SubAssets.Add(TEXT("mesh:/Head"), head);
+
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), sourceMeta, diagnostic));
+    AssetDatabaseScanOptions options;
+    options.StrictMetadata = true;
+    AssetDatabaseScanResult scan;
+    AssetRecord record;
+
+    AssetDatabase database;
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
+    REQUIRE(database.TryGetRecord(body.ID, record));
+    REQUIRE(database.TryGetRecord(head.ID, record));
+
+    // Reimported bytes and reordered metadata retain the authored persistent object GUIDs.
+    REQUIRE_FALSE(File::WriteAllText(source, TEXT("model-v2"), Encoding::ANSI));
+    sourceMeta.SubAssets.Clear();
+    sourceMeta.SubAssets.Add(TEXT("mesh:/Head"), head);
+    sourceMeta.SubAssets.Add(TEXT("mesh:/Body"), body);
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), sourceMeta, diagnostic));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
+    REQUIRE(database.TryGetRecord(body.ID, record));
+    REQUIRE(database.TryGetRecord(head.ID, record));
+
+    REQUIRE_FALSE(FileSystem::CreateDirectory(StringUtils::GetDirectoryName(moved)));
+    REQUIRE_FALSE(FileSystem::MoveFile(moved, source));
+    REQUIRE_FALSE(FileSystem::MoveFile(moved + TEXT(".meta"), source + TEXT(".meta")));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
+    CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), moved));
+    REQUIRE(database.TryGetRecord(body.ID, record));
+    CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), moved));
+
+    const AssetMeta copiedMeta = sourceMeta.CloneWithNewIdentities();
+    REQUIRE_FALSE(File::WriteAllText(copied, TEXT("model-v2"), Encoding::ANSI));
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(copied + TEXT(".meta"), copiedMeta, diagnostic));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(copiedMeta.ID != sourceMeta.ID);
+    CHECK(copiedMeta.SubAssets[TEXT("mesh:/Body")].ID != body.ID);
+    CHECK(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID != head.ID);
+    REQUIRE(database.TryGetRecord(copiedMeta.ID, record));
+    REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Body")].ID, record));
+    REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID, record));
+
+    REQUIRE_FALSE(database.Close(&diagnostic));
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
+    REQUIRE(database.TryGetRecord(body.ID, record));
+    REQUIRE(database.TryGetRecord(head.ID, record));
+    REQUIRE(database.TryGetRecord(copiedMeta.ID, record));
+    REQUIRE_FALSE(database.Close(&diagnostic));
+
+    // Library is disposable: rescanning authored metadata reconstructs the exact same identity set.
+    REQUIRE_FALSE(FileSystem::DeleteDirectory(library, true));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
+    REQUIRE(database.TryGetRecord(body.ID, record));
+    REQUIRE(database.TryGetRecord(head.ID, record));
+    REQUIRE(database.TryGetRecord(copiedMeta.ID, record));
+    REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Body")].ID, record));
+    REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID, record));
+    REQUIRE_FALSE(database.Close(&diagnostic));
+}
+
 TEST_CASE("Asset database detects portable main path collisions")
 {
     AssetDatabase database;
