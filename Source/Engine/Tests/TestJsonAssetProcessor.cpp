@@ -4,6 +4,7 @@
 
 #include "Engine/Content/Build/Processors/JsonAssetProcessor.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
+#include "Engine/Content/Build/RuntimeDependencyClosure.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
@@ -13,13 +14,13 @@
 
 namespace
 {
-    AssetRecord MakeSceneRecord(const String& path)
+    AssetRecord MakeDocumentRecord(const String& path, const StringView& typeName)
     {
         AssetRecord record;
         record.ID = Guid::New();
         record.SourceAssetID = record.ID;
         record.LocalId = 1;
-        record.TypeName = TEXT("FlaxEngine.SceneAsset");
+        record.TypeName = typeName;
         record.CanonicalPath = CanonicalAssetPath(path);
         record.SourcePath = SourceFilePath(path);
         record.ProcessorID = JsonAssetProcessor::ProcessorID();
@@ -35,7 +36,7 @@ namespace
         const String path = content / (Guid::New().ToString(Guid::FormatType::N) + TEXT(".scene"));
         if (File::WriteAllBytes(path, reinterpret_cast<const byte*>(json), static_cast<int32>(std::strlen(json))))
             return true;
-        const AssetRecord record = MakeSceneRecord(path);
+        const AssetRecord record = MakeDocumentRecord(path, TEXT("FlaxEngine.SceneAsset"));
         const AssetProcessorDescriptor descriptor = JsonAssetProcessor::CreateDescriptor();
         SourceHashCache hashCache;
         AssetCancellationSource cancellation;
@@ -43,6 +44,37 @@ namespace
         PrepareAssetContext context(root, content, library, record, descriptor, StringAnsiView("{}"), hashCache,
             cancellation.GetToken());
         return JsonAssetProcessor::Prepare(context, prepared, diagnostic);
+    }
+
+    bool PrepareDocument(const String& root, const String& content, const String& library, const StringView& extension,
+        const StringView& typeName, const Guid& id, const char* json, PreparedAsset& prepared,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        const String path = content / (id.ToString(Guid::FormatType::N) + extension);
+        if (File::WriteAllBytes(path, reinterpret_cast<const byte*>(json), static_cast<int32>(std::strlen(json))))
+            return true;
+        AssetRecord record = MakeDocumentRecord(path, typeName);
+        record.ID = id;
+        record.SourceAssetID = id;
+        const AssetProcessorDescriptor descriptor = JsonAssetProcessor::CreateDescriptor();
+        SourceHashCache hashCache;
+        AssetCancellationSource cancellation;
+        PrepareAssetContext context(root, content, library, record, descriptor, StringAnsiView("{}"), hashCache,
+            cancellation.GetToken());
+        if (JsonAssetProcessor::Prepare(context, prepared, diagnostic))
+            return true;
+        return context.Finalize(record.DatabaseRevision, prepared, diagnostic);
+    }
+
+    Array<AssetObjectId> RuntimeReferences(const PreparedAsset& prepared)
+    {
+        Array<AssetObjectId> result;
+        for (const AssetDependency& dependency : prepared.Dependencies)
+        {
+            if (dependency.Kind == AssetDependencyKind::RuntimeReference)
+                result.Add(dependency.ObjectID);
+        }
+        return result;
     }
 }
 
@@ -94,6 +126,80 @@ TEST_CASE("JSON scene processor accepts only canonical actor-local structured re
         R"({"sceneVersion":4,"objects":[{"fileId":1,"type":"FlaxEngine.Scene","Ref":{"guid":"00000000000000000000000000000000","fileId":2}}]})",
         diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::InvalidMeta);
+}
+
+TEST_CASE("Current scene and prefab documents retain nested references for cook closure")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("JsonScenePrefabCook-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid sceneId(0x61000001, 0x61000002, 0x61000003, 0x61000004);
+    const Guid prefabId(0x61000011, 0x61000012, 0x61000013, 0x61000014);
+    const Guid materialSourceId(0x61000021, 0x61000022, 0x61000023, 0x61000024);
+    const Guid editedMaterialSourceId(0x61000031, 0x61000032, 0x61000033, 0x61000034);
+    const AssetObjectId prefabObject = AssetObjectId::Main(AssetGuid(prefabId));
+    const AssetObjectId materialObject(AssetGuid(materialSourceId), 7);
+    const AssetObjectId editedMaterialObject(AssetGuid(editedMaterialSourceId), 9);
+
+    PreparedAsset scene;
+    PreparedAsset prefab;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(PrepareDocument(root, content, library, TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), sceneId,
+        R"({"sceneVersion":4,"objects":[{"fileId":1,"type":"FlaxEngine.Scene","Nested":{"Prefab":{"kind":2,"guid":"61000011610000126100001361000014","fileId":81,"prefabInstanceFileId":0}}}]})",
+        scene, diagnostic));
+    REQUIRE_FALSE(PrepareDocument(root, content, library, TEXT(".prefab"), TEXT("FlaxEngine.Prefab"), prefabId,
+        R"({"prefabVersion":4,"objects":[{"fileId":1,"type":"FlaxEngine.StaticModel","Material":{"kind":0,"guid":"61000021610000226100002361000024","fileId":7,"prefabInstanceFileId":0}}]})",
+        prefab, diagnostic));
+
+    const Array<AssetObjectId> sceneReferences = RuntimeReferences(scene);
+    const Array<AssetObjectId> prefabReferences = RuntimeReferences(prefab);
+    REQUIRE(sceneReferences.Count() == 1);
+    CHECK(sceneReferences.Contains(prefabObject));
+    REQUIRE(prefabReferences.Count() == 1);
+    CHECK(prefabReferences.Contains(materialObject));
+
+    RuntimeObjectDependencyRecord sceneRecord;
+    sceneRecord.Object = AssetObjectId::Main(AssetGuid(sceneId));
+    sceneRecord.Dependencies = sceneReferences;
+    RuntimeObjectDependencyRecord prefabRecord;
+    prefabRecord.Object = prefabObject;
+    prefabRecord.Dependencies = prefabReferences;
+    RuntimeObjectDependencyRecord materialRecord;
+    materialRecord.Object = materialObject;
+    Array<RuntimeObjectDependencyRecord> records;
+    records.Add(sceneRecord);
+    records.Add(prefabRecord);
+    records.Add(materialRecord);
+    Array<AssetObjectId> roots;
+    roots.Add(sceneRecord.Object);
+    RuntimeDependencyClosureResult closure;
+    REQUIRE_FALSE(RuntimeDependencyClosure::Build(roots, records, closure, diagnostic));
+    CHECK(closure.Objects.Count() == 3);
+    CHECK(closure.Objects.Contains(sceneRecord.Object));
+    CHECK(closure.Objects.Contains(prefabObject));
+    CHECK(closure.Objects.Contains(materialObject));
+    CHECK(closure.Edges.Count() == 2);
+
+    PreparedAsset editedPrefab;
+    REQUIRE_FALSE(PrepareDocument(root, content, library, TEXT(".prefab"), TEXT("FlaxEngine.Prefab"), prefabId,
+        R"({"prefabVersion":4,"objects":[{"fileId":1,"type":"FlaxEngine.StaticModel","Material":{"kind":0,"guid":"61000031610000326100003361000034","fileId":9,"prefabInstanceFileId":0}}]})",
+        editedPrefab, diagnostic));
+    CHECK(editedPrefab.InputFingerprint != prefab.InputFingerprint);
+    prefabRecord.Dependencies = RuntimeReferences(editedPrefab);
+    REQUIRE(prefabRecord.Dependencies.Count() == 1);
+    CHECK(prefabRecord.Dependencies.Contains(editedMaterialObject));
+    RuntimeObjectDependencyRecord editedMaterialRecord;
+    editedMaterialRecord.Object = editedMaterialObject;
+    records[1] = prefabRecord;
+    records.Add(editedMaterialRecord);
+    REQUIRE_FALSE(RuntimeDependencyClosure::Build(roots, records, closure, diagnostic));
+    CHECK(closure.Objects.Count() == 3);
+    CHECK_FALSE(closure.Objects.Contains(materialObject));
+    CHECK(closure.Objects.Contains(editedMaterialObject));
 }
 
 #endif

@@ -182,6 +182,24 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestSceneAndPrefabItemsExposeConcreteProjectTypes()
+        {
+            var sceneItem = new SceneItem("C:/Project/Content/Scene.scene", Guid.NewGuid());
+            var prefabItem = new PrefabItem("C:/Project/Content/Actor.prefab", Guid.NewGuid());
+
+            Assert.AreEqual(ContentItemType.Scene, sceneItem.ItemType);
+            Assert.AreEqual(ContentItemSearchFilter.Scene, sceneItem.SearchFilter);
+            Assert.AreEqual("Scene", sceneItem.TypeDescription);
+            Assert.IsTrue(sceneItem.IsOfType(typeof(SceneAsset)));
+            Assert.IsFalse(sceneItem.IsOfType(typeof(Prefab)));
+
+            Assert.AreEqual(ContentItemType.Asset, prefabItem.ItemType);
+            Assert.AreEqual(ContentItemSearchFilter.Prefab, prefabItem.SearchFilter);
+            Assert.IsTrue(prefabItem.IsOfType(typeof(Prefab)));
+            Assert.IsFalse(prefabItem.IsOfType(typeof(SceneAsset)));
+        }
+
+        [Test]
         public void TestCanonicalSourceCopyBackendClassification()
         {
             var textureId = Guid.NewGuid();
