@@ -2989,6 +2989,10 @@ namespace FlaxEditor.Modules
 
         private void QueueCanonicalStartupChecks()
         {
+            // These are opportunistic Project-panel background checks. Headless callers perform
+            // explicit refresh/build work and must not race their database transactions with UI work.
+            if (Editor.IsHeadlessMode)
+                return;
             lock (_assetDiskChangesLock)
             {
                 foreach (var record in AssetWorkspaceQuery.QueryAllRecords(new AssetDatabaseQuery { MainAssetsOnly = true }))
@@ -3001,6 +3005,8 @@ namespace FlaxEditor.Modules
 
         private void ProcessPendingCanonicalStartupChecks()
         {
+            if (Editor.IsHeadlessMode)
+                return;
             Guid[] ids;
             lock (_assetDiskChangesLock)
             {
