@@ -1226,6 +1226,32 @@ TEST_CASE("ExternalActorsSceneStorage")
         REQUIRE(cloneSceneId.IsValid());
         CHECK(cloneSceneId != sceneId);
 
+        SceneFragmentIndex sourceIndex;
+        SceneFragmentIndex cloneIndex;
+        Array<Array<byte>> sourceFragments;
+        Array<Array<byte>> clonedFragments;
+        String fragmentError;
+        REQUIRE(!SceneFragmentStore::Load(sceneId, sourceIndex, sourceFragments, fragmentError));
+        REQUIRE(!SceneFragmentStore::Load(cloneSceneId, cloneIndex, clonedFragments, fragmentError));
+        CHECK(sourceIndex.OwnerSceneGuid == sceneId);
+        CHECK(cloneIndex.OwnerSceneGuid == cloneSceneId);
+        REQUIRE(sourceIndex.Fragments.Count() == 2);
+        REQUIRE(cloneIndex.Fragments.Count() == 2);
+        REQUIRE(sourceFragments.Count() == 2);
+        REQUIRE(clonedFragments.Count() == 2);
+        for (int32 i = 0; i < cloneIndex.Fragments.Count(); i++)
+        {
+            CHECK(cloneIndex.Fragments[i].RootActorLocalId == sourceIndex.Fragments[i].RootActorLocalId);
+            rapidjson_flax::Document sourceFragment;
+            sourceFragment.Parse(reinterpret_cast<const char*>(sourceFragments[i].Get()), sourceFragments[i].Count());
+            REQUIRE_FALSE(sourceFragment.HasParseError());
+            CHECK(JsonTools::GetGuid(sourceFragment, "ownerSceneGuid") == sceneId);
+            rapidjson_flax::Document clonedFragment;
+            clonedFragment.Parse(reinterpret_cast<const char*>(clonedFragments[i].Get()), clonedFragments[i].Count());
+            REQUIRE_FALSE(clonedFragment.HasParseError());
+            CHECK(JsonTools::GetGuid(clonedFragment, "ownerSceneGuid") == cloneSceneId);
+        }
+
         rapidjson_flax::Document cloneSceneDocument;
         ParseJsonFile(cloneSceneDocument, clonePath);
         const rapidjson_flax::Value& cloneSceneData = GetDataArray(cloneSceneDocument);
@@ -1254,6 +1280,12 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(cloneActorIds.Contains(SceneObject::MakeLocalFileId(childId)));
         CHECK(cloneParentIds.Contains(1));
         CHECK(cloneParentIds.Contains(parentLocalId));
+        const int32 clonedParentIndex = cloneActorIds.Find(parentLocalId);
+        const int32 clonedChildIndex = cloneActorIds.Find(SceneObject::MakeLocalFileId(childId));
+        REQUIRE(clonedParentIndex != -1);
+        REQUIRE(clonedChildIndex != -1);
+        CHECK(cloneParentIds[clonedParentIndex] == 1);
+        CHECK(cloneParentIds[clonedChildIndex] == parentLocalId);
     }
 
 }
@@ -1695,6 +1727,74 @@ TEST_CASE("ExternalActorsSceneStorage Lifecycle")
 
 TEST_CASE("ExternalActorsSceneStorage Operations")
 {
+
+    SECTION("Trash and restore preserve the exact GUID-keyed scene storage")
+    {
+        const Guid sceneId = ParseGuid("89898989898989898989898989898981");
+        const Guid actorId = ParseGuid("89898989898989898989898989898982");
+        const String scenePath = GetTestScenePath(TEXT("TrashRestore"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+        WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
+
+        const String metaPath = scenePath + TEXT(".meta");
+        const String fragmentsPath = SceneFragmentStore::GetScenePath(sceneId);
+        const String indexPath = SceneFragmentStore::GetIndexPath(sceneId);
+        const String fragmentPath = GetExternalActorPath(scenePath, actorId);
+        BytesContainer sourceBefore;
+        BytesContainer metaBefore;
+        BytesContainer indexBefore;
+        BytesContainer fragmentBefore;
+        ReadFileBytes(scenePath, sourceBefore);
+        ReadFileBytes(metaPath, metaBefore);
+        ReadFileBytes(indexPath, indexBefore);
+        ReadFileBytes(fragmentPath, fragmentBefore);
+
+        AssetTrashEntryRequest request;
+        request.SourcePath = scenePath;
+        request.ExpectedAssetGuid = sceneId;
+        Array<AssetTrashEntryRequest> requests;
+        requests.Add(MoveTemp(request));
+        AssetTrashBatch trash;
+        REQUIRE_FALSE(AssetOperationService::TrashEntries(requests, trash));
+        REQUIRE(trash.Entries.Count() == 1);
+        REQUIRE(trash.Entries[0].Fragments.Count() == 1);
+        CHECK(trash.Entries[0].AssetGuid == sceneId);
+        CHECK(FileSystem::AreFilePathsEquivalent(trash.Entries[0].Fragments[0].OriginalPath, fragmentsPath));
+        CHECK(FileSystem::DirectoryExists(trash.Entries[0].Fragments[0].TrashPath));
+        CHECK_FALSE(FileSystem::FileExists(scenePath));
+        CHECK_FALSE(FileSystem::FileExists(metaPath));
+        CHECK_FALSE(FileSystem::DirectoryExists(fragmentsPath));
+        CHECK_FALSE(FileSystem::DirectoryExists(scenePath + TEXT("-data")));
+
+        REQUIRE_FALSE(AssetOperationService::RestoreEntries(trash));
+        CHECK(FileSystem::FileExists(scenePath));
+        CHECK(FileSystem::FileExists(metaPath));
+        CHECK(FileSystem::DirectoryExists(fragmentsPath));
+        CHECK_FALSE(FileSystem::DirectoryExists(trash.Entries[0].Fragments[0].TrashPath));
+
+        BytesContainer after;
+        ReadFileBytes(scenePath, after);
+        CHECK(AreBytesEqual(sourceBefore, after));
+        ReadFileBytes(metaPath, after);
+        CHECK(AreBytesEqual(metaBefore, after));
+        ReadFileBytes(indexPath, after);
+        CHECK(AreBytesEqual(indexBefore, after));
+        ReadFileBytes(fragmentPath, after);
+        CHECK(AreBytesEqual(fragmentBefore, after));
+
+        SceneFragmentIndex restoredIndex;
+        Array<Array<byte>> restoredFragments;
+        String error;
+        REQUIRE_FALSE(SceneFragmentStore::Load(sceneId, restoredIndex, restoredFragments, error));
+        CHECK(restoredIndex.OwnerSceneGuid == sceneId);
+        REQUIRE(restoredIndex.Fragments.Count() == 1);
+        CHECK(restoredIndex.Fragments[0].RootActorLocalId == SceneObject::MakeLocalFileId(actorId));
+    }
 
     SECTION("Rename duplicated external actors scene preserves cloned fragment identity")
     {
