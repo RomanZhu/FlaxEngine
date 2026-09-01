@@ -32,7 +32,13 @@ Win32File* Win32File::Open(const StringView& path, FileMode mode, FileAccess acc
         const DWORD error = GetLastError();
         // Files can disappear between an existence check and opening them (eg. filesystem watcher callbacks).
         if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
-            LOG(Warning, "Win32::GetLastError() = 0x{0:x}", error);
+#if PLATFORM_UWP
+            LOG(Warning, "CreateFile2 failed for '{0}' (mode=0x{1:x}, access=0x{2:x}, share=0x{3:x}, error=0x{4:x}).",
+                path, (uint32)mode, (uint32)access, (uint32)share, error);
+#else
+            LOG(Warning, "CreateFileW failed for '{0}' (mode=0x{1:x}, access=0x{2:x}, share=0x{3:x}, error=0x{4:x}).",
+                filesystemPath, (uint32)mode, (uint32)access, (uint32)share, error);
+#endif
         return nullptr;
     }
 
