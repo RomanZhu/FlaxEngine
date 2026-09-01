@@ -3,11 +3,14 @@
 #if COMPILE_WITH_TESTS && COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
 
 #include "Engine/Content/Build/Processors/JsonAssetProcessor.h"
+#include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
 #include "Engine/Content/Build/RuntimeDependencyClosure.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/Platform.h"
@@ -77,6 +80,32 @@ namespace
                 result.Add(dependency.ObjectID);
         }
         return result;
+    }
+
+    bool WriteFragmentStore(const String& projectRoot, const Guid& sceneId, const char* payloadJson)
+    {
+        SceneFragmentWrite write;
+        write.RootActorLocalId = 2;
+        write.ContainedLocalIds.Add(2);
+        write.Payload.Set(reinterpret_cast<const byte*>(payloadJson), static_cast<int32>(std::strlen(payloadJson)));
+        Array<SceneFragmentWrite> writes;
+        writes.Add(MoveTemp(write));
+        SceneFragmentSavePlan plan;
+        String error;
+        if (SceneFragmentStore::PrepareSave(sceneId, writes, plan, error))
+            return true;
+        const String scenePath = SceneFragmentStore::GetScenePath(projectRoot, sceneId);
+        if (FileSystem::CreateDirectory(scenePath) ||
+            File::WriteAllBytes(scenePath / TEXT("scene-fragments.index"), plan.IndexData.Get(), plan.IndexData.Count()))
+            return true;
+        for (const PreparedSceneFragment& fragment : plan.Fragments)
+        {
+            const String path = scenePath / fragment.RelativePhysicalPath;
+            if (FileSystem::CreateDirectory(StringUtils::GetDirectoryName(path)) ||
+                File::WriteAllBytes(path, fragment.Data.Get(), fragment.Data.Count()))
+                return true;
+        }
+        return false;
     }
 }
 
@@ -243,6 +272,83 @@ TEST_CASE("Current scene and prefab documents retain nested references for cook 
     CHECK(closure.Objects.Count() == 3);
     CHECK_FALSE(closure.Objects.Contains(materialObject));
     CHECK(closure.Objects.Contains(editedMaterialObject));
+}
+
+TEST_CASE("External actor scene preparation embeds project-root fragments for self-contained cook")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("JsonExternalActorsCook-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid sceneId = Guid::New();
+    const Guid materialId(0x62000011, 0x62000012, 0x62000013, 0x62000014);
+    REQUIRE_FALSE(WriteFragmentStore(root, sceneId,
+        R"([{"fileId":2,"type":"FlaxEngine.StaticModel","parentFileId":1,"Material":{"kind":0,"guid":"62000011620000126200001362000014","fileId":7,"prefabInstanceFileId":0}}])"));
+
+    const String sourcePath = content / TEXT("External.scene");
+    const char sourceJson[] = R"({"sceneVersion":4,"externalActors":true,"objects":[{"fileId":1,"type":"FlaxEngine.Scene"}]})";
+    REQUIRE_FALSE(File::WriteAllBytes(sourcePath, reinterpret_cast<const byte*>(sourceJson), ARRAY_COUNT(sourceJson) - 1));
+    AssetRecord record = MakeDocumentRecord(sourcePath, TEXT("FlaxEngine.SceneAsset"));
+    record.ID = sceneId;
+    record.SourceAssetID = sceneId;
+    const AssetProcessorDescriptor descriptor = JsonAssetProcessor::CreateDescriptor();
+    SourceHashCache hashCache;
+    AssetCancellationSource cancellation;
+    PreparedAsset prepared;
+    AssetPipelineDiagnostic diagnostic;
+    PrepareAssetContext prepareContext(root, content, library, record, descriptor, StringAnsiView("{}"), hashCache,
+        cancellation.GetToken());
+    REQUIRE_FALSE(descriptor.Prepare(prepareContext, prepared, diagnostic));
+    REQUIRE_FALSE(prepareContext.Finalize(record.DatabaseRevision, prepared, diagnostic));
+
+    const auto* payload = static_cast<const JsonAssetPreparedPayload*>(prepared.Payload.get());
+    REQUIRE(payload);
+    CHECK(payload->SceneUsesPartitions);
+    REQUIRE(payload->ScenePartitions.Count() == 1);
+    CHECK(payload->ScenePartitions[0].RootFileId == 2);
+    const Array<AssetObjectId> references = RuntimeReferences(prepared);
+    REQUIRE(references.Count() == 1);
+    CHECK(references.Contains(AssetObjectId(AssetGuid(materialId), 7)));
+
+    // Build must consume the prepared bytes, never reopen the private project source tree.
+    REQUIRE_FALSE(FileSystem::DeleteDirectory(SceneFragmentStore::GetScenePath(root, sceneId), true));
+    const AssetDependency* sourceDependency = nullptr;
+    for (const AssetDependency& dependency : prepared.Dependencies)
+    {
+        if (dependency.Kind == AssetDependencyKind::SourceFile)
+        {
+            sourceDependency = &dependency;
+            break;
+        }
+    }
+    REQUIRE(sourceDependency);
+    ArtifactBuildInput input;
+    input.StableIdentity = sourceDependency->StableIdentity;
+    input.Path = sourcePath;
+    Array<ArtifactBuildInput> inputs;
+    inputs.Add(input);
+    ArtifactBuildContext buildContext(root, content, library, Guid::New(), prepared, inputs, cancellation.GetToken());
+    REQUIRE_FALSE(buildContext.Initialize(diagnostic));
+    REQUIRE_FALSE(descriptor.Build(buildContext, diagnostic));
+    REQUIRE_FALSE(buildContext.Close(diagnostic));
+    REQUIRE(buildContext.GetFiles().Count() == 1);
+
+    auto storage = ContentStorageManager::GetStorage(buildContext.GetFiles()[0].AbsolutePath);
+    REQUIRE(storage);
+    AssetInitData initData;
+    REQUIRE_FALSE(storage->LoadAssetHeader(sceneId, initData));
+    REQUIRE(initData.Header.Chunks[0]);
+    const auto& runtimeBytes = initData.Header.Chunks[0]->Data;
+    rapidjson_flax::Document runtime;
+    runtime.Parse(reinterpret_cast<const char*>(runtimeBytes.Get()), runtimeBytes.Count());
+    REQUIRE_FALSE(runtime.HasParseError());
+    CHECK_FALSE(runtime.HasMember("ExternalActors"));
+    REQUIRE(runtime.HasMember("Data"));
+    REQUIRE(runtime["Data"].IsArray());
+    CHECK(runtime["Data"].Size() == 2);
 }
 
 #endif

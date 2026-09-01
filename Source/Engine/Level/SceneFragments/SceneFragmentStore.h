@@ -33,6 +33,10 @@ public:
         const Guid& destinationSceneGuid, const StringView& stagingDirectory, String& error);
 
     /// <summary>Loads and validates the index and every referenced fragment. Returns true on failure.</summary>
+    static bool Load(const StringView& projectRoot, const Guid& sceneGuid, SceneFragmentIndex& index,
+        Array<Array<byte>>& fragments, String& error);
+
+    /// <summary>Loads and validates the index and every referenced fragment. Returns true on failure.</summary>
     static bool Load(const Guid& sceneGuid, SceneFragmentIndex& index, Array<Array<byte>>& fragments, String& error);
 
     /// <summary>Prepares serialized fragment and index bytes without mutating source state. Returns true on failure.</summary>

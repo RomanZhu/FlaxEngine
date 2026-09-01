@@ -292,7 +292,7 @@ AssetProcessorDescriptor JsonAssetProcessor::CreateDescriptor()
     runtime.Extension = ".flax";
     runtime.FormatVersion = RuntimeFormatVersion;
     runtime.TargetDimensions = ArtifactTargetDimension::None;
-    runtime.CompatibilityTag = "flax-json-source-v3";
+    runtime.CompatibilityTag = "flax-json-source-v4";
     runtime.IndependentlyReusable = true;
     descriptor.Outputs.Add(runtime);
     return descriptor;
@@ -323,12 +323,6 @@ bool JsonAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pr
     if (CollectReferences(*data, record.SourceAssetID, references))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
             record.ID, record.SourcePath.Get(), TEXT("JSON source contains a malformed structured {guid,fileId} reference."));
-    for (const auto& entry : references)
-    {
-        const AssetObjectId& reference = entry.Item;
-        if (context.DeclareRuntimeReference(TEXT("json-reference:") + reference.ToString(), reference, origin, diagnostic))
-            return true;
-    }
 
     auto payload = std::make_shared<JsonAssetPreparedPayload>();
     payload->SourceHash = sourceHash;
@@ -345,7 +339,7 @@ bool JsonAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pr
             SceneFragmentIndex fragmentIndex;
             Array<Array<byte>> fragmentBytes;
             String fragmentError;
-            if (SceneFragmentStore::Load(record.SourceAssetID, fragmentIndex, fragmentBytes, fragmentError))
+            if (SceneFragmentStore::Load(context.GetProjectRoot(), record.SourceAssetID, fragmentIndex, fragmentBytes, fragmentError))
             {
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
                     record.ID, record.SourcePath.Get(), fragmentError);
@@ -365,6 +359,11 @@ bool JsonAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pr
                     return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
                         record.ID, record.SourcePath.Get(), TEXT("Private scene fragment is malformed or its rootActorLocalId does not match the owner index."));
                 }
+                if (CollectReferences(*fragmentObjects, record.SourceAssetID, references))
+                {
+                    return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare,
+                        record.ID, record.SourcePath.Get(), TEXT("Private scene fragment contains a malformed structured {guid,fileId} reference."));
+                }
                 JsonAssetPreparedPartition preparedFragment;
                 preparedFragment.RootFileId = indexEntry.RootActorLocalId;
                 preparedFragment.SourceHash = indexEntry.Content;
@@ -375,7 +374,14 @@ bool JsonAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pr
         }
     }
 
-    static const char CompilerIdentity[] = "flax-json-source-compiler-v3";
+    for (const auto& entry : references)
+    {
+        const AssetObjectId& reference = entry.Item;
+        if (context.DeclareRuntimeReference(TEXT("json-reference:") + reference.ToString(), reference, origin, diagnostic))
+            return true;
+    }
+
+    static const char CompilerIdentity[] = "flax-json-source-compiler-v4";
     if (context.DeclareToolchain(TEXT("json-document-compiler"), ContentHash::Compute(CompilerIdentity, ARRAY_COUNT(CompilerIdentity) - 1), origin, diagnostic) ||
         context.DeclareOutput(StringAnsiView("runtime"), record.ID, diagnostic))
         return true;
@@ -394,7 +400,7 @@ bool JsonAssetProcessor::BuildOutputKey(const PreparedAsset& prepared, const Art
     if (!payload || outputKind != StringAnsiView("runtime"))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Prepare,
             prepared.AssetID, StringView::Empty, TEXT("JSON document output key requires prepared runtime state."));
-    ArtifactKeyBuilder builder(StringAnsiView("flax-json-source-output-v3"));
+    ArtifactKeyBuilder builder(StringAnsiView("flax-json-source-output-v4"));
     builder.AddGuid(StringAnsiView("effective-asset"), prepared.AssetID);
     builder.AddString(StringAnsiView("output-type"), prepared.OutputType);
     builder.AddHash(StringAnsiView("source"), payload->SourceHash);

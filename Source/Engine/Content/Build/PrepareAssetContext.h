@@ -35,6 +35,10 @@ public:
     {
         return _record;
     }
+    const String& GetProjectRoot() const
+    {
+        return _projectRoot;
+    }
     const StringAnsi& GetSettings() const
     {
         return _settings;

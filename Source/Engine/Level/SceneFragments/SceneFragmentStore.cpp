@@ -343,6 +343,12 @@ bool SceneFragmentStore::Load(const Guid& sceneGuid, SceneFragmentIndex& index, 
     return LoadAt(sceneGuid, GetScenePath(sceneGuid), index, fragments, error);
 }
 
+bool SceneFragmentStore::Load(const StringView& projectRoot, const Guid& sceneGuid, SceneFragmentIndex& index,
+    Array<Array<byte>>& fragments, String& error)
+{
+    return LoadAt(sceneGuid, GetScenePath(projectRoot, sceneGuid), index, fragments, error);
+}
+
 bool SceneFragmentStore::PrepareCloneDirectory(const StringView& projectRoot, const Guid& sourceSceneGuid,
     const Guid& destinationSceneGuid, const StringView& stagingDirectory, String& error)
 {
