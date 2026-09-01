@@ -202,8 +202,8 @@ TEST_CASE("Artifact leases are reference counted")
 
 TEST_CASE("Binary asset storage switch succeeds or restores old storage")
 {
-    const String root = Globals::ProjectLibraryFolder / TEXT("Tests/StorageSwitch");
-    const String canonicalPath = Globals::ProjectContentFolder / TEXT("__BinaryAssetStorageSwitch.flax");
+    const String root = Globals::ProjectCacheFolder / TEXT("Tests/StorageSwitch");
+    const String canonicalPath = root / TEXT("initial.flax");
     const String replacementPath = root / TEXT("replacement.flax");
     const String invalidPath = root / TEXT("invalid.flax");
     const String unloadablePath = root / TEXT("unloadable.flax");
@@ -379,71 +379,21 @@ TEST_CASE("Generated unsupported binary requests rebuild without mutation")
     Delete(asset);
 }
 
-TEST_CASE("Content resolves an explicit distinct Library load location and still reads legacy binary assets")
+TEST_CASE("Content reads editor-private transient binary assets")
 {
-    const String root = Globals::ProjectLibraryFolder / TEXT("Artifacts/FoundationFixture");
-    const String canonicalPath = Globals::ProjectContentFolder / TEXT("__FoundationFixture.source");
-    const String legacyPath = Globals::ProjectContentFolder / TEXT("__FoundationLegacy.flax");
-    const String storagePath = root / TEXT("runtime.flax");
-    const Guid id = Guid::New();
+    const String legacyPath = Globals::ProjectCacheFolder / TEXT("__FoundationTransient.flax");
     const Guid legacyId = Guid::New();
-    const byte sourceBytes[] = { 's', 'o', 'u', 'r', 'c', 'e' };
     const byte payload[] = { 10, 20, 30, 40 };
-    RawDataAsset* asset = nullptr;
     RawDataAsset* legacyAsset = nullptr;
-    FileSystem::DeleteDirectory(root, true);
-    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
-    REQUIRE_FALSE(File::WriteAllBytes(canonicalPath, sourceBytes, ARRAY_COUNT(sourceBytes)));
-    WriteRawDataAsset(storagePath, id, RawDataAsset::SerializedVersion, payload, ARRAY_COUNT(payload));
+    CleanupRawDataAsset(legacyPath, legacyAsset);
     SCOPE_EXIT
     {
-        if (asset)
-            Content::UnloadAsset(asset);
         CleanupRawDataAsset(legacyPath, legacyAsset);
-        Content::UnregisterRuntimeAssetLoadLocation(id);
-        Content::GetObjectRegistry()->RemoveTransientPackage(canonicalPath, nullptr);
-        ContentStorageManager::EnsureAccess(storagePath);
-        FileSystem::DeleteDirectory(root, true);
-        FileSystem::DeleteFile(canonicalPath);
     };
-
-    AssetLoadLocation location;
-    location.Info = AssetInfo(id, RawDataAsset::TypeName, canonicalPath);
-    location.Artifact.ObjectID = location.Info.ObjectID;
-    location.Artifact.AssetID = id;
-    location.Artifact.TypeName = RawDataAsset::TypeName;
-    location.Artifact.StoragePath = ArtifactStoragePath(storagePath);
-    location.Artifact.OutputKind = TEXT("runtime");
-    location.Artifact.Key = TEXT("foundation-key");
-    location.Artifact.StorageKind = ArtifactStorageKind::Generated;
-    location.Artifact.IsExact = true;
-
-    AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(Content::RegisterAssetLoadLocation(location, diagnostic));
-    asset = Content::LoadRuntimeObject<RawDataAsset>(id);
-    REQUIRE(asset);
-    CHECK(asset->GetPath() == canonicalPath);
-    CHECK(asset->GetStoragePath() == storagePath);
-    CHECK(asset->GetArtifactKey() == TEXT("foundation-key"));
-    CHECK(asset->HasArtifactLease());
-    REQUIRE(asset->Data.Count() == ARRAY_COUNT(payload));
-    CHECK(Platform::MemoryCompare(asset->Data.Get(), payload, ARRAY_COUNT(payload)) == 0);
-    CHECK(ArtifactStore::CleanEntireLibrary(diagnostic));
-    CHECK(FileSystem::FileExists(storagePath));
-    CHECK(FileSystem::FileExists(canonicalPath));
-
-    Content::UnloadAsset(asset);
-    asset = nullptr;
-    ObjectsRemovalService::Flush();
-    CHECK_FALSE(ArtifactLease::IsLeased(storagePath));
-    Content::UnregisterRuntimeAssetLoadLocation(id);
-    CHECK_FALSE(ArtifactStore::CleanEntireLibrary(diagnostic));
-    CHECK_FALSE(FileSystem::FileExists(storagePath));
-    CHECK(FileSystem::FileExists(canonicalPath));
 
     WriteRawDataAsset(legacyPath, legacyId, RawDataAsset::SerializedVersion, payload, ARRAY_COUNT(payload));
     Content::GetObjectRegistry()->RegisterTransientObject(legacyId, RawDataAsset::TypeName, legacyPath);
-    legacyAsset = Content::LoadRuntimeObject<RawDataAsset>(legacyId);
+    legacyAsset = Content::Load<RawDataAsset>(legacyPath);
     REQUIRE(legacyAsset);
     CHECK(legacyAsset->GetPath() == legacyPath);
     CHECK(legacyAsset->GetStoragePath() == legacyPath);

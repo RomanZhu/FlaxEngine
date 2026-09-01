@@ -79,7 +79,6 @@ namespace
     CriticalSection AssetsLocker;
     Dictionary<AssetObjectId, Asset*> Assets;
     Dictionary<Guid, AssetObjectId> RuntimeAssetIndex;
-    Dictionary<AssetObjectId, AssetLoadLocation> ExplicitLoadLocations;
     CriticalSection LoadedAssetsToInvokeLocker;
     Array<Asset*> LoadedAssetsToInvoke;
     Array<Asset*> ToUnload;
@@ -640,11 +639,6 @@ void ContentService::BeforeExit()
 void ContentService::Dispose()
 {
     IsExiting = true;
-
-    {
-        ScopeLock lock(AssetsLocker);
-        ExplicitLoadLocations.Clear();
-    }
 
     // Flush objects (some asset-related objects/references may be pending to delete)
     ObjectsRemovalService::Flush();
@@ -1884,84 +1878,6 @@ bool Content::CloneAssetFile(const StringView& dstPath, const StringView& srcPat
 
 #endif
 
-bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, AssetPipelineDiagnostic& diagnostic)
-{
-    diagnostic = AssetPipelineDiagnostic();
-#if USE_EDITOR
-    AssetInfo builtinInfo;
-    if (BuiltinAssetCatalog::Get().TryGet(location.Info.ObjectID, builtinInfo))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = location.Info.ObjectID.Asset.Value;
-        diagnostic.SourcePath = builtinInfo.Path;
-        diagnostic.Message = TEXT("Built-in asset load locations are immutable and cannot be overridden.");
-        return true;
-    }
-    if (!location.Info.ID.IsValid() || !location.Info.ObjectID.IsValid() || location.Artifact.ObjectID != location.Info.ObjectID ||
-        location.Info.ObjectID.ToRuntimeObjectGuid() != location.Info.ID ||
-        location.Artifact.AssetID != location.Info.ID || location.Artifact.TypeName != location.Info.TypeName ||
-        !AssetPathPolicy::IsCanonicalPathValid(CanonicalAssetPath(location.Info.Path), Globals::ProjectContentFolder) ||
-        !AssetPathPolicy::IsArtifactPathValid(location.Artifact.StoragePath, Globals::ProjectLibraryFolder))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = location.Info.ID;
-        diagnostic.SourcePath = location.Info.Path;
-        diagnostic.Message = TEXT("Explicit asset load location has invalid identity, canonical path, or Library storage path.");
-        return true;
-    }
-
-    if (!FileSystem::FileExists(location.Info.Path) || !FileSystem::FileExists(location.Artifact.StoragePath.Get()))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = location.Info.ID;
-        diagnostic.Message = TEXT("Explicit load location source or artifact storage is missing.");
-        return true;
-    }
-
-    ScopeLock lock(AssetsLocker);
-    if (Assets.ContainsKey(location.Info.ObjectID))
-    {
-        diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
-        diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = location.Info.ID;
-        diagnostic.Message = TEXT("Cannot replace the load location of an already loaded asset. Use BinaryAsset::SwitchStorage.");
-        return true;
-    }
-    ExplicitLoadLocations[location.Info.ObjectID] = location;
-    return false;
-#else
-    diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
-    diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-    diagnostic.Message = TEXT("Project Library load locations are available only in editor and cooker builds.");
-    return true;
-#endif
-}
-
-void Content::UnregisterRuntimeAssetLoadLocation(const Guid& runtimeId)
-{
-    {
-        ScopeLock lock(AssetsLocker);
-        for (auto it = ExplicitLoadLocations.Begin(); it.IsNotEnd(); ++it)
-        {
-            if (it->Value.Info.ID == runtimeId)
-            {
-                ExplicitLoadLocations.Remove(it);
-                return;
-            }
-        }
-    }
-    UnregisterAssetLoadLocation(ResolveRuntimeObjectId(runtimeId));
-}
-
-void Content::UnregisterAssetLoadLocation(const AssetObjectId& objectId)
-{
-    ScopeLock lock(AssetsLocker);
-    ExplicitLoadLocations.Remove(objectId);
-}
-
 void Content::UnloadAsset(Asset* asset)
 {
     if (asset == nullptr)
@@ -2347,34 +2263,27 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
 
     AssetsLocker.Unlock();
 
-    // Explicit locations are isolated tests/previews. Built-ins and editor-private transient
-    // packages retain their dedicated immutable roots. Every canonical project object uses
-    // the exact artifact/catalog object loader with no source or package fallback.
+    // Built-ins and editor-private transient packages retain their dedicated immutable roots.
+    // Every canonical project object uses the exact artifact/catalog object loader.
     AssetInfo assetInfo;
     AssetLoadLocation loadLocation;
-    bool hasLegacyLocation;
-    {
-        ScopeLock lock(AssetsLocker);
-        hasLegacyLocation = ExplicitLoadLocations.TryGet(objectId, loadLocation);
-    }
-    if (hasLegacyLocation)
-        assetInfo = loadLocation.Info;
+    bool hasDirectPackageLocation = false;
 #if USE_EDITOR
-    if (!hasLegacyLocation && BuiltinAssetCatalog::Get().TryGet(objectId, assetInfo))
+    if (BuiltinAssetCatalog::Get().TryGet(objectId, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
-        hasLegacyLocation = true;
+        hasDirectPackageLocation = true;
     }
     AssetRecord canonicalRecord;
     const bool isCanonicalProjectObject = AssetDatabase::Get().TryGetRecord(objectId, canonicalRecord);
-    if (!hasLegacyLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId, assetInfo))
+    if (!hasDirectPackageLocation && !isCanonicalProjectObject && ObjectRegistry.FindObject(objectId, assetInfo))
     {
         loadLocation = AssetLoadLocation::Package(assetInfo);
-        hasLegacyLocation = true;
+        hasDirectPackageLocation = true;
     }
 #endif
 
-    if (hasLegacyLocation)
+    if (hasDirectPackageLocation)
     {
         if (assetInfo.ObjectID != objectId)
         {

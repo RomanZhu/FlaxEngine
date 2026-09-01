@@ -15,8 +15,6 @@ class FlaxFile;
 class BinaryAsset;
 class IAssetFactory;
 class AssetObjectRegistry;
-struct AssetLoadLocation;
-struct AssetPipelineDiagnostic;
 
 // Content and assets statistics container.
 API_STRUCT() struct FLAXENGINE_API ContentStats
@@ -42,18 +40,6 @@ API_CLASS(Static) class FLAXENGINE_API Content
     friend Engine;
     friend Asset;
 public:
-    /// <summary>
-    /// Registers an explicit canonical/storage load location for the Library-artifact rollout path.
-    /// </summary>
-    /// <returns>True on failure.</returns>
-    static bool RegisterAssetLoadLocation(const AssetLoadLocation& location, AssetPipelineDiagnostic& diagnostic);
-
-    /// <summary>Removes an explicit load location. Already loaded assets are unchanged.</summary>
-    static void UnregisterRuntimeAssetLoadLocation(const Guid& runtimeId);
-
-    /// <summary>Removes an explicit load location for one exact asset object. Already loaded assets are unchanged.</summary>
-    static void UnregisterAssetLoadLocation(const AssetObjectId& objectId);
-
     /// <summary>
     /// The time between content pool updates.
     /// </summary>
