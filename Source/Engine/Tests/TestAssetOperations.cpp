@@ -542,9 +542,14 @@ TEST_CASE("Asset operations recursively expand bounded mixed Content selections"
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(operations.Initialize(diagnostic));
 
-    AssetMeta folderMeta = MakeOperationMeta();
+    AssetMeta folderMeta;
+    folderMeta.ID = Guid::New();
     folderMeta.FolderAsset = true;
+    folderMeta.AssetType = TEXT("FlaxEngine.Folder");
     folderMeta.SourceKind = AssetSourceKind::Folder;
+    folderMeta.Processor.ID = TEXT("Flax.Folder");
+    folderMeta.Processor.SettingsVersion = 1;
+    folderMeta.Processor.SettingsJson = "{}";
     REQUIRE_FALSE(AssetMeta::SaveAtomic(sourceFolder + TEXT(".meta"), folderMeta, diagnostic));
     const byte bytes[] = { 3, 1, 4 };
     const String nestedAsset = sourceFolder / TEXT("Nested.bin");
