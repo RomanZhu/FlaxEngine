@@ -157,6 +157,7 @@ namespace
             if (!objectID.IsValid())
                 return false;
             references.Add(objectID);
+            return false;
         }
         for (auto member = value.MemberBegin(); member != value.MemberEnd(); ++member)
         {

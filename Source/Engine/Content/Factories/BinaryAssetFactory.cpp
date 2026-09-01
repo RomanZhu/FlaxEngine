@@ -55,7 +55,7 @@ Asset* BinaryAssetFactoryBase::New(const AssetLoadLocation& location)
     const AssetInfo& info = location.Info;
     const String& storagePath = location.Artifact.StoragePath.Get();
 
-    if (storagePath.IsEmpty() || location.Artifact.ObjectID.Asset.Value != info.ObjectID ||
+    if (storagePath.IsEmpty() || !location.Artifact.ObjectID.IsValid() ||
         location.Artifact.AssetID != info.ID || location.Artifact.TypeName != info.TypeName)
     {
         LOG(Warning, "Invalid resolved artifact identity or storage path.\nInfo: {0}", info.ToString());

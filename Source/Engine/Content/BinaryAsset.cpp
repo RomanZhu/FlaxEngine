@@ -124,7 +124,7 @@ BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact
         LOG(Error, "Binary asset storage can only be switched from the main thread. Asset: '{0}'.", GetPath());
         return BinaryAssetStorageSwitchResult::InvalidThread;
     }
-    if (artifact.ObjectID.Asset.Value != GetPersistentObjectId() || !artifact.AssetID.IsValid() || artifact.AssetID != GetID() ||
+    if (artifact.ObjectID != _internalObjectId || !artifact.AssetID.IsValid() || artifact.AssetID != GetID() ||
         artifact.TypeName != GetTypeName() || artifact.StoragePath.Get().IsEmpty())
         return BinaryAssetStorageSwitchResult::InvalidArtifact;
 

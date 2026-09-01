@@ -409,7 +409,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         AssetReference<Model> model = Content::LoadAsync<Model>(Globals::EngineContentFolder / TEXT("Editor/Primitives/Cube.flax"));
         REQUIRE(model);
         REQUIRE(!model->WaitForLoaded());
-        const AssetObjectId modelObject = model.GetID();
+        const Guid modelObject = model.GetID();
         REQUIRE(modelObject.IsValid());
         const String scenePath = GetTestScenePath(TEXT("PlacedModelPersistence"));
         CleanupTestSceneFiles(scenePath);
@@ -436,12 +436,10 @@ TEST_CASE("ExternalActorsSceneStorage")
         REQUIRE(fragmentObjects.Size() == 1);
         REQUIRE(fragmentObjects[0].HasMember("Model"));
         const rapidjson_flax::Value& fragmentModel = fragmentObjects[0]["Model"];
-        REQUIRE(fragmentModel.IsObject());
-        CHECK(JsonTools::GetGuid(fragmentModel, "guid") == modelObject.Asset.Value);
-        const auto fileId = fragmentModel.FindMember("fileId");
-        REQUIRE(fileId != fragmentModel.MemberEnd());
-        REQUIRE(fileId->value.IsInt64());
-        CHECK(fileId->value.GetInt64() == modelObject.LocalId);
+        REQUIRE(fragmentModel.IsString());
+        Guid serializedModel;
+        REQUIRE_FALSE(Guid::Parse(StringAnsiView(fragmentModel.GetString(), fragmentModel.GetStringLength()), serializedModel));
+        CHECK(serializedModel == modelObject);
 
         RefreshTestScene(scenePath);
         SceneAsset* sceneAsset = Content::Load<SceneAsset>(scenePath);

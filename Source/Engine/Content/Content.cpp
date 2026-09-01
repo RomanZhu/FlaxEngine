@@ -2073,7 +2073,12 @@ Asset* Content::LoadAssetObjectAsyncInternal(const AssetObjectId& objectId, cons
         return nullptr;
     PROFILE_MEM(Content);
     const bool passiveLoad = IsPassiveLoad();
-    const Guid persistentObjectId = objectId.Asset.Value;
+    Guid persistentObjectId = objectId.Asset.Value;
+#if USE_EDITOR
+    AssetRecord persistentRecord;
+    if (AssetDatabase::Get().TryGetRecord(objectId, persistentRecord))
+        persistentObjectId = persistentRecord.ID;
+#endif
 
     // Check if asset has been already loaded
     Asset* result = nullptr;
