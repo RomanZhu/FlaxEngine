@@ -19,6 +19,8 @@ struct FLAXENGINE_API ArtifactRequest
 {
     AssetObjectId Object;
     ArtifactTarget Target;
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     StringAnsi OutputKind;
     StringAnsi RequiredCompatibility;
     ArtifactResolvePolicy Policy = ArtifactResolvePolicy::Interactive;

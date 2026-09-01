@@ -12,7 +12,8 @@ class FLAXENGINE_API CallbackImporterPipelineService
 public:
     static bool OwnsProcessor(const StringView& processorID);
     static bool RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
-                             AssetBuildRequestHandle* resultHandle = nullptr);
+                             AssetBuildRequestHandle* resultHandle = nullptr,
+                             const Guid& refreshId = Guid::Empty, uint32 pass = 0);
     static bool RequestBuildAndWait(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic);
     static AssetBuildJobStatus GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic);
     static void Shutdown();

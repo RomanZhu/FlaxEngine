@@ -105,7 +105,7 @@ namespace
     }
 
     bool PersistPublication(const StringView& libraryRoot, const ArtifactManifest& manifest, const StringAnsiView& manifestJson,
-        AssetPipelineDiagnostic& diagnostic)
+        const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& diagnostic)
     {
         AssetDatabase& database = AssetDatabase::Get();
         if (!database.IsUsingLibrary(libraryRoot))
@@ -174,7 +174,7 @@ namespace
             }
             dependencies.Add(MoveTemp(dependency));
         }
-        return database.RecordPublication(publication, dependencies, diagnostic);
+        return database.RecordPublication(publication, dependencies, diagnostic, refreshId, pass);
     }
 
     String DescribeDifference(const StringView& existingPath, const StringView& stagedPath)
@@ -266,6 +266,8 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     ArtifactPublicationResult& result, AssetPipelineDiagnostic& diagnostic)
 {
     result = ArtifactPublicationResult();
+    result.RefreshId = request.RefreshId;
+    result.Pass = request.Pass;
     diagnostic = AssetPipelineDiagnostic();
     bool cleanupRequired = context.IsInitialized();
     SCOPE_EXIT
@@ -273,6 +275,9 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         if (cleanupRequired)
             context.Cancel();
     };
+    if (request.RefreshId.IsValid() != (request.Pass != 0))
+        return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, prepared,
+            context.GetStagingPath(), TEXT("Artifact publication refresh context must provide both a refresh ID and a non-zero pass, or neither."));
     if (!context.IsInitialized() || context.IsClosed() || !prepared.ObjectID.IsValid() || prepared.Outputs.IsEmpty() || request.Outputs.Count() != prepared.Outputs.Count() ||
         request.ProcessorID.IsEmpty() || request.ProcessorImplementationVersion < 1 || request.BuildID.IsEmpty() || !request.QueryCurrentState.IsBinded())
         return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, prepared, context.GetStagingPath(), TEXT("Artifact publication request is incomplete or context is not active."));
@@ -530,7 +535,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         return true;
     if (AtomicReplace(manifestPath.Get(), stagingManifest))
         return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, manifestPath.Get(), TEXT("Cannot atomically replace current artifact manifest."));
-    if (PersistPublication(libraryRoot, manifest, manifestJson, diagnostic))
+    if (PersistPublication(libraryRoot, manifest, manifestJson, request.RefreshId, request.Pass, diagnostic))
         return true;
     result.Manifest = manifest;
     if (Inject(request.FailurePoint, ArtifactPublicationFailurePoint::AfterAtomicReplaceBeforeNotification, prepared, diagnostic))

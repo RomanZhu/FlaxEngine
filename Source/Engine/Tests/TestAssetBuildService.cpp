@@ -4,6 +4,7 @@
 
 #include "Engine/Content/Build/AssetBuildService.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
+#include "Engine/Content/Importing/AssetImportScheduler.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
@@ -72,6 +73,8 @@ TEST_CASE("AssetBuildService deduplicates exact work without coupling requester 
     std::atomic<int32> publications { 0 };
     std::atomic<bool> release { false };
     AssetBuildJobRequest request = BasicRequest(JobKey("dedup"), Guid::New());
+    request.RefreshId = Guid::New();
+    request.Pass = 4;
     request.ProcessorID = TEXT("test.dedup");
     request.Target = TEXT("Windows-x64-Editor");
     request.OutputKinds.Add("Runtime");
@@ -106,6 +109,8 @@ TEST_CASE("AssetBuildService deduplicates exact work without coupling requester 
 
     AssetBuildJobResult result;
     REQUIRE(second.TryGetResult(result));
+    CHECK(result.RefreshId == request.RefreshId);
+    CHECK(result.Pass == request.Pass);
     ArtifactStoragePath logPath;
     REQUIRE_FALSE(ArtifactStore::TryGetJobLogPath(library, result.JobID.ToString(Guid::FormatType::N), logPath, diagnostic));
     StringAnsi log;
@@ -113,6 +118,11 @@ TEST_CASE("AssetBuildService deduplicates exact work without coupling requester 
     CHECK(log.Contains("\"stage\":\"queued\""));
     CHECK(log.Contains("\"stage\":\"succeeded\""));
     CHECK(log.Contains("\"processorId\":\"test.dedup\""));
+    StringAnsi refreshField("\"refreshId\":\"");
+    refreshField += StringAnsi(request.RefreshId.ToString(Guid::FormatType::N));
+    refreshField += '"';
+    CHECK(log.Contains(refreshField));
+    CHECK(log.Contains("\"pass\":4"));
     CHECK(log.Contains("<absolute-path-redacted>"));
     CHECK_FALSE(log.Contains("C:\\Private"));
     const AssetBuildMetrics metrics = service.GetMetrics();
@@ -126,6 +136,39 @@ TEST_CASE("AssetBuildService deduplicates exact work without coupling requester 
     REQUIRE(jobs.Count() == 1);
     CHECK(jobs[0].ProcessorID == TEXT("test.dedup"));
     CHECK(jobs[0].RebuildReason == TEXT("source content changed"));
+    CHECK(jobs[0].RefreshId == request.RefreshId);
+    CHECK(jobs[0].Pass == request.Pass);
+}
+
+TEST_CASE("AssetImportScheduler preserves refresh context on asynchronous jobs")
+{
+    const String library = BuildServiceLibrary(TEXT("AssetImportSchedulerRefresh"));
+    const String root = StringUtils::GetDirectoryName(library);
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    AssetBuildService service;
+    AssetBuildServiceLimits limits;
+    limits.MaximumWorkers = 1;
+    limits.MaximumMemoryBytes = 64;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+
+    AssetImportPlan plan;
+    plan.Request.Asset = AssetGuid(Guid::New());
+    plan.Request.RefreshId = Guid::New();
+    plan.Request.Pass = 7;
+    plan.StaticFingerprint = JobKey("refresh-scheduler").ExactPlan;
+    plan.Importer.ID = TEXT("test.refresh-scheduler");
+    plan.Importer.SupportsParallelImport = true;
+    AssetImportScheduler scheduler(service);
+    const AssetBuildRequestHandle handle = scheduler.Schedule(plan,
+        [](const AssetImportPlan&, const AssetCancellationToken&, AssetPipelineDiagnostic&) { return false; });
+    REQUIRE(handle.IsValid());
+    REQUIRE(handle.Wait(5000));
+    AssetBuildJobResult result;
+    REQUIRE(handle.TryGetResult(result));
+    CHECK(result.Status == AssetBuildJobStatus::Succeeded);
+    CHECK(result.RefreshId == plan.Request.RefreshId);
+    CHECK(result.Pass == plan.Request.Pass);
 }
 
 TEST_CASE("AssetBuildService replays terminal publication when requested")

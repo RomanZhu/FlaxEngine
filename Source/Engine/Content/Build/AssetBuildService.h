@@ -55,6 +55,8 @@ struct FLAXENGINE_API AssetBuildJobRequest
 {
     AssetBuildJobKey Key;
     Guid AssetID = Guid::Empty;
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     String ProcessorClass;
     String ProcessorID;
     String Target;
@@ -75,6 +77,8 @@ struct FLAXENGINE_API AssetBuildJobResult
 {
     AssetBuildJobKey Key;
     Guid AssetID = Guid::Empty;
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     Guid JobID = Guid::Empty;
     AssetBuildJobStatus Status = AssetBuildJobStatus::Invalid;
     AssetPipelineDiagnostic Diagnostic;

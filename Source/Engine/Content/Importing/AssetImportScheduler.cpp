@@ -11,6 +11,8 @@ AssetBuildRequestHandle AssetImportScheduler::Schedule(const AssetImportPlan& pl
     AssetBuildJobRequest request;
     request.Key.ExactPlan = plan.StaticFingerprint;
     request.AssetID = plan.Request.Asset.Value;
+    request.RefreshId = plan.Request.RefreshId;
+    request.Pass = plan.Request.Pass;
     request.ProcessorClass = TEXT("asset-import");
     request.ProcessorID = plan.Importer.ID;
     request.Target = String(plan.Request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
@@ -95,6 +97,8 @@ AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImport
     AssetBuildJobRequest request;
     request.Key.ExactPlan = plan.StaticFingerprint;
     request.AssetID = plan.Request.Asset.Value;
+    request.RefreshId = plan.Request.RefreshId;
+    request.Pass = plan.Request.Pass;
     request.ProcessorClass = TEXT("isolated-asset-import");
     request.ProcessorID = plan.Importer.ID;
     request.Target = String(execution->Request.Target.BuildKey(ArtifactTargetDimension::All).ToString());

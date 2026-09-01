@@ -43,6 +43,8 @@ struct FLAXENGINE_API AssetBuildJobSummary
 {
     Guid JobID = Guid::Empty;
     Guid AssetID = Guid::Empty;
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     ArtifactKey Key;
     String ProcessorID;
     String Target;

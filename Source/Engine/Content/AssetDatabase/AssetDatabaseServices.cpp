@@ -1202,7 +1202,7 @@ namespace
     }
 
     GenericBuildRequestResult RequestGenericBuild(const AssetRecord& record, bool force, bool synchronous,
-        AssetPipelineDiagnostic& diagnostic)
+        const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& diagnostic)
     {
         AssetImporterRegistry* registry = AssetImportService::GetImporterRegistry();
         AssetImporterLease importer;
@@ -1214,7 +1214,7 @@ namespace
             diagnostic = AssetPipelineDiagnostic();
             return GenericBuildRequestResult::Unsupported;
         }
-        if (descriptor.RequestBuild(record.ID, force, diagnostic) ||
+        if (descriptor.RequestBuild(record.ID, force, refreshId, pass, diagnostic) ||
             (synchronous && WaitForGenericBuild(record.ID, descriptor.GetBuildStatus, diagnostic)))
             return GenericBuildRequestResult::Failed;
         return GenericBuildRequestResult::Queued;
@@ -1341,7 +1341,8 @@ namespace
                 AssetRecord record;
                 if (!AssetDatabase::Get().TryGetRecord(plan.Request.Asset.Value, record))
                     continue;
-                const GenericBuildRequestResult request = RequestGenericBuild(record, force, synchronous, localDiagnostic);
+                const GenericBuildRequestResult request = RequestGenericBuild(record, force, synchronous,
+                    plan.Request.RefreshId, plan.Request.Pass, localDiagnostic);
                 if (request == GenericBuildRequestResult::Failed)
                     return true;
                 if (synchronous && request == GenericBuildRequestResult::Queued)

@@ -118,8 +118,12 @@ TEST_CASE("ArtifactPublisher atomically selects validated immutable outputs")
     bool notified = false;
     const ArtifactKey outputKey(ContentHash::Compute("output-key", 10));
     ArtifactPublicationRequest request = PublicationRequest(prepared, outputKey, notified);
+    request.RefreshId = Guid::New();
+    request.Pass = 3;
     ArtifactPublicationResult result;
     REQUIRE_FALSE(ArtifactPublisher::Publish(library, prepared, context, request, validators, result, diagnostic));
+    CHECK(result.RefreshId == request.RefreshId);
+    CHECK(result.Pass == request.Pass);
     CHECK(notified);
     CHECK(result.NotificationSent);
     REQUIRE(result.Manifest.Outputs.Count() == 1);

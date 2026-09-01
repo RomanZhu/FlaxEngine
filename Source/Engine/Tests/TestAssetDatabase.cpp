@@ -215,14 +215,27 @@ TEST_CASE("Asset database durable republish is a no-op and preserves publication
     dependency.CustomDependency = AssetObjectId(AssetGuid(sourceId), 2).ToString();
     Array<SourceAssetDependencyRow> publicationDependencies;
     publicationDependencies.Add(dependency);
-    REQUIRE_FALSE(database.RecordPublication(mainPublication, publicationDependencies, diagnostic));
+    const Guid publicationRefreshId = Guid::New();
+    constexpr uint32 publicationPass = 5;
+    REQUIRE_FALSE(database.RecordPublication(mainPublication, publicationDependencies, diagnostic,
+        publicationRefreshId, publicationPass));
     SourceAssetPublicationRow subPublication = mainPublication;
     subPublication.LocalFileId = 2;
     subPublication.Artifact = ArtifactKey(ContentHash::Compute("sub-publication", 15));
     Array<SourceAssetDependencyRow> noDependencies;
-    REQUIRE_FALSE(database.RecordPublication(subPublication, noDependencies, diagnostic));
+    REQUIRE_FALSE(database.RecordPublication(subPublication, noDependencies, diagnostic,
+        publicationRefreshId, publicationPass));
 
     const uint64 publicationRevision = database.GetRevision();
+    REQUIRE_FALSE(database.ReadChangesAfter(stableRevision, changes, requiresSnapshot, diagnostic));
+    REQUIRE(changes.Count() == 2);
+    for (const AssetChangeSet& change : changes)
+    {
+        CHECK(change.RefreshId == publicationRefreshId);
+        CHECK(change.Pass == publicationPass);
+        CHECK(change.Imported.Count() == 1);
+    }
+    changes.Clear();
     REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostics, diagnostic));
     CHECK(database.GetRevision() == publicationRevision);
     CHECK(database.GetDurableSnapshot().GetState().Publications.Count() == 2);

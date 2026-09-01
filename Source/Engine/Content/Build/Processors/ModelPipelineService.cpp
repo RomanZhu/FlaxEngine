@@ -32,6 +32,8 @@ namespace
     {
         PreparedAsset Prepared;
         ArtifactTarget Target;
+        Guid RefreshId = Guid::Empty;
+        uint32 Pass = 0;
         Guid JobID = Guid::New();
         Array<ArtifactBuildInput> Inputs;
         Array<ArtifactPublicationOutputPlan> Outputs;
@@ -85,9 +87,9 @@ namespace
                 return true;
         }
         if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
-            [](const Guid& id, bool force, AssetPipelineDiagnostic& localDiagnostic)
+            [](const Guid& id, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
             {
-                return ModelPipelineService::RequestBuild(id, force, localDiagnostic);
+                return ModelPipelineService::RequestBuild(id, force, localDiagnostic, refreshId, pass);
             },
             [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
             {
@@ -243,6 +245,8 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     auto execution = std::make_shared<ModelExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    execution->RefreshId = request.RefreshId;
+    execution->Pass = request.Pass;
     {
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
@@ -295,6 +299,8 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     plan.BuildRequest.Key.ExactPlan = jobBuilder.Finalize();
     plan.BuildRequest.KeyComponents = jobBuilder.GetComponents();
     plan.BuildRequest.AssetID = prepared.AssetID;
+    plan.BuildRequest.RefreshId = request.RefreshId;
+    plan.BuildRequest.Pass = request.Pass;
     plan.BuildRequest.ProcessorClass = TEXT("model");
     plan.BuildRequest.ProcessorID = record.ProcessorID;
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
@@ -330,6 +336,8 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
                 execution->Prepared.AssetID, TEXT("Model build produced no publication context."));
         ArtifactPublicationRequest publication;
         publication.Target = execution->Target;
+        publication.RefreshId = execution->RefreshId;
+        publication.Pass = execution->Pass;
         publication.ProcessorID = ModelProcessorSettings::ProcessorID();
         publication.ProcessorImplementationVersion = ModelProcessor::ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
@@ -350,7 +358,8 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     return false;
 }
 
-bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
+                                        const Guid& refreshId, uint32 pass)
 {
     if (EnsureModelPipelineInitialized(diagnostic))
         return true;
@@ -388,6 +397,8 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     }
 
     ArtifactRequest request;
+    request.RefreshId = refreshId;
+    request.Pass = pass;
     request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "runtime";
     request.RequiredCompatibility = "flax-model-runtime-v1";

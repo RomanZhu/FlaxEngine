@@ -37,6 +37,8 @@ namespace
     {
         PreparedAsset Prepared;
         ArtifactTarget Target;
+        Guid RefreshId = Guid::Empty;
+        uint32 Pass = 0;
         Guid JobID = Guid::New();
         String ProcessorID;
         String ProjectRoot;
@@ -186,9 +188,9 @@ bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic
             return true;
     }
     if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
-        [](const Guid& id, bool force, AssetPipelineDiagnostic& localDiagnostic)
+        [](const Guid& id, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
         {
-            return GraphPipelineService::RequestBuild(id, force, localDiagnostic);
+            return GraphPipelineService::RequestBuild(id, force, localDiagnostic, nullptr, refreshId, pass);
         },
         [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
         {
@@ -242,9 +244,9 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
         if (AssetProcessorRegistry::Get().Register(descriptor, registration, diagnostic))
             return true;
         if (AssetImportService::RegisterBuiltIn(descriptor, diagnostic,
-            [](const Guid& assetID, bool force, AssetPipelineDiagnostic& localDiagnostic)
+            [](const Guid& assetID, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
             {
-                return GraphPipelineService::RequestBuild(assetID, force, localDiagnostic);
+                return GraphPipelineService::RequestBuild(assetID, force, localDiagnostic, nullptr, refreshId, pass);
             },
             [](const Guid& assetID, AssetPipelineDiagnostic& localDiagnostic)
             {
@@ -298,6 +300,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     auto execution = std::make_shared<GraphExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    execution->RefreshId = request.RefreshId;
+    execution->Pass = request.Pass;
     execution->ProcessorID = record.ProcessorID;
     execution->ProjectRoot = projectRoot;
     execution->ContentRoot = contentRoot;
@@ -394,6 +398,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     plan.BuildRequest.Key.ExactPlan = jobBuilder.Finalize();
     plan.BuildRequest.KeyComponents = jobBuilder.GetComponents();
     plan.BuildRequest.AssetID = prepared.AssetID;
+    plan.BuildRequest.RefreshId = request.RefreshId;
+    plan.BuildRequest.Pass = request.Pass;
     plan.BuildRequest.ProcessorClass = TEXT("graph-document");
     plan.BuildRequest.ProcessorID = record.ProcessorID;
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
@@ -428,6 +434,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
                 execution->Prepared.AssetID, TEXT("Graph build produced no publication context."));
         ArtifactPublicationRequest publication;
         publication.Target = execution->Target;
+        publication.RefreshId = execution->RefreshId;
+        publication.Pass = execution->Pass;
         publication.ProcessorID = execution->ProcessorID;
         publication.ProcessorImplementationVersion = execution->ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
@@ -448,7 +456,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
     return false;
 }
 
-bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic, AssetBuildRequestHandle* resultHandle)
+bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
+                                        AssetBuildRequestHandle* resultHandle, const Guid& refreshId, uint32 pass)
 {
     if (EnsureInitialized(diagnostic))
         return true;
@@ -462,6 +471,8 @@ bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
 
     ArtifactRequest request;
     request.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+    request.RefreshId = refreshId;
+    request.Pass = pass;
     request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "runtime";
     request.RequiredCompatibility = "flax-graph-document-v1";

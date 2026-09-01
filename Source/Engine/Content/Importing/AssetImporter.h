@@ -15,7 +15,7 @@ enum class AssetImporterFallback : byte
 };
 using AssetImporterSourcePredicate = Function<bool(const StringView&)>;
 using AssetImporterCallback = Function<bool(AssetImportContext&, AssetPipelineDiagnostic&)>;
-using AssetImporterBuildRequest = Function<bool(const Guid&, bool, AssetPipelineDiagnostic&)>;
+using AssetImporterBuildRequest = Function<bool(const Guid&, bool, const Guid&, uint32, AssetPipelineDiagnostic&)>;
 using AssetImporterBuildStatus = Function<AssetBuildJobStatus(const Guid&, AssetPipelineDiagnostic&)>;
 
 /// <summary>Public importer registration contract layered over artifact processor execution.</summary>

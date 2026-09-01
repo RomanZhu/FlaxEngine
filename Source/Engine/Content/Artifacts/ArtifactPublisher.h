@@ -33,6 +33,8 @@ using ArtifactPublicationNotification = Function<void(const ArtifactManifest&)>;
 struct FLAXENGINE_API ArtifactPublicationRequest
 {
     ArtifactTarget Target;
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     String ProcessorID;
     uint32 ProcessorImplementationVersion = 0;
     String BuildID;
@@ -45,6 +47,8 @@ struct FLAXENGINE_API ArtifactPublicationRequest
 
 struct FLAXENGINE_API ArtifactPublicationResult
 {
+    Guid RefreshId = Guid::Empty;
+    uint32 Pass = 0;
     bool WasSuperseded = false;
     bool NotificationSent = false;
     ArtifactManifest Manifest;

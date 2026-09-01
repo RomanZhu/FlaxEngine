@@ -37,6 +37,8 @@ namespace
     {
         PreparedAsset Prepared;
         ArtifactTarget Target;
+        Guid RefreshId = Guid::Empty;
+        uint32 Pass = 0;
         Guid JobID = Guid::New();
         Array<ArtifactBuildInput> Inputs;
         Array<ArtifactPublicationOutputPlan> Outputs;
@@ -91,9 +93,9 @@ namespace
         if (AssetImportService::EnsureInitialized(diagnostic))
             return true;
         if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
-            [](const Guid& id, bool force, AssetPipelineDiagnostic& localDiagnostic)
+            [](const Guid& id, bool force, const Guid& refreshId, uint32 pass, AssetPipelineDiagnostic& localDiagnostic)
             {
-                return TexturePipelineService::RequestBuild(id, force, localDiagnostic);
+                return TexturePipelineService::RequestBuild(id, force, localDiagnostic, refreshId, pass);
             },
             [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
             {
@@ -329,6 +331,8 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     auto execution = std::make_shared<TextureExecution>();
     execution->Prepared = prepared;
     execution->Target = request.Target;
+    execution->RefreshId = request.RefreshId;
+    execution->Pass = request.Pass;
     DeclaredArtifactOutput selectedOutput;
     bool hasSelectedOutput = false;
     for (const DeclaredArtifactOutput& output : prepared.Outputs)
@@ -382,6 +386,8 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     plan.BuildRequest.Key.ExactPlan = jobBuilder.Finalize();
     plan.BuildRequest.KeyComponents = jobBuilder.GetComponents();
     plan.BuildRequest.AssetID = prepared.AssetID;
+    plan.BuildRequest.RefreshId = request.RefreshId;
+    plan.BuildRequest.Pass = request.Pass;
     plan.BuildRequest.ProcessorClass = TEXT("texture");
     plan.BuildRequest.ProcessorID = record.ProcessorID;
     plan.BuildRequest.Target = String(request.Target.BuildKey(ArtifactTargetDimension::All).ToString());
@@ -416,6 +422,8 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
                 execution->Prepared.AssetID, TEXT("Texture build produced no publication context."));
         ArtifactPublicationRequest publication;
         publication.Target = execution->Target;
+        publication.RefreshId = execution->RefreshId;
+        publication.Pass = execution->Pass;
         publication.ProcessorID = TextureProcessorSettings::ProcessorID();
         publication.ProcessorImplementationVersion = TextureProcessor::ImplementationVersion;
         publication.BuildID = execution->JobID.ToString(Guid::FormatType::N);
@@ -436,7 +444,8 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
     return false;
 }
 
-bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
+                                          const Guid& refreshId, uint32 pass)
 {
     AssetBuildService* builds = GetBuildService(diagnostic);
     if (!builds)
@@ -448,6 +457,8 @@ bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, Asset
 
     ArtifactRequest request;
     request.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+    request.RefreshId = refreshId;
+    request.Pass = pass;
     request.Target = GetHostTarget();
     request.OutputKind = "runtime";
     request.RequiredCompatibility = "flax-texture-v4";

@@ -289,9 +289,10 @@ DEFINE_INTERNAL_CALL(bool) ScriptedImporterInternal_AddRegistration(MString* idO
         diagnostic = AssetPipelineDiagnostic();
         return false;
     };
-    descriptor.RequestBuild = [](const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic)
+    descriptor.RequestBuild = [](const Guid& assetID, bool force, const Guid& refreshId, uint32 pass,
+                                 AssetPipelineDiagnostic& diagnostic)
     {
-        return CallbackImporterPipelineService::RequestBuild(assetID, force, diagnostic);
+        return CallbackImporterPipelineService::RequestBuild(assetID, force, diagnostic, nullptr, refreshId, pass);
     };
     descriptor.GetBuildStatus = [](const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
     {

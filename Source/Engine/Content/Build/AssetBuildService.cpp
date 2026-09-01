@@ -209,6 +209,8 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
         state->Requesters.insert(requester);
         state->Result.Key = request.Key;
         state->Result.AssetID = request.AssetID;
+        state->Result.RefreshId = request.RefreshId;
+        state->Result.Pass = request.Pass;
         state->Result.JobID = state->JobID;
         state->Result.Status = AssetBuildJobStatus::Failed;
         state->Result.Diagnostic.Code = code;
@@ -221,6 +223,9 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
     if (!_impl->Initialized || _impl->Stopping)
         return fail(AssetPipelineDiagnosticCode::BuildCancelled, TEXT("Asset build service is not accepting requests."));
     _impl->Metrics.Requests++;
+    if (request.RefreshId.IsValid() != (request.Pass != 0))
+        return fail(AssetPipelineDiagnosticCode::InvalidSettingsCombination,
+            TEXT("Asset build refresh context must provide both a refresh ID and a non-zero pass, or neither."));
     if (!request.Key.IsValid() || !request.AssetID.IsValid() || request.ProcessorClass.IsEmpty() || !request.Build.IsBinded() ||
         request.MemoryBytes > _impl->Limits.MaximumMemoryBytes || request.ExternalToolSlots < 0 || request.ExternalToolSlots > _impl->Limits.MaximumExternalTools ||
         request.ProcessorConcurrencyLimit < 1)
@@ -259,6 +264,8 @@ AssetBuildRequestHandle AssetBuildService::Request(const AssetBuildJobRequest& r
     state->Requesters.insert(requester);
     state->Result.Key = request.Key;
     state->Result.AssetID = request.AssetID;
+    state->Result.RefreshId = request.RefreshId;
+    state->Result.Pass = request.Pass;
     state->Result.JobID = state->JobID;
     state->Result.Status = AssetBuildJobStatus::Queued;
     for (const AssetBuildJobKey& dependency : request.Dependencies)
@@ -304,7 +311,11 @@ void AssetBuildService::Impl::WriteLogLocked(const std::shared_ptr<AssetBuildSha
     line += StringAnsi(job->JobID.ToString(Guid::FormatType::N));
     line += "\",\"assetId\":\"";
     line += StringAnsi(job->Request.AssetID.ToString(Guid::FormatType::N));
-    line += "\",\"key\":\"";
+    line += "\",\"refreshId\":\"";
+    line += job->Request.RefreshId.IsValid() ? StringAnsi(job->Request.RefreshId.ToString(Guid::FormatType::N)) : StringAnsi();
+    line += "\",\"pass\":";
+    line += StringAnsi::Format("{0}", job->Request.Pass);
+    line += ",\"key\":\"";
     line += job->Request.Key.ExactPlan.ToString();
     line += "\",\"processorId\":\"";
     AppendJsonEscaped(line, job->Request.ProcessorID);
@@ -453,6 +464,8 @@ void AssetBuildService::GetJobs(Array<AssetBuildJobSummary>& jobs) const
         AssetBuildJobSummary summary;
         summary.JobID = state->JobID;
         summary.AssetID = state->Request.AssetID;
+        summary.RefreshId = state->Request.RefreshId;
+        summary.Pass = state->Request.Pass;
         summary.Key = state->Request.Key.ExactPlan;
         summary.ProcessorID = state->Request.ProcessorID;
         summary.Target = state->Request.Target;

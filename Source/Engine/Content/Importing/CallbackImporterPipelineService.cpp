@@ -222,7 +222,8 @@ bool CallbackImporterPipelineService::OwnsProcessor(const StringView& processorI
 }
 
 bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,
-                                                    AssetBuildRequestHandle* resultHandle)
+                                                    AssetBuildRequestHandle* resultHandle,
+                                                    const Guid& refreshId, uint32 pass)
 {
     AssetRecord record;
     if (!AssetDatabase::Get().TryGetRecord(assetID, record) || !record.IsMainAsset())
@@ -259,6 +260,8 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
 
     AssetImportPlanRequest planRequest;
     planRequest.Asset = AssetGuid(record.ID);
+    planRequest.RefreshId = refreshId;
+    planRequest.Pass = pass;
     planRequest.SourcePath = record.SourcePath.Get();
     planRequest.ExplicitImporterID = record.ProcessorID;
     planRequest.Reason = force ? TEXT("forced-callback-import") : TEXT("callback-import");
@@ -431,6 +434,8 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
         }
         ArtifactPublicationRequest publication;
         publication.Target = execution->Target;
+        publication.RefreshId = plan.Request.RefreshId;
+        publication.Pass = plan.Request.Pass;
         publication.ProcessorID = plan.Importer.ID;
         publication.ProcessorImplementationVersion = plan.Importer.ImporterVersion;
         publication.BuildID = execution->PublicationJobID.ToString(Guid::FormatType::N);

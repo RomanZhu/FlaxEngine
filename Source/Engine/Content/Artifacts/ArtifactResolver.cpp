@@ -202,6 +202,8 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
                 ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, record.SourcePath.Get(), TEXT("Artifact resolution plan is incomplete."));
             return true;
         }
+        plan.BuildRequest.RefreshId = request.RefreshId;
+        plan.BuildRequest.Pass = request.Pass;
         const bool compatibilityMatches = request.RequiredCompatibility.IsEmpty() || inspection.IsCompatible;
         const bool hasExact = inspection.HasOutput && compatibilityMatches && inspection.Manifest.InputFingerprint == plan.CurrentInputFingerprint;
         if (hasExact)
