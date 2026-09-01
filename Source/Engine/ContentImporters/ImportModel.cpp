@@ -526,7 +526,7 @@ CreateAssetResult ImportModel::Import(CreateAssetContext& context)
                         auto& srcSlot = model->MaterialSlots[i];
                         dstSlot.Name = srcSlot.Name;
                         dstSlot.ShadowsMode = srcSlot.ShadowsMode;
-                        dstSlot.AssetID = srcSlot.Material.GetRuntimeInstanceId();
+                        dstSlot.AssetID = srcSlot.Material.GetID();
                     }
                 }
             }

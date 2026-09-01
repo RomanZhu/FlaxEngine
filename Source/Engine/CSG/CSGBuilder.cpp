@@ -165,7 +165,7 @@ bool CSGBuilderImpl::updatePreviewModel(AssetReference<Model>& previewModel, con
         auto& destinationSlot = previewModel->MaterialSlots[slotIndex];
         destinationSlot.Name = sourceSlot.Name;
         destinationSlot.ShadowsMode = sourceSlot.ShadowsMode;
-        destinationSlot.Material = Content::LoadRuntimeObjectAsync<MaterialBase>(sourceSlot.AssetID);
+        destinationSlot.Material = Content::LoadAssetAsync<MaterialBase>(sourceSlot.AssetID);
     }
 
     for (int32 lodIndex = 0; lodIndex < modelData.LODs.Count(); lodIndex++)
@@ -270,7 +270,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 
             // Import model data to the asset
             {
-                Guid modelDataAssetId = scene->CSGData.Model.GetRuntimeInstanceId();
+                Guid modelDataAssetId = scene->CSGData.Model.GetID();
                 if (!modelDataAssetId.IsValid())
                     modelDataAssetId = Guid::New();
                 const String modelDataAssetPath = sceneDataFolderPath / TEXT("CSG_Mesh") + ASSET_FILES_EXTENSION_WITH_DOT;
@@ -286,7 +286,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
 
             // Generate asset with CSG mesh metadata (for collisions and brush queries)
             {
-                Guid rawDataAssetId = scene->CSGData.Data.GetRuntimeInstanceId();
+                Guid rawDataAssetId = scene->CSGData.Data.GetID();
                 if (!rawDataAssetId.IsValid())
                     rawDataAssetId = Guid::New();
                 const String rawDataAssetPath = sceneDataFolderPath / TEXT("CSG_Data") + ASSET_FILES_EXTENSION_WITH_DOT;
@@ -324,7 +324,7 @@ bool CSGBuilderImpl::buildInner(Scene* scene, BuildData& data)
                 arg.Type = CollisionDataType::TriangleMesh;
                 arg.OverrideModelData = &modelData;
                 arg.Model = data.outputModelAssetId;
-                Guid collisionDataAssetId = scene->CSGData.CollisionData.GetRuntimeInstanceId();
+                Guid collisionDataAssetId = scene->CSGData.CollisionData.GetID();
                 if (!collisionDataAssetId.IsValid())
                     collisionDataAssetId = Guid::New();
                 const String collisionDataAssetPath = sceneDataFolderPath / TEXT("CSG_Collision") + ASSET_FILES_EXTENSION_WITH_DOT;
@@ -359,9 +359,9 @@ void CSGBuilderImpl::build(Scene* scene)
     }
 
     // Assign results
-    auto outputData = Content::LoadRuntimeObjectAsync<RawDataAsset>(data.outputRawDataAssetId);
-    auto outputModel = Content::LoadRuntimeObjectAsync<Model>(data.outputModelAssetId);
-    auto outputCollisionData = Content::LoadRuntimeObjectAsync<CollisionData>(data.outputCollisionDataAssetId);
+    auto outputData = Content::LoadAssetAsync<RawDataAsset>(data.outputRawDataAssetId);
+    auto outputModel = Content::LoadAssetAsync<Model>(data.outputModelAssetId);
+    auto outputCollisionData = Content::LoadAssetAsync<CollisionData>(data.outputCollisionDataAssetId);
 
     scene->CSGData.Data = outputData;
     if (!outputModel)

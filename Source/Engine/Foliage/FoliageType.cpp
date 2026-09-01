@@ -157,7 +157,7 @@ void FoliageType::Serialize(SerializeStream& stream, const void* otherObj)
         stream.JKEY("Materials");
         stream.StartArray();
         for (auto& e : Entries)
-            stream.Guid(e.Material.GetRuntimeInstanceId());
+            stream.Guid(e.Material.GetID());
         stream.EndArray();
     }
 

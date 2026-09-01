@@ -52,7 +52,7 @@ void NavMesh::SaveNavMesh()
     }
 
     // Prepare
-    Guid assetId = DataAsset.GetRuntimeInstanceId();
+    Guid assetId = DataAsset.GetID();
     if (!assetId.IsValid())
         assetId = Guid::New();
     const String assetPath = scene->GetDataFolderPath() / TEXT("NavMesh") + Properties.Name + ASSET_FILES_EXTENSION_WITH_DOT;
