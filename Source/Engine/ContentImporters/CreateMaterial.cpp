@@ -164,8 +164,7 @@ CreateAssetResult CreateMaterial::Create(CreateAssetContext& context)
         layer->Root = &layer->Graph.Nodes[0];
         for (auto& box : layer->Root->Boxes)
             box.Parent = layer->Root;
-        Meta11 meta;
-        meta.Selected = false;
+        Meta11 meta = {};
 
         // Diffuse + Mask
         ShaderGraphNode<>* diffuseTextureNode;

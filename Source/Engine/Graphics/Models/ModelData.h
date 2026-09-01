@@ -269,9 +269,34 @@ struct FLAXENGINE_API TextureEntry
     };
 
     /// <summary>
+    /// The logical texture name from the model source.
+    /// </summary>
+    String Name;
+
+    /// <summary>
     /// The absolute path to the file.
     /// </summary>
     String FilePath;
+
+    /// <summary>
+    /// The embedded texture payload. Compressed images contain the original file bytes; raw images contain BGRA8 texels.
+    /// </summary>
+    Array<byte> EmbeddedData;
+
+    /// <summary>
+    /// The embedded compressed image file extension without a leading dot.
+    /// </summary>
+    String EmbeddedFormat;
+
+    /// <summary>
+    /// The embedded texture index in the source scene, or -1 for an external texture.
+    /// </summary>
+    int32 EmbeddedIndex = -1;
+
+    /// <summary>
+    /// The raw embedded image dimensions. Zero indicates a compressed image payload.
+    /// </summary>
+    Int2 EmbeddedSize = Int2::Zero;
 
     /// <summary>
     /// The texture contents hint based on the usage/context.

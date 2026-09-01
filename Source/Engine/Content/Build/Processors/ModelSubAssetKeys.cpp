@@ -8,6 +8,8 @@
 #include "Engine/Content/Assets/Material.h"
 #include "Engine/Content/Assets/Model.h"
 #include "Engine/Content/Assets/SkinnedModel.h"
+#include "Engine/Content/Assets/Texture.h"
+#include "Engine/Platform/FileSystem.h"
 #include <algorithm>
 
 namespace
@@ -104,6 +106,32 @@ namespace
         HashValue(hasher, material.TwoSided);
         HashValue(hasher, material.Wireframe);
         return hasher.Finalize();
+    }
+
+    ContentHash HashTexture(const TextureEntry& texture)
+    {
+        ContentHasher hasher;
+        static const char Domain[] = "flax-model-texture-semantic-v1";
+        hasher.Update(Domain, ARRAY_COUNT(Domain) - 1);
+        HashString(hasher, texture.Name);
+        HashString(hasher, texture.EmbeddedFormat);
+        HashValue(hasher, texture.Type);
+        HashValue(hasher, texture.sRGB);
+        HashValue(hasher, texture.EmbeddedSize);
+        if (texture.EmbeddedData.HasItems())
+            hasher.Update(texture.EmbeddedData.Get(), texture.EmbeddedData.Count());
+        else
+            HashString(hasher, StringUtils::GetFileName(texture.FilePath));
+        return hasher.Finalize();
+    }
+
+    String GetTextureName(const TextureEntry& texture, int32 index)
+    {
+        if (texture.Name.HasChars())
+            return texture.Name;
+        if (texture.FilePath.HasChars())
+            return StringUtils::GetFileNameWithoutExtension(texture.FilePath);
+        return String::Format(TEXT("Texture {0}"), index);
     }
 
     bool Failure(AssetPipelineDiagnostic& diagnostic, const StringView& message, const StringView& key = StringView::Empty)
@@ -207,6 +235,22 @@ bool ModelSubAssetKeys::Enumerate(const ModelData& data, Array<ModelSubAssetInfo
         const String baseKey = TEXT("material:") + Escape(material.Name);
         AddInfo(infos, ModelSubAssetKind::Material, baseKey, material.Name, Material::TypeName,
             HashMaterial(material), index, materialNames[baseKey] > 1);
+    }
+
+    Dictionary<String, int32> textureNames;
+    for (int32 index = 0; index < data.Textures.Count(); index++)
+    {
+        const String name = GetTextureName(data.Textures[index], index);
+        const String key = TEXT("texture:") + Escape(name);
+        textureNames[key] = textureNames.ContainsKey(key) ? textureNames[key] + 1 : 1;
+    }
+    for (int32 index = 0; index < data.Textures.Count(); index++)
+    {
+        const TextureEntry& texture = data.Textures[index];
+        const String name = GetTextureName(texture, index);
+        const String baseKey = TEXT("texture:") + Escape(name);
+        AddInfo(infos, ModelSubAssetKind::Texture, baseKey, name, Texture::TypeName,
+            HashTexture(texture), index, textureNames[baseKey] > 1);
     }
 
     Dictionary<String, int32> identicalKeys;

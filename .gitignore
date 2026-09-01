@@ -157,3 +157,4 @@ obj/
 *.code-workspace
 omnisharp.json
 flax-new-asset-pipeline-plan
+.agentboard
