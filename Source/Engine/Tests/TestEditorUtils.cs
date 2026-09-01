@@ -437,6 +437,28 @@ namespace FlaxEngine.Tests
                     "Project move was not published to the asset database.");
                 Assert.AreEqual(projectCopyRecord.SourceAssetID, projectMoveRecord.SourceAssetID);
 
+                lifecycleStage = "Project case-only move";
+                var projectCasePath = Path.Combine(Path.GetDirectoryName(projectMovePath),
+                    Path.GetFileName(projectMovePath).ToLowerInvariant());
+                AssetWorkspaceModule.CanonicalMoveObserver = (source, destination) =>
+                {
+                    Assert.AreEqual(Path.GetFullPath(projectMovePath), Path.GetFullPath(source));
+                    Assert.AreEqual(Path.GetFullPath(projectCasePath), Path.GetFullPath(destination));
+                };
+                var caseMoveResult = workspace.TryMove(new[] { (Item: (ContentItem)projectCopyItem, Destination: projectCasePath) });
+                Assert.IsTrue(caseMoveResult.Succeeded, caseMoveResult.Message);
+                projectMovePath = projectCasePath;
+                Assert.AreEqual(Path.GetFullPath(projectMovePath), Path.GetFullPath(projectCopyItem.Path));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { projectMovePath }),
+                    "Project case-only move refresh failed before database verification.");
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var caseMoveRecord));
+                Assert.AreEqual(projectMoveRecord.SourceAssetID, caseMoveRecord.SourceAssetID);
+                Assert.AreEqual(Path.GetFullPath(projectMovePath), Path.GetFullPath(caseMoveRecord.SourcePath));
+                projectMoveRecord = caseMoveRecord;
+                var contentWindow = FlaxEditor.Editor.Instance.Windows.ContentWin;
+                Assert.AreEqual(1, contentWindow.Selection.Count);
+                Assert.AreEqual(Path.GetFullPath(projectMovePath), Path.GetFullPath(contentWindow.Selection[0].Path));
+
                 lifecycleStage = "Project delete";
                 var projectMoveItem = workspace.FindAsset(projectMoveRecord.SourceAssetID);
                 Assert.NotNull(projectMoveItem, "Project move item was not presented in the workspace.");
@@ -525,6 +547,7 @@ namespace FlaxEngine.Tests
             var sourceAssetPath = Path.Combine(sourceFolderPath, "Canonical.txt");
             var destinationAssetPath = Path.Combine(destinationFolderPath, "Canonical.txt");
             AssetCopyEntryRequest[] observedEntries = null;
+            string[] presentedPaths = null;
             try
             {
                 Directory.CreateDirectory(nestedFolderPath);
@@ -539,6 +562,7 @@ namespace FlaxEngine.Tests
                 File.WriteAllText(nestedPath, "nested");
                 new FileItem(nestedPath) { ParentFolder = nestedFolder };
                 AssetWorkspaceModule.NativeCopyBatchObserver = entries => observedEntries = entries.ToArray();
+                AssetWorkspaceModule.NativePresentationObserver = (_, paths) => presentedPaths = paths.ToArray();
 
                 var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
                 var result = workspace.Copy(sourceFolder, destinationFolderPath);
@@ -557,6 +581,8 @@ namespace FlaxEngine.Tests
                 Assert.AreEqual(Path.GetFullPath(Path.Combine(destinationFolderPath, "Nested")), Path.GetFullPath(observedEntries[2].DestinationPath));
                 Assert.AreEqual(Path.GetFullPath(Path.Combine(destinationFolderPath, "Nested", "Nested.txt")), Path.GetFullPath(observedEntries[3].DestinationPath));
                 Assert.AreEqual(1, result.CompletedPaths.Length);
+                CollectionAssert.AreEqual(new[] { Path.GetFullPath(destinationFolderPath) },
+                    presentedPaths.Select(Path.GetFullPath).ToArray());
                 Assert.IsTrue(File.Exists(destinationAssetPath));
                 Assert.IsTrue(File.Exists(destinationAssetPath + ".meta"));
                 Assert.IsTrue(File.Exists(Path.Combine(destinationFolderPath, "Plain.txt")));
@@ -578,6 +604,9 @@ namespace FlaxEngine.Tests
                 Assert.NotNull(copiedItem);
                 Assert.AreEqual(Path.GetFullPath(destinationAssetPath), Path.GetFullPath(copiedItem.Path));
                 var contentWindow = FlaxEditor.Editor.Instance.Windows.ContentWin;
+                Assert.AreEqual(1, contentWindow.Selection.Count);
+                Assert.AreEqual(Path.GetFullPath(destinationFolderPath),
+                    Path.GetFullPath(contentWindow.Selection[0].Path));
                 contentWindow.Select(copiedItem, true);
                 Assert.AreEqual(1, contentWindow.Selection.Count);
                 Assert.AreEqual(Path.GetFullPath(destinationAssetPath),
@@ -597,6 +626,7 @@ namespace FlaxEngine.Tests
             finally
             {
                 AssetWorkspaceModule.NativeCopyBatchObserver = null;
+                AssetWorkspaceModule.NativePresentationObserver = null;
                 CleanupCanonicalCopyAsset(destinationAssetPath);
                 CleanupCanonicalCopyAsset(sourceAssetPath);
                 if (Directory.Exists(root))
@@ -616,6 +646,17 @@ namespace FlaxEngine.Tests
                 throw new InvalidOperationException(ex.ToString(), ex);
             }
             return 0;
+        }
+
+        [Test]
+        public void TestNativePresentationExcludesRolledBackPartialPaths()
+        {
+            var first = Path.GetFullPath(Path.Combine(Globals.ProjectContentFolder, "First.txt"));
+            var second = Path.GetFullPath(Path.Combine(Globals.ProjectContentFolder, "Second.txt"));
+            var result = ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, first, second,
+                "Injected partial failure.", completedPaths: new[] { first, second }, rolledBackPaths: new[] { second });
+
+            CollectionAssert.AreEqual(new[] { first }, AssetWorkspaceModule.GetRetainedMutationPaths(result));
         }
 
         [Test]

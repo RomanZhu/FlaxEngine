@@ -1125,7 +1125,7 @@ namespace FlaxEditor.Modules
 #endif
                 result = AssetOperationService.MoveAsset(move.Source, move.Destination)
                     ? ContentMutationResult.Fail(ContentMutationFailure.MoveFailed, move.Source, move.Destination, "The native asset move transaction failed.")
-                    : ContentMutationResult.Success(move.Source, move.Destination);
+                    : ContentMutationResult.Success(move.Source, move.Destination, completedPaths: new[] { move.Destination });
             }
             else
             {
@@ -1140,7 +1140,9 @@ namespace FlaxEditor.Modules
             if (!result.Succeeded)
             {
                 ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={result.TransactionId:N}; native={useNativeTransaction}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
-                return result;
+                return useNativeTransaction
+                    ? PresentNativeMutationResult(result, moves.SelectMany(move => new[] { move.Source, move.Destination }))
+                    : result;
             }
 
             // Reconcile the managed database only after every filesystem/native leg commits.
@@ -1180,7 +1182,9 @@ namespace FlaxEditor.Modules
                 }
             }
             ContentMutationDiagnostics.Log("mutation.move.committed", $"transaction={result.TransactionId:N}; native={useNativeTransaction}; operation={operation}; items={moves.Count}; entries={plan?.Entries.Count ?? 2}");
-            return result;
+            return useNativeTransaction
+                ? PresentNativeMutationResult(result, moves.SelectMany(move => new[] { move.Source, move.Destination }))
+                : result;
         }
 
         internal ContentMutationResult PreflightMove(IReadOnlyList<(ContentItem Item, string Destination)> requestedMoves)
@@ -1366,6 +1370,63 @@ namespace FlaxEditor.Modules
             MessageBox.Show(message);
         }
 
+        internal static string[] GetRetainedMutationPaths(ContentMutationResult result)
+        {
+            var rolledBack = new HashSet<string>(result.RolledBackPaths ?? Array.Empty<string>(), ContentMutationPathUtils.Comparer);
+            return (result.CompletedPaths ?? Array.Empty<string>())
+                .Where(path => !string.IsNullOrEmpty(path) && !rolledBack.Contains(path))
+                .Distinct(ContentMutationPathUtils.Comparer)
+                .ToArray();
+        }
+
+        private ContentMutationResult PresentNativeMutationResult(ContentMutationResult result, IEnumerable<string> affectedPaths)
+        {
+            var retainedPaths = GetRetainedMutationPaths(result);
+            var refreshPaths = (affectedPaths ?? Enumerable.Empty<string>())
+                .Concat(retainedPaths)
+                .Concat(result.RolledBackPaths ?? Array.Empty<string>())
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Select(ContentMutationPathUtils.Normalize)
+                .GroupBy(path => path, ContentMutationPathUtils.Comparer)
+                .Select(group => group.Last())
+                .ToArray();
+            if (refreshPaths.Length != 0 && AssetPipelineService.RefreshSources(refreshPaths))
+            {
+                return ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure,
+                    result.SourcePath, result.DestinationPath,
+                    "The native mutation committed, but its exact asset database refresh failed.",
+                    completedPaths: result.CompletedPaths, rolledBackPaths: result.RolledBackPaths);
+            }
+
+            ReplayAssetDatabaseChanges();
+            var refreshedFolders = new HashSet<string>(ContentMutationPathUtils.Comparer);
+            for (int i = 0; i < refreshPaths.Length; i++)
+            {
+                MarkSourceFolderDirty(refreshPaths[i]);
+                var parentPath = Path.GetDirectoryName(refreshPaths[i]);
+                if (string.IsNullOrEmpty(parentPath) || !refreshedFolders.Add(parentPath))
+                    continue;
+                if (Find(parentPath) is ContentFolder parent)
+                    RefreshFolder(parent, false);
+            }
+
+            var contentWindow = Editor?.Windows?.ContentWin;
+            if (contentWindow != null && retainedPaths.Length != 0)
+            {
+                var selected = retainedPaths.Select(Find).Where(item => item != null).ToArray();
+                if (selected.Length != 0)
+                {
+                    contentWindow.ClearSelection(false);
+                    for (int i = 0; i < selected.Length; i++)
+                        contentWindow.Select(selected[i], true, i != 0);
+                }
+            }
+#if FLAX_TESTS
+            NativePresentationObserver?.Invoke(result, retainedPaths);
+#endif
+            return result;
+        }
+
         /// <summary>
         /// Copies the specified item to the target location. Handles copying whole directories and single assets.
         /// </summary>
@@ -1403,10 +1464,13 @@ namespace FlaxEditor.Modules
                     if (CopyCanonicalAsset(item.Path, targetPath))
                     {
                         ContentMutationDiagnostics.Log("mutation.copy.failed", $"source='{item.Path}'; destination='{targetPath}'; native=true");
-                        return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, item.Path, targetPath, "The native asset copy transaction failed.");
+                        var failed = ContentMutationResult.Fail(ContentMutationFailure.CopyFailed, item.Path, targetPath,
+                            "The native asset copy transaction failed.");
+                        return PresentNativeMutationResult(failed, new[] { item.Path, targetPath });
                     }
                     ContentMutationDiagnostics.Log("mutation.copy.committed", $"source='{item.Path}'; destination='{targetPath}'; native=true");
-                    return ContentMutationResult.Success(item.Path, targetPath);
+                    var result = ContentMutationResult.Success(item.Path, targetPath, completedPaths: new[] { targetPath });
+                    return PresentNativeMutationResult(result, new[] { item.Path, targetPath });
                 }
             }
 
@@ -1427,13 +1491,26 @@ namespace FlaxEditor.Modules
                     copiedGuids == null || copiedGuids.Length != nativeEntries.Length)
                 {
                     ContentMutationDiagnostics.Log("mutation.copy.failed", $"items={requests.Count}; entries={nativeEntries.Length}; nativeBatch=true");
-                    return ContentMutationResult.Fail(ContentMutationFailure.CopyFailed,
-                        nativeEntries[0].SourcePath, nativeEntries[0].DestinationPath,
-                        "The native asset copy batch failed.");
+                    var diagnostic = AssetDatabaseQueryService.GetDiagnostics().LastOrDefault();
+                    var failedEntry = nativeEntries.FirstOrDefault(entry =>
+                        !string.IsNullOrEmpty(diagnostic.SourcePath) &&
+                        ContentMutationPathUtils.Comparer.Equals(ContentMutationPathUtils.Normalize(entry.SourcePath),
+                            ContentMutationPathUtils.Normalize(diagnostic.SourcePath)));
+                    var failed = ContentMutationResult.Fail(
+                        diagnostic.Code == AssetPipelineDiagnosticCode.PathCollision
+                            ? ContentMutationFailure.DestinationCollision
+                            : ContentMutationFailure.CopyFailed,
+                        failedEntry.SourcePath ?? diagnostic.SourcePath ?? nativeEntries[0].SourcePath,
+                        failedEntry.DestinationPath ?? nativeEntries[0].DestinationPath,
+                        diagnostic.Message ?? "The native asset copy batch failed.");
+                    return PresentNativeMutationResult(failed, nativeEntries.SelectMany(entry =>
+                        new[] { entry.SourcePath, entry.DestinationPath }));
                 }
                 ContentMutationDiagnostics.Log("mutation.copy.committed", $"items={requests.Count}; entries={nativeEntries.Length}; nativeBatch=true");
-                return ContentMutationResult.Success(nativeEntries[0].SourcePath,
+                var result = ContentMutationResult.Success(nativeEntries[0].SourcePath,
                     nativeEntries[0].DestinationPath, completedPaths: nativeCompletedPaths);
+                return PresentNativeMutationResult(result, nativeEntries.SelectMany(entry =>
+                    new[] { entry.SourcePath, entry.DestinationPath }));
             }
 
             var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
@@ -1882,6 +1959,7 @@ namespace FlaxEditor.Modules
         internal static Action<string, string> CanonicalMoveObserver;
         internal static Action<string> CanonicalDeleteObserver;
         internal static Action<AssetCopyEntryRequest[]> NativeCopyBatchObserver;
+        internal static Action<ContentMutationResult, string[]> NativePresentationObserver;
 #endif
 
         private static bool CopyCanonicalAsset(string sourcePath, string targetPath)
