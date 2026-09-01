@@ -107,6 +107,7 @@ namespace FlaxEditor.Content.Import
     [AttributeUsage(AttributeTargets.Class, Inherited = false)]
     public sealed class ScriptedImporterAttribute : Attribute
     {
+        public string Id { get; }
         public int Version { get; }
         public string[] Extensions { get; }
         public int Priority { get; }
@@ -118,8 +119,9 @@ namespace FlaxEditor.Content.Import
         public bool RequiresMainThread { get; set; } = true;
         public bool PathSensitive { get; set; } = true;
 
-        public ScriptedImporterAttribute(int version, string[] extensions, int priority = 0)
+        public ScriptedImporterAttribute(string id, int version, string[] extensions, int priority = 0)
         {
+            Id = id;
             Version = version;
             Extensions = extensions ?? Array.Empty<string>();
             Priority = priority;

@@ -86,12 +86,17 @@ namespace FlaxEditor.Content.Import
                         {
                             Type = type,
                             Attribute = attribute,
-                            ID = "managed." + type.FullName.Replace('+', '.'),
+                            ID = attribute.Id,
                         });
                     }
                 }
                 var postprocessorHash = HashPostprocessors(postprocessors, assemblyHashes);
                 candidates.Sort((a, b) => string.CompareOrdinal(a.ID, b.ID));
+                for (var i = 1; i < candidates.Count; i++)
+                {
+                    if (string.Equals(candidates[i - 1].ID, candidates[i].ID, StringComparison.Ordinal))
+                        throw new InvalidOperationException($"Scripted importer ID '{candidates[i].ID}' is declared by both '{candidates[i - 1].Type.FullName}' and '{candidates[i].Type.FullName}'.");
+                }
                 foreach (var entry in candidates)
                     entry.ImplementationHash = HashImporter(entry, postprocessorHash, assemblyHashes);
 
@@ -159,6 +164,8 @@ namespace FlaxEditor.Content.Import
         {
             if (!type.IsClass || type.IsGenericTypeDefinition || type.GetConstructor(Type.EmptyTypes) == null)
                 throw new InvalidOperationException($"Scripted importer '{type.FullName}' must be a non-generic class with a parameterless constructor.");
+            if (!IsStableToken(attribute.Id))
+                throw new InvalidOperationException($"Scripted importer '{type.FullName}' has an invalid stable ID '{attribute.Id}'.");
             if (attribute.Version < 1 || attribute.SettingsVersion < 1 || attribute.Extensions.Length == 0)
                 throw new InvalidOperationException($"Scripted importer '{type.FullName}' has an invalid version or extension claim.");
             if (attribute.RequiresMainThread && attribute.SupportsParallelImport)
@@ -170,6 +177,23 @@ namespace FlaxEditor.Content.Import
                 if (string.IsNullOrEmpty(extension) || extension.Any(x => !char.IsLetterOrDigit(x) && x != '-' && x != '_') || !extensions.Add(extension))
                     throw new InvalidOperationException($"Scripted importer '{type.FullName}' has an invalid or duplicated extension claim.");
             }
+        }
+
+        private static bool IsStableToken(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value[0] == '.' || value[value.Length - 1] == '.')
+                return false;
+            var previousDot = false;
+            foreach (var character in value)
+            {
+                if (character == '.' && previousDot)
+                    return false;
+                if (!(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') &&
+                    !(character >= '0' && character <= '9') && character != '.' && character != '-' && character != '_')
+                    return false;
+                previousDot = character == '.';
+            }
+            return true;
         }
 
         private static byte[] GetAssemblyHash(Assembly assembly, Dictionary<Assembly, byte[]> cache)
