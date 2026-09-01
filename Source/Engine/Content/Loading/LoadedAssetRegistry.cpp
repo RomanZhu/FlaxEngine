@@ -180,13 +180,18 @@ bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& repl
         if (!replacement.Object.IsValid() || !replacement.Instance || replacement.TypeName.IsEmpty() ||
             replacement.Content.IsZero() || replacement.Revision == 0 ||
             !objects.Add(replacement.Object) || !entry ||
-            ((*entry)->Record.State != LoadedAssetState::Loaded && (*entry)->Record.State != LoadedAssetState::Failed))
+            ((*entry)->Record.State != LoadedAssetState::Loaded &&
+             (*entry)->Record.State != LoadedAssetState::Failed &&
+             (*entry)->Record.State != LoadedAssetState::Deleted))
         {
             _locker.Unlock();
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, replacement.Object,
-                TEXT("Asset replacement requires one unique, currently loaded object."));
+                TEXT("Asset replacement requires one unique loaded or unavailable object."));
         }
-        if (replacement.Revision <= (*entry)->Record.Revision)
+        const uint64 previousRevision = (*entry)->Record.State == LoadedAssetState::Loaded
+            ? (*entry)->Record.Revision
+            : (*entry)->Record.StaleRevision;
+        if (replacement.Revision <= previousRevision)
         {
             _locker.Unlock();
             return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, replacement.Object,
@@ -210,11 +215,12 @@ bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& repl
         Entry* entry = *_entries.TryGet(replacement.Object);
         LoadedAssetSwap swap;
         swap.Object = replacement.Object;
-        const bool wasFailed = entry->Record.State == LoadedAssetState::Failed;
-        swap.PreviousInstance = wasFailed ? entry->Record.StaleInstance : entry->Record.Instance;
-        swap.PreviousTypeName = wasFailed ? entry->Record.StaleTypeName : entry->Record.TypeName;
-        swap.PreviousContent = wasFailed ? entry->Record.StaleContent : entry->Record.Content;
-        swap.PreviousRevision = wasFailed ? entry->Record.StaleRevision : entry->Record.Revision;
+        const bool wasUnavailable = entry->Record.State == LoadedAssetState::Failed ||
+            entry->Record.State == LoadedAssetState::Deleted;
+        swap.PreviousInstance = wasUnavailable ? entry->Record.StaleInstance : entry->Record.Instance;
+        swap.PreviousTypeName = wasUnavailable ? entry->Record.StaleTypeName : entry->Record.TypeName;
+        swap.PreviousContent = wasUnavailable ? entry->Record.StaleContent : entry->Record.Content;
+        swap.PreviousRevision = wasUnavailable ? entry->Record.StaleRevision : entry->Record.Revision;
         swap.Instance = replacement.Instance;
         swap.TypeName = replacement.TypeName;
         swap.Content = replacement.Content;
@@ -283,11 +289,12 @@ bool LoadedAssetRegistry::TransitionBatch(const Array<LoadedAssetTransition>& tr
         if (!transition.Object.IsValid() ||
             (transition.State != LoadedAssetState::Failed && transition.State != LoadedAssetState::Deleted) ||
             transition.Diagnostic.Code == AssetPipelineDiagnosticCode::None || !objects.Add(transition.Object) ||
-            !entry || (*entry)->Record.State != LoadedAssetState::Loaded)
+            !entry || ((*entry)->Record.State != LoadedAssetState::Loaded &&
+                       (*entry)->Record.State != LoadedAssetState::Unresolved))
         {
             _locker.Unlock();
             return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, transition.Object,
-                TEXT("Asset state transition requires one unique, currently loaded object and a failure diagnostic."));
+                TEXT("Asset state transition requires one unique loaded or unresolved object and a failure diagnostic."));
         }
     }
 

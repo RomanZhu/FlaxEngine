@@ -136,13 +136,13 @@ public:
         AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Atomically replaces retained objects and removes inventory entries.</summary>
-    /// <returns>True on invalid, duplicate, missing, or stale inputs.</returns>
+    /// <returns>True on invalid, duplicate, missing, or stale inputs. Failed and deleted objects may recover.</returns>
     bool PublishBatch(const Array<LoadedAssetReplacement>& replacements, const Array<Guid>& removals,
         bool retainStale,
         Array<LoadedAssetSwap>& swaps, Array<LoadedAssetInvalidation>& invalidations,
         AssetPipelineDiagnostic& diagnostic);
 
-    /// <summary>Atomically marks loaded objects failed or deleted while retaining only explicit stale continuity.</summary>
+    /// <summary>Atomically marks loaded or unresolved objects failed or deleted while retaining only explicit stale continuity.</summary>
     bool TransitionBatch(const Array<LoadedAssetTransition>& transitions, bool retainStale,
         Array<LoadedAssetInvalidation>& invalidations, AssetPipelineDiagnostic& diagnostic);
 

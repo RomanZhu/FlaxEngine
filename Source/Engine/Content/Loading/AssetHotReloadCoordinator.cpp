@@ -139,7 +139,14 @@ bool AssetHotReloadCoordinator::TransitionUnavailable(const Array<Guid>& objects
         if (affected.Contains(loaded[i].Object))
             canonical.Add(i);
     }
-    if (canonical.IsEmpty())
+    Array<LoadedAssetRecord> unresolvedDirect;
+    for (const Guid& object : objects)
+    {
+        LoadedAssetRecord record;
+        if (_registry.TryGet(object, record) && record.State == LoadedAssetState::Unresolved)
+            unresolvedDirect.Add(MoveTemp(record));
+    }
+    if (canonical.IsEmpty() && unresolvedDirect.IsEmpty())
     {
         diagnostic = AssetPipelineDiagnostic();
         return false;
@@ -181,7 +188,33 @@ bool AssetHotReloadCoordinator::TransitionUnavailable(const Array<Guid>& objects
         visit(index);
 
     Array<LoadedAssetTransition> transitions;
-    transitions.EnsureCapacity(order.Count());
+    transitions.EnsureCapacity(order.Count() + unresolvedDirect.Count());
+    if (unresolvedDirect.Count() > 1)
+    {
+        std::sort(unresolvedDirect.Get(), unresolvedDirect.Get() + unresolvedDirect.Count(), [](const LoadedAssetRecord& a, const LoadedAssetRecord& b)
+        {
+            return Less(a.Object, b.Object);
+        });
+    }
+    for (const LoadedAssetRecord& record : unresolvedDirect)
+    {
+        LoadedAssetTransition transition;
+        transition.Object = record.Object;
+        transition.State = directState;
+        if (directState == LoadedAssetState::Deleted)
+        {
+            transition.Diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+            transition.Diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
+            transition.Diagnostic.AssetGuid = record.Object;
+            transition.Diagnostic.Message = TEXT("The source asset was deleted.");
+        }
+        else
+        {
+            transition.Diagnostic = cause;
+            transition.Diagnostic.AssetGuid = record.Object;
+        }
+        transitions.Add(MoveTemp(transition));
+    }
     for (int32 index : order)
     {
         const LoadedAssetRecord& record = loaded[index];

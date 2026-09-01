@@ -110,12 +110,14 @@ namespace
         std::atomic<int32> Creates{0};
         std::atomic<int32> Destroys{0};
         String LastStorage;
+        AssetObjectId LastStorageObject;
 
         bool CreateObject(const AssetObjectLoadLocation& location, void*& instance,
             AssetPipelineDiagnostic& diagnostic) override
         {
             const int32 number = Creates.fetch_add(1) + 1;
             LastStorage = location.StorageName;
+            LastStorageObject = location.StorageObject;
             instance = reinterpret_cast<void*>(static_cast<uintptr_t>(number));
             diagnostic = AssetPipelineDiagnostic();
             return false;
@@ -284,7 +286,65 @@ TEST_CASE("Cooked object loader resolves persistent GUID entries through runtime
     CHECK(result.Revision == 19);
     CHECK(result.State == LoadedAssetState::Loaded);
     CHECK(factory.LastStorage == TEXT("base/objects.pak"));
+    CHECK(factory.LastStorageObject == AssetObjectId::Main(AssetGuid(object)));
     CHECK(editorResolver.Calls.load() == 0);
+}
+
+TEST_CASE("Cooked player loads exact main and subasset GUIDs after registry reconstruction")
+{
+    const Guid mainObject(115, 0, 0, 1);
+    const Guid subObject(115, 0, 0, 2);
+    RuntimeAssetCatalogEntry mainEntry;
+    mainEntry.Object = mainObject;
+    mainEntry.TypeName = "FlaxEngine.Model";
+    mainEntry.PackageName = "base/model-objects.pak";
+    mainEntry.Offset = 64;
+    mainEntry.Size = 32;
+    mainEntry.Content = LoadingTestHash("player-main");
+    RuntimeAssetCatalogEntry subEntry = mainEntry;
+    subEntry.Object = subObject;
+    subEntry.TypeName = "FlaxEngine.Material";
+    subEntry.Offset = 128;
+    subEntry.Content = LoadingTestHash("player-subasset");
+    Array<RuntimeAssetCatalogEntry> entries;
+    entries.Add(mainEntry);
+    entries.Add(subEntry);
+    RuntimeAssetCatalog catalog;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(catalog.Set(StringAnsiView("runtime-restart"), LoadingTestHash("player-target"), entries, diagnostic));
+    RuntimeCatalogAssetObjectResolver resolver(catalog, 23);
+    TestObjectFactory factory;
+
+    LoadedAssetRegistry firstRegistry;
+    AssetObjectLoader firstLoader(firstRegistry, resolver, factory);
+    AssetObjectLoadResult mainResult;
+    AssetObjectLoadResult subResult;
+    REQUIRE_FALSE(firstLoader.Load(mainObject, mainResult, diagnostic));
+    CHECK(factory.LastStorageObject == AssetObjectId::Main(AssetGuid(mainObject)));
+    REQUIRE_FALSE(firstLoader.Load(subObject, subResult, diagnostic));
+    CHECK(factory.LastStorageObject == AssetObjectId::Main(AssetGuid(subObject)));
+    CHECK(mainResult.Object == mainObject);
+    CHECK(subResult.Object == subObject);
+    CHECK(mainResult.Instance != subResult.Instance);
+    CHECK(mainResult.Revision == 23);
+    CHECK(subResult.Revision == 23);
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
+
+    LoadedAssetRegistry restartedRegistry;
+    AssetObjectLoader restartedLoader(restartedRegistry, resolver, factory);
+    AssetObjectLoadResult restartedSub;
+    REQUIRE_FALSE(restartedLoader.Load(subObject, restartedSub, diagnostic));
+    CHECK(restartedSub.Object == subObject);
+    CHECK(restartedSub.State == LoadedAssetState::Loaded);
+    CHECK(restartedSub.Revision == 23);
+
+    const Guid missing(115, 0, 0, 3);
+    AssetObjectLoadResult unresolved;
+    CHECK(restartedLoader.Load(missing, unresolved, diagnostic));
+    CHECK(unresolved.Object == missing);
+    CHECK(unresolved.State == LoadedAssetState::Unresolved);
+    CHECK(unresolved.Instance == nullptr);
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactMissing);
 }
 
 TEST_CASE("Object loader rematerializes an unloaded registry instance")
@@ -337,6 +397,51 @@ TEST_CASE("Object loader keys exact subassets and rematerialization by persisten
     CHECK(reloaded.Instance != first.Instance);
     CHECK(registry.Count() == 2);
     CHECK(factory.Creates.load() == 3);
+}
+
+TEST_CASE("Persistent GUID loads survive registry reconstruction without changing storage identity")
+{
+    const Guid source(114, 0, 0, 0);
+    const Guid mainObject(114, 0, 0, 1);
+    const Guid subObject(114, 0, 0, 2);
+    const AssetObjectId mainStorage(AssetGuid(source), 1);
+    const AssetObjectId subStorage(AssetGuid(source), 42);
+    TestObjectResolver resolver;
+    resolver.Set(TestLocation(mainObject, 7, mainStorage));
+    resolver.Set(TestLocation(subObject, 7, subStorage));
+    TestObjectFactory factory;
+    AssetPipelineDiagnostic diagnostic;
+
+    {
+        LoadedAssetRegistry firstRegistry;
+        AssetObjectLoader firstLoader(firstRegistry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+        AssetObjectLoadResult mainResult;
+        AssetObjectLoadResult subResult;
+        REQUIRE_FALSE(firstLoader.Load(mainObject, mainResult, diagnostic));
+        CHECK(factory.LastStorageObject == mainStorage);
+        REQUIRE_FALSE(firstLoader.Load(subObject, subResult, diagnostic));
+        CHECK(factory.LastStorageObject == subStorage);
+        CHECK(mainResult.Object == mainObject);
+        CHECK(subResult.Object == subObject);
+        CHECK(mainResult.Instance != subResult.Instance);
+        CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
+    }
+
+    LoadedAssetRegistry restartedRegistry;
+    AssetObjectLoader restartedLoader(restartedRegistry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetObjectLoadResult restartedMain;
+    AssetObjectLoadResult restartedSub;
+    REQUIRE_FALSE(restartedLoader.Load(mainObject, restartedMain, diagnostic));
+    CHECK(factory.LastStorageObject == mainStorage);
+    REQUIRE_FALSE(restartedLoader.Load(subObject, restartedSub, diagnostic));
+    CHECK(factory.LastStorageObject == subStorage);
+    CHECK(restartedMain.Object == mainObject);
+    CHECK(restartedSub.Object == subObject);
+    CHECK(restartedMain.Revision == 7);
+    CHECK(restartedSub.Revision == 7);
+    CHECK(restartedMain.Instance != restartedSub.Instance);
+    CHECK(restartedRegistry.Count() == 2);
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
 }
 
 TEST_CASE("Hot reload publishes atomically and notifies dependencies first")
@@ -674,4 +779,61 @@ TEST_CASE("Source deletion preserves unresolved GUIDs and fails only exact loade
     REQUIRE(registry.TryGet(unrelated, record));
     CHECK(record.State == LoadedAssetState::Loaded);
     CHECK(factory.Destroys.load() == 0);
+}
+
+TEST_CASE("Unresolved GUID observes deletion and recovers when the same GUID is republished")
+{
+    const Guid object(116, 0, 0, 1);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetPipelineDiagnostic diagnostic;
+    AssetObjectLoadResult result;
+    CHECK(loader.Load(object, result, diagnostic));
+    CHECK(result.Object == object);
+    CHECK(result.State == LoadedAssetState::Unresolved);
+    CHECK(result.Instance == nullptr);
+
+    TestMainThreadDispatcher dispatcher;
+    TestReloadListener listener;
+    listener.Registry = &registry;
+    AssetHotReloadCoordinator coordinator(registry, loader, dispatcher, listener);
+    Array<Guid> deletedObjects;
+    deletedObjects.Add(object);
+    REQUIRE_FALSE(coordinator.HandleSourceDeletion(deletedObjects, diagnostic));
+    REQUIRE(listener.InvalidatedObjects.Count() == 1);
+    CHECK(listener.InvalidatedObjects[0] == object);
+    CHECK(listener.InvalidatedStates[0] == LoadedAssetState::Deleted);
+    LoadedAssetRecord record;
+    REQUIRE(registry.TryGet(object, record));
+    CHECK(record.Object == object);
+    CHECK(record.State == LoadedAssetState::Deleted);
+    CHECK(record.Instance == nullptr);
+    CHECK(record.StaleInstance == nullptr);
+    CHECK(record.Diagnostic.Code == AssetPipelineDiagnosticCode::SourceMissing);
+
+    const int32 resolutionCalls = resolver.Calls.load();
+    CHECK(loader.Load(object, result, diagnostic));
+    CHECK(result.Object == object);
+    CHECK(result.State == LoadedAssetState::Deleted);
+    CHECK(result.Instance == nullptr);
+    CHECK(resolver.Calls.load() == resolutionCalls);
+
+    resolver.Set(TestLocation(object, 2));
+    Array<AssetObjectRevision> recovery;
+    recovery.Add({object, 2});
+    REQUIRE_FALSE(coordinator.Reload(recovery, diagnostic));
+    REQUIRE(registry.TryGet(object, record));
+    CHECK(record.Object == object);
+    CHECK(record.State == LoadedAssetState::Loaded);
+    CHECK(record.Instance != nullptr);
+    CHECK(record.StaleInstance == nullptr);
+    CHECK(record.Revision == 2);
+    CHECK(record.Diagnostic.Code == AssetPipelineDiagnosticCode::None);
+    REQUIRE(listener.Objects.Count() == 1);
+    CHECK(listener.Objects[0] == object);
+    CHECK(listener.PreviousRevisions[0] == 0);
+    CHECK(listener.Revisions[0] == 2);
+    CHECK(dispatcher.Calls == 2);
 }
