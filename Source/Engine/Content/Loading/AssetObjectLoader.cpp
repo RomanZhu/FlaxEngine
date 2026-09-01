@@ -82,7 +82,9 @@ bool RuntimeCatalogAssetObjectResolver::ResolveCatalogObject(const AssetObjectId
     location = AssetObjectLoadLocation();
     location.Object = object;
     RuntimeAssetCatalogEntry entry;
-    if (!_catalog.TryGet(object.Asset.Value, entry) || _revision == 0)
+    // Cooked identities are persistent record GUIDs. Reject editor-private source/local pairs instead
+    // of silently discarding LocalId and potentially resolving an unrelated catalog entry.
+    if (!object.IsMainObject() || !_catalog.TryGet(object.Asset.Value, entry) || _revision == 0)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, object,
             TEXT("Runtime catalog has no exact entry for the requested asset object."));
     location.InstanceID = entry.Object;

@@ -446,11 +446,11 @@ TEST_CASE("Canonical missing source path reaches exact asset object loader diagn
     CHECK(loaderDiagnostic.Contains(record.SourcePath.Get()));
 }
 
-TEST_CASE("Runtime packages persist and resolve exact composite object entries")
+TEST_CASE("Runtime packages persist and resolve persistent object GUID entries")
 {
-    const String path = Globals::ProjectLibraryFolder / TEXT("__CompositeRuntimePackage.flaxpac");
-    const AssetObjectId firstObject(AssetGuid(Guid::New()), 17);
-    const AssetObjectId secondObject(firstObject.Asset, 29);
+    const String path = Globals::ProjectLibraryFolder / TEXT("__PersistentRuntimePackage.flaxpac");
+    const AssetObjectId firstObject = AssetObjectId::Main(AssetGuid(Guid::New()));
+    const AssetObjectId secondObject = AssetObjectId::Main(AssetGuid(Guid::New()));
     const Guid firstInstance = Guid::New();
     const Guid secondInstance = Guid::New();
     const byte firstBytes[] = { 1, 2, 3 };

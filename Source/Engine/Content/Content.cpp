@@ -108,7 +108,7 @@ namespace
                     diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
                     diagnostic.AssetGuid = location.Object.Asset.Value;
                     diagnostic.SourcePath = storagePath;
-                    diagnostic.Message = TEXT("Runtime package has no matching exact composite object entry.");
+                    diagnostic.Message = TEXT("Runtime package has no matching persistent object GUID entry.");
                     instance = nullptr;
                     return true;
                 }

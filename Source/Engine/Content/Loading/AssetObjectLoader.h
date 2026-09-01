@@ -74,7 +74,7 @@ public:
     virtual void DestroyObject(void* instance) = 0;
 };
 
-/// <summary>Default cooked resolver backed directly by RuntimeAssetCatalog composite lookup.</summary>
+/// <summary>Default cooked resolver backed directly by persistent GUID RuntimeAssetCatalog lookup.</summary>
 class FLAXENGINE_API RuntimeCatalogAssetObjectResolver : public IRuntimeAssetObjectResolver
 {
 private:

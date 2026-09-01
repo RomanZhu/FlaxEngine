@@ -142,6 +142,35 @@ TEST_CASE("Runtime asset catalog resolves persistent object GUIDs")
     CHECK_FALSE(catalog.TryGet(Guid::Empty, found));
 }
 
+TEST_CASE("Runtime asset catalog v5 preserves bootstrap identity and rejects legacy format")
+{
+    const Guid gameSettings(61, 62, 63, 64);
+    Array<RuntimeAssetCatalogEntry> entries;
+    entries.Add(CatalogEntry(gameSettings, "FlaxEngine.GameSettings", "Data_0.flaxpac", "settings"));
+    AssetPipelineDiagnostic diagnostic;
+    RuntimeAssetCatalog catalog;
+    REQUIRE_FALSE(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
+    catalog.SetGameSettingsObject(gameSettings);
+
+    Array<byte> bytes;
+    REQUIRE_FALSE(catalog.ToBytes(bytes, diagnostic));
+    RuntimeAssetCatalog loaded;
+    REQUIRE_FALSE(RuntimeAssetCatalog::FromBytes(Span<byte>(bytes.Get(), bytes.Count()), loaded, diagnostic));
+    CHECK(loaded.GetGameSettingsObject() == gameSettings);
+
+    // Header layout begins with little-endian magic followed by the format version.
+    REQUIRE(bytes.Count() > 7);
+    bytes[4] = 4;
+    CHECK(RuntimeAssetCatalog::FromBytes(Span<byte>(bytes.Get(), bytes.Count()), loaded, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
+
+    RuntimeAssetCatalog invalidBootstrap;
+    REQUIRE_FALSE(invalidBootstrap.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
+    invalidBootstrap.SetGameSettingsObject(Guid(99, 98, 97, 96));
+    CHECK(invalidBootstrap.ToBytes(bytes, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactInvalid);
+}
+
 TEST_CASE("Loaded runtime GUID index rejects collisions and recovers uniqueness")
 {
     const AssetObjectId subAsset(AssetGuid(Guid(7, 0, 0, 0)), 2);

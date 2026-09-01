@@ -243,6 +243,13 @@ TEST_CASE("Cooked object loader resolves persistent GUID entries through runtime
     CHECK(result.State == LoadedAssetState::Loaded);
     CHECK(factory.LastStorage == TEXT("base/objects.pak"));
     CHECK(editorResolver.Calls.load() == 0);
+
+    const AssetObjectId editorComposite(object.Asset, 7);
+    AssetObjectLoadResult rejected;
+    CHECK(loader.Load(editorComposite, rejected, diagnostic));
+    CHECK(rejected.State == LoadedAssetState::Failed);
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactMissing);
+    CHECK(factory.Creates.load() == 1);
 }
 
 TEST_CASE("Object loader rematerializes an unloaded registry instance")
