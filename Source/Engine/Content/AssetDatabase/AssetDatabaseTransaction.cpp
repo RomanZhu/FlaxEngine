@@ -171,7 +171,7 @@ void AssetDatabaseTransaction::ReplaceObjects(const Guid& assetGuid, const Array
         if (old)
         {
             value.FirstSeenRevision = old->FirstSeenRevision;
-            const bool objectChanged = old->ObjectGuid != value.ObjectGuid || old->StableIdentifier != value.StableIdentifier ||
+            const bool objectChanged = old->StableIdentifier != value.StableIdentifier ||
                 old->SubAssetKey != value.SubAssetKey || old->TypeName != value.TypeName || old->DisplayName != value.DisplayName ||
                 old->IsMain != value.IsMain || old->IsRemoved != value.IsRemoved || old->Status != value.Status ||
                 old->ObjectMetadata != value.ObjectMetadata;

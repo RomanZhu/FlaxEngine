@@ -98,7 +98,7 @@ namespace
 
     bool HasSameObjectContent(const SourceAssetObjectRow& left, const SourceAssetObjectRow& right)
     {
-        return left.ObjectGuid == right.ObjectGuid && left.StableIdentifier == right.StableIdentifier &&
+        return left.StableIdentifier == right.StableIdentifier &&
             left.SubAssetKey == right.SubAssetKey && left.TypeName == right.TypeName &&
             left.DisplayName == right.DisplayName && left.IsMain == right.IsMain &&
             left.IsRemoved == right.IsRemoved && left.Status == right.Status &&
@@ -213,7 +213,7 @@ namespace
             if (!source)
                 continue;
             AssetRecord record;
-            record.ID = object.ObjectGuid;
+            record.ID = AssetObjectId(AssetGuid(object.AssetGuid), object.LocalFileId).ToRuntimeObjectGuid();
             record.SourceAssetID = object.AssetGuid;
             record.LocalId = object.LocalFileId;
             record.TypeName = object.TypeName;
@@ -978,7 +978,6 @@ bool AssetDatabase::PublishFullSnapshotInternal(const Array<AssetRecord>& record
         if (previousObjectPtr)
             object = **previousObjectPtr;
         object.AssetGuid = record.SourceAssetID;
-        object.ObjectGuid = record.ID;
         object.LocalFileId = record.LocalId;
         object.StableIdentifier = record.IsMainAsset() ? String(TEXT("main")) : String(record.SubAsset.Get());
         if (object.StableIdentifier.IsEmpty())

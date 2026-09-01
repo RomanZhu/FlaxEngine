@@ -10,7 +10,7 @@
 class FLAXENGINE_API AssetDatabaseSchema
 {
 public:
-    static constexpr uint32 Version = 4;
+    static constexpr uint32 Version = 5;
 };
 
 /// <summary>Persisted singleton database state.</summary>
@@ -54,7 +54,6 @@ struct FLAXENGINE_API SourceAssetRow
 struct FLAXENGINE_API SourceAssetObjectRow
 {
     Guid AssetGuid = Guid::Empty;
-    Guid ObjectGuid = Guid::Empty;
     int64 LocalFileId = 0;
     String StableIdentifier;
     String SubAssetKey;

@@ -22,17 +22,51 @@ namespace
         return result;
     }
 
-    SourceAssetObjectRow MakeObject(const Guid& assetGuid, const Guid& objectGuid, int64 localFileId, const StringView& stableIdentifier)
+    SourceAssetObjectRow MakeObject(const Guid& assetGuid, int64 localFileId, const StringView& stableIdentifier)
     {
         SourceAssetObjectRow result;
         result.AssetGuid = assetGuid;
-        result.ObjectGuid = objectGuid;
         result.LocalFileId = localFileId;
         result.StableIdentifier = stableIdentifier;
         result.TypeName = TEXT("FlaxEngine.Model");
         result.IsMain = localFileId == 1;
         return result;
     }
+}
+
+TEST_CASE("Source asset database schema persists exact composite object identity")
+{
+    CHECK(AssetDatabaseSchema::Version == 5);
+
+    SourceAssetDatabaseState state;
+    state.Database.ProjectId = Guid::New();
+    const Guid firstSource(101, 102, 103, 104);
+    const int64 firstLocalId = 2;
+    const Guid compatibilityCollision = AssetObjectId(AssetGuid(firstSource), firstLocalId).ToRuntimeObjectGuid();
+    REQUIRE(compatibilityCollision.IsValid());
+    REQUIRE(compatibilityCollision != firstSource);
+    CHECK(AssetObjectId(AssetGuid(compatibilityCollision), 1).ToRuntimeObjectGuid() == compatibilityCollision);
+
+    state.Sources.Add(MakeSource(firstSource, TEXT("Content/First.fbx")));
+    state.Sources.Add(MakeSource(compatibilityCollision, TEXT("Content/Second.fbx")));
+    state.Objects.Add(MakeObject(firstSource, firstLocalId, TEXT("mesh:/First")));
+    state.Objects.Add(MakeObject(compatibilityCollision, 1, TEXT("main")));
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(state.Validate(diagnostic));
+
+    Array<byte> serialized;
+    state.Serialize(serialized);
+    SourceAssetDatabaseState loaded;
+    REQUIRE_FALSE(SourceAssetDatabaseState::Deserialize(serialized.Get(), serialized.Count(), loaded, diagnostic));
+    REQUIRE(loaded.Objects.Count() == 2);
+    CHECK(loaded.Objects[0].AssetGuid == firstSource);
+    CHECK(loaded.Objects[0].LocalFileId == firstLocalId);
+    CHECK(loaded.Objects[1].AssetGuid == compatibilityCollision);
+    CHECK(loaded.Objects[1].LocalFileId == 1);
+
+    state.Database.SchemaVersion = 4;
+    state.Serialize(serialized);
+    CHECK(SourceAssetDatabaseState::Deserialize(serialized.Get(), serialized.Count(), loaded, diagnostic));
 }
 
 TEST_CASE("Source asset database commits durable coherent revisions")
@@ -52,16 +86,9 @@ TEST_CASE("Source asset database commits durable coherent revisions")
 
     std::unique_ptr<AssetDatabaseTransaction> transaction = database.BeginTransaction();
     REQUIRE(transaction);
-    transaction->UpsertSource(MakeSource(assetId, TEXT("Assets/Body.glb")));
-    SourceAssetObjectRow object;
-    object.AssetGuid = assetId;
-    object.ObjectGuid = assetId;
-    object.LocalFileId = 1;
-    object.StableIdentifier = TEXT("main");
-    object.TypeName = TEXT("FlaxEngine.Model");
-    object.IsMain = true;
+    transaction->UpsertSource(MakeSource(assetId, TEXT("Content/Body.glb")));
     Array<SourceAssetObjectRow> objects;
-    objects.Add(object);
+    objects.Add(MakeObject(assetId, 1, TEXT("main")));
     transaction->ReplaceObjects(assetId, objects);
     SourceAssetPublicationRow publication;
     publication.AssetGuid = assetId;
@@ -126,9 +153,9 @@ TEST_CASE("Source asset database checkpoints bounded WAL transactions")
         return transaction->Commit(diagnostic);
     };
 
-    REQUIRE_FALSE(commitSource(Guid(101, 102, 103, 104), TEXT("Assets/A.png")));
+    REQUIRE_FALSE(commitSource(Guid(101, 102, 103, 104), TEXT("Content/A.png")));
     CHECK(FileSystem::GetFileSize(walPath) > emptyWalSize);
-    REQUIRE_FALSE(commitSource(Guid(111, 112, 113, 114), TEXT("Assets/B.png")));
+    REQUIRE_FALSE(commitSource(Guid(111, 112, 113, 114), TEXT("Content/B.png")));
     CHECK(database.GetRevision() == 2);
     CHECK(FileSystem::GetFileSize(walPath) == emptyWalSize);
 
@@ -161,12 +188,12 @@ TEST_CASE("Source asset database checkpoints bounded WAL transactions")
     policy.MaximumTransactions = 0;
     policy.MaximumWalBytes = emptyWalSize + 1;
     database.SetCheckpointPolicy(policy);
-    REQUIRE_FALSE(commitSource(Guid(121, 122, 123, 124), TEXT("Assets/C.png")));
+    REQUIRE_FALSE(commitSource(Guid(121, 122, 123, 124), TEXT("Content/C.png")));
     CHECK(FileSystem::GetFileSize(walPath) == emptyWalSize);
 
     policy.MaximumWalBytes = 0;
     database.SetCheckpointPolicy(policy);
-    REQUIRE_FALSE(commitSource(Guid(131, 132, 133, 134), TEXT("Assets/D.png")));
+    REQUIRE_FALSE(commitSource(Guid(131, 132, 133, 134), TEXT("Content/D.png")));
     CHECK(FileSystem::GetFileSize(walPath) > emptyWalSize);
     REQUIRE_FALSE(database.Checkpoint(diagnostic));
     CHECK(FileSystem::GetFileSize(walPath) == emptyWalSize);
@@ -195,9 +222,9 @@ TEST_CASE("Source asset database rejects stale writers and recovers a torn journ
     std::unique_ptr<AssetDatabaseTransaction> stale = database.BeginTransaction();
     REQUIRE(first);
     REQUIRE(stale);
-    first->UpsertSource(MakeSource(Guid(21, 22, 23, 24), TEXT("Assets/A.png")));
+    first->UpsertSource(MakeSource(Guid(21, 22, 23, 24), TEXT("Content/A.png")));
     REQUIRE_FALSE(first->Commit(diagnostic));
-    stale->UpsertSource(MakeSource(Guid(31, 32, 33, 34), TEXT("Assets/B.png")));
+    stale->UpsertSource(MakeSource(Guid(31, 32, 33, 34), TEXT("Content/B.png")));
     CHECK(stale->Commit(diagnostic));
     CHECK(database.GetRevision() == 1);
     REQUIRE_FALSE(database.Close(&diagnostic));
@@ -229,7 +256,6 @@ TEST_CASE("Source asset database object replacement prunes related rows and repl
 
     const Guid projectId = Guid::New();
     const Guid assetId = Guid::New();
-    const Guid subObjectId = Guid::New();
     const ArtifactKey mainArtifact(ContentHash::Compute("main-artifact", 13));
     const ArtifactKey subArtifact(ContentHash::Compute("sub-artifact", 12));
     AssetPipelineDiagnostic diagnostic;
@@ -238,10 +264,10 @@ TEST_CASE("Source asset database object replacement prunes related rows and repl
 
     std::unique_ptr<AssetDatabaseTransaction> seed = database.BeginTransaction();
     REQUIRE(seed);
-    seed->UpsertSource(MakeSource(assetId, TEXT("Assets/Body.fbx")));
+    seed->UpsertSource(MakeSource(assetId, TEXT("Content/Body.fbx")));
     Array<SourceAssetObjectRow> objects;
-    objects.Add(MakeObject(assetId, assetId, 1, TEXT("main")));
-    objects.Add(MakeObject(assetId, subObjectId, 2, TEXT("mesh:/Body")));
+    objects.Add(MakeObject(assetId, 1, TEXT("main")));
+    objects.Add(MakeObject(assetId, 2, TEXT("mesh:/Body")));
     seed->ReplaceObjects(assetId, objects);
     SourceAssetDependencyRow dependency;
     dependency.OwnerAssetGuid = assetId;

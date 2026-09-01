@@ -105,18 +105,16 @@ bool SourceAssetDatabaseState::Validate(AssetPipelineDiagnostic& diagnostic) con
 
     Dictionary<String, byte> objectIds;
     Dictionary<String, byte> stableObjectIds;
-    Dictionary<Guid, byte> objectGuids;
     for (const SourceAssetObjectRow& object : Objects)
     {
         const String objectKey = ObjectKey(object.AssetGuid, object.LocalFileId);
         const String stableKey = StableObjectKey(object.AssetGuid, object.StableIdentifier);
-        if (!sourceIds.ContainsKey(object.AssetGuid) || !object.ObjectGuid.IsValid() || object.LocalFileId <= 0 || object.StableIdentifier.IsEmpty() ||
+        if (!sourceIds.ContainsKey(object.AssetGuid) || object.LocalFileId <= 0 || object.StableIdentifier.IsEmpty() ||
             object.FirstSeenRevision > object.LastSeenRevision || object.LastSeenRevision > Database.CurrentRevision || object.LastModifiedRevision > Database.CurrentRevision ||
-            objectIds.ContainsKey(objectKey) || stableObjectIds.ContainsKey(stableKey) || objectGuids.ContainsKey(object.ObjectGuid))
+            objectIds.ContainsKey(objectKey) || stableObjectIds.ContainsKey(stableKey))
             return Fail(diagnostic, TEXT("Source asset database contains an invalid or duplicate object row."));
         objectIds.Add(objectKey, 0);
         stableObjectIds.Add(stableKey, 0);
-        objectGuids.Add(object.ObjectGuid, 0);
     }
 
     for (const SourceAssetDependencyRow& dependency : Dependencies)
@@ -253,7 +251,6 @@ void SourceAssetDatabaseState::Serialize(Array<byte>& output) const
     for (const SourceAssetObjectRow& value : Objects)
     {
         writer.Write(value.AssetGuid);
-        writer.Write(value.ObjectGuid);
         writer.Write(value.LocalFileId);
         writer.WriteString(value.StableIdentifier);
         writer.WriteString(value.SubAssetKey);
@@ -441,7 +438,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
     for (SourceAssetObjectRow& item : value.Objects)
     {
         byte isMain, isRemoved, status;
-        if (reader.Read(item.AssetGuid) || reader.Read(item.ObjectGuid) || reader.Read(item.LocalFileId) || reader.ReadString(item.StableIdentifier) ||
+        if (reader.Read(item.AssetGuid) || reader.Read(item.LocalFileId) || reader.ReadString(item.StableIdentifier) ||
             reader.ReadString(item.SubAssetKey) || reader.ReadString(item.TypeName) || reader.ReadString(item.DisplayName) || reader.Read(isMain) || reader.Read(isRemoved) || reader.Read(status) ||
             reader.ReadString(item.ObjectMetadata) || reader.Read(item.FirstSeenRevision) || reader.Read(item.LastSeenRevision) || reader.Read(item.LastModifiedRevision) ||
             isMain > 1 || isRemoved > 1 || status > (byte)AssetRecordStatus::PathCollision)
