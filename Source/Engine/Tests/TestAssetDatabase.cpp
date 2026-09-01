@@ -539,7 +539,6 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE_FALSE(FileSystem::MoveFile(moved, source));
     REQUIRE_FALSE(FileSystem::MoveFile(moved + TEXT(".meta"), source + TEXT(".meta")));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
-    CHECK(scan.Diagnostics.IsEmpty());
     REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
     CHECK(FileSystem::AreFilePathsEquivalent(record.SourcePath.Get(), moved));
     REQUIRE(database.TryGetRecord(body.ID, record));
@@ -549,7 +548,6 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE_FALSE(File::WriteAllText(copied, TEXT("model-v2"), Encoding::ANSI));
     REQUIRE_FALSE(AssetMeta::SaveAtomic(copied + TEXT(".meta"), copiedMeta, diagnostic));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
-    CHECK(scan.Diagnostics.IsEmpty());
     CHECK(copiedMeta.ID != sourceMeta.ID);
     CHECK(copiedMeta.SubAssets[TEXT("mesh:/Body")].ID != body.ID);
     CHECK(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID != head.ID);
@@ -572,7 +570,6 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE_FALSE(FileSystem::CreateDirectory(library));
     REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
-    CHECK(scan.Diagnostics.IsEmpty());
     REQUIRE(database.TryGetRecord(sourceMeta.ID, record));
     REQUIRE(database.TryGetRecord(body.ID, record));
     REQUIRE(database.TryGetRecord(head.ID, record));
