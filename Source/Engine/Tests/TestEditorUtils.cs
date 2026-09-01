@@ -407,6 +407,8 @@ namespace FlaxEngine.Tests
                 Assert.IsTrue(copyResult.Succeeded, copyResult.Message);
                 Assert.IsTrue(File.Exists(projectCopyPath), "Project copy source output is missing.");
                 Assert.IsTrue(File.Exists(projectCopyPath + ".meta"), "Project copy metadata output is missing.");
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { projectCopyPath }),
+                    "Project copy refresh failed before database verification.");
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectCopyPath, out var projectCopyRecord),
                     "Project copy was not published to the asset database.");
                 Assert.AreNotEqual(sourceId, projectCopyRecord.SourceAssetID);
@@ -427,6 +429,8 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(File.Exists(projectCopyPath + ".meta"), "Project move left its old metadata behind.");
                 Assert.IsTrue(File.Exists(projectMovePath), "Project move source output is missing.");
                 Assert.IsTrue(File.Exists(projectMovePath + ".meta"), "Project move metadata output is missing.");
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { projectCopyPath, projectMovePath }),
+                    "Project move refresh failed before database verification.");
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var projectMoveRecord),
                     "Project move was not published to the asset database.");
                 Assert.AreEqual(projectCopyRecord.SourceAssetID, projectMoveRecord.SourceAssetID);
@@ -439,10 +443,14 @@ namespace FlaxEngine.Tests
                 Assert.NotNull(deleteAction, "Project delete did not create recoverable undo state.");
                 Assert.IsFalse(File.Exists(projectMovePath), "Project delete left its source behind.");
                 Assert.IsFalse(File.Exists(projectMovePath + ".meta"), "Project delete left its metadata behind.");
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { projectMovePath }),
+                    "Project delete refresh failed before restore.");
                 lifecycleStage = "Project restore";
                 Assert.IsTrue(deleteAction.TryUndo(), "Project delete restore failed.");
                 Assert.IsTrue(File.Exists(projectMovePath), "Project restore source output is missing.");
                 Assert.IsTrue(File.Exists(projectMovePath + ".meta"), "Project restore metadata output is missing.");
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { projectMovePath }),
+                    "Project restore refresh failed before database verification.");
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(projectMovePath, out var restoredProjectRecord),
                     "Project restore was not published to the asset database.");
                 Assert.AreEqual(projectMoveRecord.SourceAssetID, restoredProjectRecord.SourceAssetID);
@@ -454,6 +462,8 @@ namespace FlaxEngine.Tests
                 Assert.AreNotEqual(sourceId, apiCopyId);
                 Assert.IsTrue(File.Exists(apiCopyPath));
                 Assert.IsTrue(File.Exists(apiCopyPath + ".meta"));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { apiCopyPath }),
+                    "API copy refresh failed before the dependent move.");
                 lifecycleStage = "API move";
                 Assert.IsFalse(AssetOperationService.MoveAsset(apiCopyPath, apiMovePath),
                     string.Join(Environment.NewLine, AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
@@ -461,6 +471,8 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(File.Exists(apiCopyPath + ".meta"));
                 Assert.IsTrue(File.Exists(apiMovePath));
                 Assert.IsTrue(File.Exists(apiMovePath + ".meta"));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { apiCopyPath, apiMovePath }),
+                    "API move refresh failed before the dependent trash.");
                 lifecycleStage = "API trash";
                 Assert.IsFalse(AssetOperationService.TrashAsset(apiMovePath, out var trash),
                     string.Join(Environment.NewLine, AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
@@ -469,11 +481,15 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(File.Exists(apiMovePath + ".meta"));
                 Assert.IsTrue(File.Exists(trash.TrashSourcePath));
                 Assert.IsTrue(File.Exists(trash.TrashMetaPath));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { apiMovePath }),
+                    "API trash refresh failed before restore.");
                 lifecycleStage = "API restore";
                 Assert.IsFalse(AssetOperationService.RestoreAsset(trash),
                     string.Join(Environment.NewLine, AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
                 Assert.IsTrue(File.Exists(apiMovePath));
                 Assert.IsTrue(File.Exists(apiMovePath + ".meta"));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { apiMovePath }),
+                    "API restore refresh failed before database verification.");
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(apiMovePath, out var apiRestoredRecord));
                 Assert.AreEqual(apiCopyId, apiRestoredRecord.SourceAssetID);
             }
