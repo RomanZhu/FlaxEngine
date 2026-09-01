@@ -1141,7 +1141,8 @@ namespace
             return true;
         }
         json.Parse(reinterpret_cast<const char*>(bytes.Get()), bytes.Count());
-        if (json.HasParseError() || !json.IsObject())
+        CanonicalJsonError canonicalError;
+        if (json.HasParseError() || !json.IsObject() || CanonicalJsonWriter::Validate(json, canonicalError))
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
             diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
@@ -1150,8 +1151,11 @@ namespace
             return true;
         }
         const auto type = json.FindMember("type");
+        const String declaredType = type != json.MemberEnd() && type->value.IsString()
+            ? String(StringAnsiView(type->value.GetString(), type->value.GetStringLength()))
+            : String::Empty;
         if (type == json.MemberEnd() || !type->value.IsString() ||
-            String(StringAnsiView(type->value.GetString(), type->value.GetStringLength())) != expectedType)
+            declaredType.Compare(expectedType, StringSearchCase::CaseSensitive) != 0)
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
             diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
@@ -1187,7 +1191,8 @@ namespace
                 const bool exactMetadata = metadata.AssetType == authoredType &&
                     metadata.SourceKind == AssetSourceKind::TextDocument && metadata.Processor.ID == authoredProcessor &&
                     metadata.Processor.SettingsVersion == 1 && metadata.Processor.SettingsJson == StringAnsiView("{}\n");
-                const bool regressionDamagedMetadata = metadata.AssetType == RawDataAsset::TypeName &&
+                const bool regressionDamagedMetadata = metadata.FileFormatVersion == AssetMeta::CurrentFileFormatVersion &&
+                    metadata.AssetType == RawDataAsset::TypeName &&
                     metadata.SourceKind == AssetSourceKind::ImportedSource &&
                     metadata.Processor.ID == TEXT("Flax.Binary") && metadata.Processor.SettingsVersion == 1 &&
                     metadata.Processor.SettingsJson == StringAnsiView("{}\n");

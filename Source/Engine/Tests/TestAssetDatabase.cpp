@@ -551,10 +551,15 @@ TEST_CASE("Canonical refresh narrowly repairs regression-damaged authored metada
     damaged.Processor.ID = TEXT("Flax.Binary");
     damaged.Processor.SettingsVersion = 1;
     damaged.Processor.SettingsJson = "{}\n";
+    damaged.Processor.UnknownFields.Add("processorExtension", "{\"enabled\":true}");
+    damaged.MainObjectUnknownFields.Add("mainExtension", "17");
     damaged.Labels.Add(TEXT("preserved"));
     damaged.UserDataJson = "{\"owner\":\"test\"}";
+    damaged.UnknownFields.Add("rootExtension", "[1,2,3]");
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), damaged, diagnostic));
+    AssetMeta persisted;
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), persisted, diagnostic));
 
     REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
     AssetMeta repaired;
@@ -564,7 +569,13 @@ TEST_CASE("Canonical refresh narrowly repairs regression-damaged authored metada
     CHECK(repaired.SourceKind == AssetSourceKind::TextDocument);
     CHECK(repaired.Processor.ID == TEXT("Flax.ParticleSystem"));
     CHECK(repaired.Labels.Contains(TEXT("preserved")));
-    CHECK(repaired.UserDataJson == StringAnsiView("{\"owner\":\"test\"}"));
+    CHECK(repaired.UserDataJson == persisted.UserDataJson);
+    REQUIRE(repaired.Processor.UnknownFields.ContainsKey("processorExtension"));
+    CHECK(repaired.Processor.UnknownFields["processorExtension"] == persisted.Processor.UnknownFields["processorExtension"]);
+    REQUIRE(repaired.MainObjectUnknownFields.ContainsKey("mainExtension"));
+    CHECK(repaired.MainObjectUnknownFields["mainExtension"] == persisted.MainObjectUnknownFields["mainExtension"]);
+    REQUIRE(repaired.UnknownFields.ContainsKey("rootExtension"));
+    CHECK(repaired.UnknownFields["rootExtension"] == persisted.UnknownFields["rootExtension"]);
 }
 
 TEST_CASE("Asset database snapshot is disposable checksummed and project scoped")
