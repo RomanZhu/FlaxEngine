@@ -5,11 +5,37 @@
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Platform/StringUtils.h"
+#include "Engine/Utilities/Crc.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 namespace
 {
+#pragma pack(push, 1)
+    struct TestNormalizedManifest
+    {
+        uint32 Magic;
+        uint32 Version;
+        uint32 SchemaVersion;
+        Guid ProjectId;
+        uint64 Generation;
+        uint64 Revision;
+        uint32 Crc;
+    };
+
+    struct TestNormalizedTableHeader
+    {
+        uint32 Magic;
+        uint32 Version;
+        uint32 Table;
+        uint64 Generation;
+        uint64 Revision;
+        uint32 PayloadSize;
+        uint32 PayloadCrc;
+    };
+#pragma pack(pop)
+
     SourceAssetRow MakeSource(const Guid& guid, const StringView& path)
     {
         SourceAssetRow result;
@@ -67,6 +93,90 @@ TEST_CASE("Source asset database schema persists exact composite object identity
     state.Database.SchemaVersion = 4;
     state.Serialize(serialized);
     CHECK(SourceAssetDatabaseState::Deserialize(serialized.Get(), serialized.Count(), loaded, diagnostic));
+}
+
+TEST_CASE("Source asset database rebuilds an incompatible normalized cache")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("SourceAssetDatabaseSchemaRebuild-") + Guid::New().ToString(Guid::FormatType::N));
+    const String library = root / TEXT("Library");
+    const String content = root / TEXT("Content");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const String authoredPath = content / TEXT("Authored.asset");
+    const String unrelatedLibraryPath = library / TEXT("unrelated.cache");
+    const byte authoredBytes[] = { 1, 2, 3, 4 };
+    const byte unrelatedBytes[] = { 5, 6, 7, 8 };
+    REQUIRE_FALSE(File::WriteAllBytes(authoredPath, authoredBytes, ARRAY_COUNT(authoredBytes)));
+    REQUIRE_FALSE(File::WriteAllBytes(unrelatedLibraryPath, unrelatedBytes, ARRAY_COUNT(unrelatedBytes)));
+
+    const Guid projectId = Guid::New();
+    const Guid assetId = Guid::New();
+    AssetPipelineDiagnostic diagnostic;
+    SourceAssetDatabase database;
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    std::unique_ptr<AssetDatabaseTransaction> transaction = database.BeginTransaction();
+    REQUIRE(transaction);
+    transaction->UpsertSource(MakeSource(assetId, TEXT("Content/Authored.asset")));
+    REQUIRE_FALSE(transaction->Commit(diagnostic));
+    REQUIRE_FALSE(database.Close(&diagnostic));
+
+    const String databaseDirectory = library / TEXT("AssetDatabase");
+    Array<String> tablePaths;
+    REQUIRE_FALSE(FileSystem::DirectoryGetFiles(tablePaths, databaseDirectory, TEXT("*.table")));
+    REQUIRE(tablePaths.HasItems());
+    for (const String& tablePath : tablePaths)
+    {
+        Array<byte> bytes;
+        REQUIRE_FALSE(File::ReadAllBytes(tablePath, bytes));
+        REQUIRE(bytes.Count() >= sizeof(TestNormalizedTableHeader) + sizeof(uint32));
+        TestNormalizedTableHeader header;
+        Platform::MemoryCopy(&header, bytes.Get(), sizeof(header));
+        uint32 schemaVersion;
+        Platform::MemoryCopy(&schemaVersion, bytes.Get() + sizeof(header), sizeof(schemaVersion));
+        REQUIRE(schemaVersion == AssetDatabaseSchema::Version);
+        schemaVersion = AssetDatabaseSchema::Version - 1;
+        Platform::MemoryCopy(bytes.Get() + sizeof(header), &schemaVersion, sizeof(schemaVersion));
+        header.PayloadCrc = Crc::MemCrc32(bytes.Get() + sizeof(header), header.PayloadSize);
+        Platform::MemoryCopy(bytes.Get(), &header, sizeof(header));
+        REQUIRE_FALSE(File::WriteAllBytes(tablePath, bytes.Get(), bytes.Count()));
+    }
+
+    const String manifestPath = databaseDirectory / TEXT("normalized-store.manifest");
+    Array<byte> manifestBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(manifestPath, manifestBytes));
+    REQUIRE(manifestBytes.Count() == sizeof(TestNormalizedManifest));
+    TestNormalizedManifest manifest;
+    Platform::MemoryCopy(&manifest, manifestBytes.Get(), sizeof(manifest));
+    manifest.SchemaVersion = AssetDatabaseSchema::Version - 1;
+    manifest.Crc = Crc::MemCrc32(&manifest, sizeof(manifest) - sizeof(manifest.Crc));
+    Platform::MemoryCopy(manifestBytes.Get(), &manifest, sizeof(manifest));
+    REQUIRE_FALSE(File::WriteAllBytes(manifestPath, manifestBytes.Get(), manifestBytes.Count()));
+
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    CHECK_FALSE(database.WasLastShutdownClean());
+    CHECK(database.GetRevision() == 0);
+    CHECK(database.Read().GetState().Sources.IsEmpty());
+    CHECK(FileSystem::FileExists(authoredPath));
+    CHECK(FileSystem::FileExists(unrelatedLibraryPath));
+    REQUIRE_FALSE(database.Close(&diagnostic));
+
+    tablePaths.Clear();
+    REQUIRE_FALSE(FileSystem::DirectoryGetFiles(tablePaths, databaseDirectory, TEXT("*.table")));
+    REQUIRE(tablePaths.HasItems());
+    Array<byte> corruptTable;
+    REQUIRE_FALSE(File::ReadAllBytes(tablePaths[0], corruptTable));
+    REQUIRE(corruptTable.HasItems());
+    corruptTable[corruptTable.Count() - 1] ^= 0xff;
+    REQUIRE_FALSE(File::WriteAllBytes(tablePaths[0], corruptTable.Get(), corruptTable.Count()));
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    CHECK(database.GetRevision() == 0);
+    CHECK(database.Read().GetState().Sources.IsEmpty());
+    CHECK(FileSystem::FileExists(authoredPath));
+    CHECK(FileSystem::FileExists(unrelatedLibraryPath));
+    REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
 TEST_CASE("Source asset database commits durable coherent revisions")

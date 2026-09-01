@@ -156,10 +156,23 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
     };
 
     SourceAssetDatabaseState state;
+    bool rebuiltIncompatibleStore = false;
     if (FileSystem::FileExists(_manifestPath))
     {
         if (NormalizedAssetDatabaseStore::LoadCheckpoint(_directory, projectId, state, _checkpointGeneration, diagnostic))
-            return true;
+        {
+            // Library/AssetDatabase is a derived cache. Publish a fresh generation instead of
+            // failing project startup when an older schema or corrupt checkpoint cannot be read.
+            state = SourceAssetDatabaseState();
+            state.Database.ProjectId = projectId;
+            state.Database.CleanShutdown = true;
+            _checkpointGeneration = 0;
+            diagnostic = AssetPipelineDiagnostic();
+            if (NormalizedAssetDatabaseStore::SaveCheckpoint(_directory, state, _checkpointGeneration, diagnostic) ||
+                NormalizedAssetDatabaseStore::ResetWal(_walPath, projectId, 0, diagnostic))
+                return true;
+            rebuiltIncompatibleStore = true;
+        }
     }
     else
     {
@@ -190,7 +203,7 @@ bool SourceAssetDatabase::Open(const StringView& libraryPath, const Guid& projec
             return true;
     }
 
-    _lastShutdownWasClean = state.Database.CleanShutdown && !FileSystem::FileExists(_sessionMarkerPath);
+    _lastShutdownWasClean = !rebuiltIncompatibleStore && state.Database.CleanShutdown && !FileSystem::FileExists(_sessionMarkerPath);
     const uint64 checkpointRevision = state.Database.CurrentRevision;
     Array<NormalizedAssetDatabaseWalRecord> walRecords;
     if (NormalizedAssetDatabaseStore::OpenWal(_walPath, projectId, checkpointRevision, _walBaseRevision,
