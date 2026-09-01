@@ -466,7 +466,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         {
             AssetRecord dependencyRecord;
             if (!AssetDatabase::Get().TryGetRecord(source.ObjectID, dependencyRecord))
-                return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, prepared, source.Identity,
+                return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, prepared, source.StableIdentity,
                     TEXT("Cannot publish an artifact dependency without its persisted object GUID."));
             dependency.ObjectID = AssetObjectId::Main(AssetGuid(dependencyRecord.ID));
         }
