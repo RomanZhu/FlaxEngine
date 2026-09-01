@@ -21,6 +21,7 @@
 #include "Engine/Content/AssetObjectRegistry.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Assets/Material.h"
+#include "Engine/Level/Actors/StaticModel.h"
 #include "Engine/Level/Actors/EmptyActor.h"
 #include "Engine/Level/Scene/Scene.h"
 #include "Engine/Level/Scene/SceneAsset.h"
@@ -401,6 +402,70 @@ TEST_CASE("Tags")
 
 TEST_CASE("ExternalActorsSceneStorage")
 {
+    SECTION("Placed model identity survives fragment save and reopen")
+    {
+        const Guid sceneId = ParseGuid("10111111111111111111111111111111");
+        const Guid actorId = ParseGuid("10111111111111111111111111111112");
+        AssetReference<Model> model = Content::LoadAsync<Model>(Globals::EngineContentFolder / TEXT("Editor/Primitives/Cube.flax"));
+        REQUIRE(model);
+        REQUIRE(!model->WaitForLoaded());
+        const AssetObjectId modelObject = model.GetID();
+        REQUIRE(modelObject.IsValid());
+        const String scenePath = GetTestScenePath(TEXT("PlacedModelPersistence"));
+        CleanupTestSceneFiles(scenePath);
+        SCOPE_EXIT
+        {
+            CleanupTestSceneFiles(scenePath);
+        };
+        WriteTestSceneAsset(scenePath, sceneId, true);
+
+        Scene* scene = Scene::Spawn(ScriptingObject::SpawnParams(sceneId, Scene::TypeInitializer));
+        REQUIRE(scene);
+        scene->UseExternalActors = true;
+        StaticModel* actor = StaticModel::Spawn(ScriptingObject::SpawnParams(actorId, StaticModel::TypeInitializer));
+        REQUIRE(actor);
+        actor->SetName(TEXT("Placed Model"));
+        actor->Model = model.Get();
+        REQUIRE(actor->Model.GetID() == modelObject);
+        actor->SetParent(scene);
+
+        REQUIRE(!Level::SaveScene(scene));
+        rapidjson_flax::Document fragmentDocument;
+        ParseJsonFile(fragmentDocument, GetExternalActorPath(scenePath, actorId));
+        const rapidjson_flax::Value& fragmentObjects = GetDataArray(fragmentDocument);
+        REQUIRE(fragmentObjects.Size() == 1);
+        REQUIRE(fragmentObjects[0].HasMember("Model"));
+        const rapidjson_flax::Value& fragmentModel = fragmentObjects[0]["Model"];
+        REQUIRE(fragmentModel.IsObject());
+        CHECK(JsonTools::GetGuid(fragmentModel, "guid") == modelObject.Asset.Value);
+        const auto fileId = fragmentModel.FindMember("fileId");
+        REQUIRE(fileId != fragmentModel.MemberEnd());
+        REQUIRE(fileId->value.IsInt64());
+        CHECK(fileId->value.GetInt64() == modelObject.LocalId);
+
+        RefreshTestScene(scenePath);
+        SceneAsset* sceneAsset = Content::Load<SceneAsset>(scenePath);
+        REQUIRE(sceneAsset);
+        rapidjson_flax::StringBuffer reopenedBytes;
+        REQUIRE(!Level::SaveSceneAssetToBytes(sceneAsset, reopenedBytes, nullptr, false));
+        Content::UnloadAsset(sceneAsset);
+
+        scene->DeleteObject();
+        ObjectsRemovalService::Flush();
+        scene = nullptr;
+        BytesContainer bytes(reinterpret_cast<const byte*>(reopenedBytes.GetString()), static_cast<int32>(reopenedBytes.GetSize()));
+        Scene* reopened = Level::LoadSceneFromBytes(bytes);
+        REQUIRE(reopened);
+        SCOPE_EXIT
+        {
+            Level::UnloadScene(reopened);
+        };
+        StaticModel* reopenedActor = reopened->FindActor<StaticModel>(TEXT("Placed Model"));
+        REQUIRE(reopenedActor);
+        CHECK(reopenedActor->GetParent() == reopened);
+        CHECK(reopenedActor->Model.GetID() == modelObject);
+    }
+
     SECTION("Save splits actors and recomposes scene data")
     {
         const Guid sceneId = ParseGuid("11111111111111111111111111111111");
