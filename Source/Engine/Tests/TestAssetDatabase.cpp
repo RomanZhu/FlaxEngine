@@ -371,10 +371,15 @@ TEST_CASE("Asset database scanner reconciles typed rows and retains unrelated du
     REQUIRE_FALSE(AssetMeta::SaveAtomic(sourcePath + TEXT(".meta"), MakeDatabaseMeta(sourceId), diagnostic));
 
     AssetDatabase database;
-    REQUIRE_FALSE(database.Open(library, Guid::New(), diagnostic));
+    const Guid projectId = Guid::New();
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    SourceHashCache initialHashCache;
     AssetDatabaseScanOptions options;
+    options.HashCache = &initialHashCache;
     AssetDatabaseScanResult scan;
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
+    const Array<AssetDatabaseFileState> cachedFileStates = scan.FileStates;
     Array<AssetChangeSet> changes;
     bool requiresSnapshot = false;
     REQUIRE_FALSE(database.ReadChangesAfter(0, changes, requiresSnapshot, diagnostic));
@@ -392,6 +397,33 @@ TEST_CASE("Asset database scanner reconciles typed rows and retains unrelated du
     REQUIRE_FALSE(database.RecordPublication(publication, publicationDependencies, diagnostic));
     REQUIRE_FALSE(database.RegisterCustomDependency(TEXT("scanner-environment"),
         ContentHash::Compute("stable", 6), TEXT("test"), diagnostic));
+
+    // Reopening an unchanged cached project and re-adding the same source root must be import-free.
+    const uint64 cachedRevision = database.GetRevision();
+    REQUIRE_FALSE(database.Close(&diagnostic));
+    REQUIRE_FALSE(database.Open(library, projectId, diagnostic));
+    CHECK(database.GetRevision() == cachedRevision);
+    SourceHashCache restartedHashCache;
+    restartedHashCache.Seed(cachedFileStates);
+    options.HashCache = &restartedHashCache;
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
+    CHECK(database.GetRevision() == cachedRevision);
+    REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
+    CHECK(database.GetRevision() == cachedRevision);
+    const SourceHashMetrics restartMetrics = restartedHashCache.GetMetrics();
+    CHECK(restartMetrics.CacheHits == 4);
+    CHECK(restartMetrics.CacheMisses == 0);
+    CHECK(restartMetrics.BytesHashed == 0);
+    changes.Clear();
+    REQUIRE_FALSE(database.ReadChangesAfter(cachedRevision, changes, requiresSnapshot, diagnostic));
+    CHECK_FALSE(requiresSnapshot);
+    CHECK(changes.IsEmpty());
+    const AssetDatabaseReadSnapshot cachedSnapshot = database.GetDurableSnapshot();
+    const SourceAssetDatabaseState& cachedState = cachedSnapshot.GetState();
+    CHECK(cachedState.Publications.Count() == 1);
+    CHECK(cachedState.CustomDependencies.Count() == 1);
 
     uint64 baselineRevision = database.GetRevision();
     REQUIRE_FALSE(File::WriteAllText(sourcePath, TEXT("changed-payload"), Encoding::ANSI));
@@ -427,13 +459,21 @@ TEST_CASE("Asset database scanner reconciles typed rows and retains unrelated du
     REQUIRE_FALSE(FileSystem::DeleteFile(movedPath));
     REQUIRE_FALSE(FileSystem::DeleteFile(movedPath + TEXT(".meta")));
     REQUIRE_FALSE(AssetDatabaseScanner::Scan(root, content, library, options, database, scan));
+    CHECK(scan.Diagnostics.IsEmpty());
+    AssetRecord removedRecord;
+    CHECK_FALSE(database.TryGetRecord(sourceId, removedRecord));
     changes.Clear();
     REQUIRE_FALSE(database.ReadChangesAfter(baselineRevision, changes, requiresSnapshot, diagnostic));
     REQUIRE(changes.Count() == 1);
     REQUIRE(changes[0].Removed.Count() == 1);
     CHECK(changes[0].Removed[0].AssetGuid == sourceId);
+    CHECK(changes[0].Imported.IsEmpty());
+    CHECK(changes[0].DiagnosticsChanged.IsEmpty());
     const AssetDatabaseReadSnapshot removedSnapshot = database.GetDurableSnapshot();
+    CHECK(removedSnapshot.GetState().Sources.IsEmpty());
+    CHECK(removedSnapshot.GetState().Objects.IsEmpty());
     CHECK(removedSnapshot.GetState().Publications.IsEmpty());
+    CHECK(removedSnapshot.GetState().Diagnostics.IsEmpty());
     CHECK(removedSnapshot.GetState().CustomDependencies.Count() == 1);
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
