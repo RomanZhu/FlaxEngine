@@ -14,7 +14,7 @@ public:
 
 protected:
     Asset* _asset = nullptr;
-    Guid _objectId;
+    Guid _objectId = Guid::Empty;
 
 public:
     /// <summary>

@@ -11,7 +11,7 @@ class FLAXENGINE_API SoftAssetReferenceBase : public IAssetReference
 {
 protected:
     Asset* _asset = nullptr;
-    Guid _id;
+    Guid _id = Guid::Empty;
 
 public:
     /// <summary>
