@@ -596,7 +596,7 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
 
     // A real Content load drives prepare, build, publication, resolution, factory creation, and binary loading.
     const Array<byte> firstExpected = fixture.ExpectedPayload();
-    loadedAsset = Content::LoadRuntimeObject<RawDataAsset>(fixture.AssetID);
+    loadedAsset = Content::LoadAsset<RawDataAsset>(fixture.AssetID);
     REQUIRE(loadedAsset);
     REQUIRE(loadedAsset->Data.Count() == firstExpected.Count());
     CHECK(Platform::MemoryCompare(loadedAsset->Data.Get(), firstExpected.Get(), firstExpected.Count()) == 0);
@@ -766,7 +766,7 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
     ArtifactResolver::Get().Configure(database, *service, fixture.LibraryRoot, fixture.Target, provider);
 
     const int32 regenerationBuilds = fixture.BuildCompleted.load();
-    loadedAsset = Content::LoadRuntimeObject<RawDataAsset>(fixture.AssetID);
+    loadedAsset = Content::LoadAsset<RawDataAsset>(fixture.AssetID);
     REQUIRE(loadedAsset);
     const Array<byte> regeneratedExpected = fixture.ExpectedPayload();
     REQUIRE(loadedAsset->Data.Count() == regeneratedExpected.Count());

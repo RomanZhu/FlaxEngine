@@ -731,7 +731,7 @@ DEFINE_INTERNAL_CALL(MObject*) ObjectInternal_FindObject(Guid* id, MTypeObject* 
     {
         if (!klass || klass == ScriptingObject::GetStaticClass() || klass->IsSubClassOf(Asset::GetStaticClass()))
         {
-            obj = Content::LoadRuntimeObjectAsync<Asset>(*id);
+            obj = Content::LoadAssetAsync<Asset>(*id);
         }
     }
     if (obj)

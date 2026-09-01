@@ -1128,7 +1128,7 @@ void InvokeObjectSpawn(const NetworkMessageObjectSpawn& msgData, const Guid& pre
         if (!prefabInstance)
         {
             // Spawn prefab
-            auto prefab = (Prefab*)LoadRuntimeAsset(prefabId, Prefab::TypeInitializer);
+            auto prefab = (Prefab*)LoadAsset(prefabId, Prefab::TypeInitializer);
             if (!prefab)
             {
                 NETWORK_REPLICATOR_LOG(Error, "[NetworkReplicator] Failed to find prefab {}", prefabId.ToString());

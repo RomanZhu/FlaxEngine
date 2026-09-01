@@ -284,7 +284,7 @@ namespace FlaxEngine.GUI
                 if (Content.GetRuntimeAssetInfo(id, out var info) && !string.IsNullOrEmpty(info.Path) &&
                     string.Equals(name, System.IO.Path.GetFileNameWithoutExtension(info.Path), System.StringComparison.OrdinalIgnoreCase))
                 {
-                    return Content.LoadRuntimeObjectAsync(id, type);
+                    return Content.LoadAssetAsync(id, type);
                 }
             }
             return null;

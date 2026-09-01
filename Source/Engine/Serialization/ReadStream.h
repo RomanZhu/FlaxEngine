@@ -7,7 +7,6 @@
 #include "Engine/Content/Asset.h"
 
 extern FLAXENGINE_API class ScriptingObject* FindObject(const Guid& id, class MClass* type);
-extern FLAXENGINE_API class Asset* LoadRuntimeAsset(const Guid& runtimeId, const struct ScriptingTypeHandle& type);
 extern FLAXENGINE_API class Asset* LoadAsset(const Guid& id, const struct ScriptingTypeHandle& type);
 
 /// <summary>

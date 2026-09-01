@@ -173,7 +173,7 @@ void Scene::ApplyCSGModelSDF()
 Array<Guid> Scene::GetAssetReferences() const
 {
     Array<Guid> result;
-    const auto asset = Content::LoadRuntimeObject<SceneAsset>(GetID());
+    const auto asset = Content::LoadAsset<SceneAsset>(GetID());
     if (asset)
     {
         Array<String> files;

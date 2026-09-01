@@ -1025,7 +1025,7 @@ void VisjectExecutor::ProcessGroupTools(Box* box, Node* node, Value& value)
     }
     // Asset Reference
     case 18:
-        value = ::LoadRuntimeAsset((Guid)node->Values[0], Asset::TypeInitializer);
+        value = ::LoadAsset((Guid)node->Values[0], Asset::TypeInitializer);
         break;
     // To String
     case 20:

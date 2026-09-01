@@ -133,7 +133,7 @@ public:
             // Get Gameplay Global
             case 16:
                 n->Assets.Resize(1);
-                n->Assets[0] = ::LoadRuntimeAsset((Guid)n->Values[0], Asset::TypeInitializer);
+                n->Assets[0] = ::LoadAsset((Guid)n->Values[0], Asset::TypeInitializer);
                 break;
             }
         }
