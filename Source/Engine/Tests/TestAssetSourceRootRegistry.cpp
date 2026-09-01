@@ -100,7 +100,7 @@ TEST_CASE("Asset source root registry owns permissions visibility and logical pa
     AssetPathPolicy::ProjectPath writable;
     REQUIRE_FALSE(registry.ResolveForGenericMutation(TEXT("Content/Textures/Test.png"), writable, diagnostic));
     CHECK(writable.ProjectRelativePath == TEXT("Content/Textures/Test.png"));
-    CHECK(AssetPathPolicy::IsSameOrChild(writable.AbsolutePath, content));
+    CHECK(AssetPathPolicy::IsSameOrChild(writable.AbsolutePath, projectRoot->PhysicalPath));
 
     ResolvedAssetSourcePath resolved;
     REQUIRE_FALSE(registry.Resolve(externalActors / TEXT("scene/actor.sceneactor"), resolved, diagnostic));
