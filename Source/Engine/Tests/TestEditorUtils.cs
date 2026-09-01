@@ -387,7 +387,8 @@ namespace FlaxEngine.Tests
                 new FileItem(nestedPath) { ParentFolder = nestedFolder };
                 AssetWorkspaceModule.NativeCopyBatchObserver = entries => observedEntries = entries.ToArray();
 
-                var result = new AssetWorkspaceModule(null).Copy(sourceFolder, destinationFolderPath);
+                var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
+                var result = workspace.Copy(sourceFolder, destinationFolderPath);
 
                 Assert.IsTrue(result.Succeeded, result.Message);
                 Assert.NotNull(observedEntries);
@@ -403,6 +404,8 @@ namespace FlaxEngine.Tests
                 Assert.AreEqual(Path.GetFullPath(Path.Combine(destinationFolderPath, "Nested")), Path.GetFullPath(observedEntries[2].DestinationPath));
                 Assert.AreEqual(Path.GetFullPath(Path.Combine(destinationFolderPath, "Nested", "Nested.txt")), Path.GetFullPath(observedEntries[3].DestinationPath));
                 Assert.AreEqual(1, result.CompletedPaths.Length);
+                Assert.IsTrue(File.Exists(destinationAssetPath));
+                Assert.IsTrue(File.Exists(destinationAssetPath + ".meta"));
                 Assert.IsTrue(File.Exists(Path.Combine(destinationFolderPath, "Plain.txt")));
                 Assert.IsTrue(File.Exists(Path.Combine(destinationFolderPath, "Nested", "Nested.txt")));
                 var destinationRecords = AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery
@@ -415,6 +418,28 @@ namespace FlaxEngine.Tests
                         ContentMutationPathUtils.Normalize(destinationAssetPath)));
                 Assert.AreNotEqual(Guid.Empty, copiedRecord.SourceAssetID);
                 Assert.AreNotEqual(sourceAssetId, copiedRecord.SourceAssetID);
+                Assert.AreEqual(Path.GetFullPath(destinationAssetPath),
+                    Path.GetFullPath(AssetDatabaseQueryService.GUIDToAssetPath(copiedRecord.SourceAssetID)));
+
+                var copiedItem = workspace.FindAsset(copiedRecord.SourceAssetID);
+                Assert.NotNull(copiedItem);
+                Assert.AreEqual(Path.GetFullPath(destinationAssetPath), Path.GetFullPath(copiedItem.Path));
+                var contentWindow = FlaxEditor.Editor.Instance.Windows.ContentWin;
+                contentWindow.Select(copiedItem, true);
+                Assert.AreEqual(1, contentWindow.Selection.Count);
+                Assert.AreEqual(Path.GetFullPath(destinationAssetPath),
+                    Path.GetFullPath(contentWindow.Selection[0].Path));
+                contentWindow.ClearSelection(false);
+
+                var destinationFolder = workspace.Find(destinationFolderPath) as ContentFolder;
+                Assert.NotNull(destinationFolder);
+                workspace.Delete(destinationFolder, true);
+                Assert.IsFalse(Directory.Exists(destinationFolderPath));
+                Assert.IsFalse(File.Exists(destinationAssetPath));
+                Assert.IsFalse(File.Exists(destinationAssetPath + ".meta"));
+                Assert.IsFalse(AssetDatabaseQueryService.TryGetMainRecordAtPath(destinationAssetPath, out _));
+                Assert.IsTrue(File.Exists(sourceAssetPath));
+                Assert.IsTrue(File.Exists(sourceAssetPath + ".meta"));
             }
             finally
             {
