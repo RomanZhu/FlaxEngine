@@ -1181,17 +1181,22 @@ namespace FlaxEditor.Windows
                 if (_dragAssets != null && _dragAssets.HasValidDrag)
                 {
                     List<SceneGraphNode> graphNodes = new List<SceneGraphNode>();
+                    var handled = false;
                     for (int i = 0; i < _dragAssets.Objects.Count; i++)
                     {
                         var item = _dragAssets.Objects[i];
                         if (item.IsOfType<SceneAsset>())
                         {
                             Editor.Instance.Scene.OpenScene(item.ID, true);
+                            handled = true;
                             continue;
                         }
                         var actor = item.OnEditorDrop(this);
+                        if (actor == null)
+                            continue;
                         actor.Name = item.ShortName;
                         Editor.SceneEditing.Spawn(actor);
+                        handled = true;
                         var graphNode = Editor.Scene.GetActorNode(actor.ID);
                         if (graphNode != null)
                             graphNodes.Add(graphNode);
@@ -1199,7 +1204,8 @@ namespace FlaxEditor.Windows
                     }
                     if (graphNodes.Count > 0)
                         Editor.SceneEditing.Select(graphNodes);
-                    result = DragDropEffect.Move;
+                    if (handled)
+                        result = DragDropEffect.Move;
                 }
                 // Drag actor type
                 else if (_dragActorType != null && _dragActorType.HasValidDrag)

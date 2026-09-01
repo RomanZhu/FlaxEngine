@@ -96,9 +96,11 @@ namespace FlaxEditor.Viewport
             var result = DragDropEffect.None;
             if (_dragAssets.HasValidDrag)
             {
-                result = _dragAssets.Effect;
+                var handled = false;
                 foreach (var asset in _dragAssets.Objects)
-                    Spawn(asset, hit, ref location, ref hitLocation, ref hitNormal);
+                    handled |= Spawn(asset, hit, ref location, ref hitLocation, ref hitNormal);
+                if (handled)
+                    result = _dragAssets.Effect;
             }
             else if (_dragActorType.HasValidDrag)
             {
@@ -297,7 +299,7 @@ namespace FlaxEditor.Viewport
             Spawn(actor, ref hitLocation, ref hitNormal);
         }
 
-        private void Spawn(AssetItem item, SceneGraphNode hit, ref Float2 location, ref Vector3 hitLocation, ref Vector3 hitNormal)
+        private bool Spawn(AssetItem item, SceneGraphNode hit, ref Float2 location, ref Vector3 hitLocation, ref Vector3 hitNormal)
         {
             if (item.IsOfType<MaterialBase>())
             {
@@ -332,17 +334,20 @@ namespace FlaxEditor.Viewport
                             staticModel.SetMaterial(entryIndex, material);
                     }
                 }
-                return;
+                return true;
             }
             if (item.IsOfType<SceneAsset>())
             {
                 Editor.Instance.Scene.OpenScene(item.ID, true);
-                return;
+                return true;
             }
             {
                 var actor = item.OnEditorDrop(this);
+                if (actor == null)
+                    return false;
                 actor.Name = item.ShortName;
                 Spawn(actor, ref hitLocation, ref hitNormal);
+                return true;
             }
         }
     }

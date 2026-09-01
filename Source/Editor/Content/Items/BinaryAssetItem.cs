@@ -122,7 +122,13 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Actor OnEditorDrop(object context)
         {
-            return new StaticModel { Model = FlaxEngine.Content.LoadAssetAsync<Model>(ObjectID) };
+            var model = FlaxEngine.Content.LoadAssetAsync<Model>(ObjectID);
+            if (model == null)
+            {
+                Editor.LogError($"Cannot place model '{Path}' because its exact asset artifact is unavailable. Fix the asset import or build error and try again.");
+                return null;
+            }
+            return new StaticModel { Model = model };
         }
 
         /// <inheritdoc />

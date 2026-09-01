@@ -1451,6 +1451,36 @@ namespace FlaxEngine.Tests
             Assert.IsTrue(new FileProxy().IsProxyFor(item));
         }
 
+        [Test]
+        public void TestModelItemRejectsUnavailableExactArtifact()
+        {
+            var id = Guid.NewGuid();
+            var item = new ModelItem(Path.Combine(Globals.ProjectContentFolder, "Missing.flax"), ref id,
+                typeof(Model).FullName, typeof(Model));
+
+            Assert.IsNull(item.OnEditorDrop(null));
+        }
+
+        [Test]
+        public void TestModelItemPlacesResolvedModel()
+        {
+            var model = FlaxEngine.Content.LoadAsyncInternal<Model>("Editor/Primitives/Cube");
+            Assert.IsNotNull(model);
+            var id = model.ID;
+            var item = new ModelItem(model.Path, ref id, typeof(Model).FullName, typeof(Model));
+            var actor = item.OnEditorDrop(null) as StaticModel;
+            try
+            {
+                Assert.IsNotNull(actor);
+                Assert.AreSame(model, actor.Model);
+            }
+            finally
+            {
+                if (actor != null)
+                    FlaxEngine.Object.Destroy(actor);
+            }
+        }
+
     }
 }
 #endif

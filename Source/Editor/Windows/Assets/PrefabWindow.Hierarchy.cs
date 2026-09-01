@@ -171,6 +171,8 @@ namespace FlaxEditor.Windows.Assets
                         {
                             var item = _dragAssets.Objects[i];
                             var actor = item.OnEditorDrop(this);
+                            if (actor == null)
+                                continue;
                             actor.Name = item.ShortName;
                             _window.Spawn(actor);
                             var graphNode = _window.Graph.Root.Find(actor);
@@ -180,7 +182,8 @@ namespace FlaxEditor.Windows.Assets
                         }
                         if (graphNodes.Count > 0)
                             _window.Select(graphNodes);
-                        result = DragDropEffect.Move;
+                        if (graphNodes.Count > 0)
+                            result = DragDropEffect.Move;
                     }
                     // Drag actor type
                     else if (_dragActorType != null && _dragActorType.HasValidDrag)

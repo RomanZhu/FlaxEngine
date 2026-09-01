@@ -1315,6 +1315,7 @@ namespace FlaxEditor.SceneGraph.GUI
             else if (_dragAssets != null && _dragAssets.HasValidDrag)
             {
                 var spawnParent = myActor;
+                var handled = false;
                 if (DragOverMode == DragItemPositioning.Above || DragOverMode == DragItemPositioning.Below)
                     spawnParent = newParent;
 
@@ -1322,6 +1323,8 @@ namespace FlaxEditor.SceneGraph.GUI
                 {
                     var item = _dragAssets.Objects[i];
                     var actor = item.OnEditorDrop(this);
+                    if (actor == null)
+                        continue;
                     if (spawnParent.GetType() != typeof(Scene))
                     {
                         // Set all Actors static flags to match parents
@@ -1338,8 +1341,10 @@ namespace FlaxEditor.SceneGraph.GUI
                     var previousTrans = actor.Transform;
                     ActorNode.Root.Spawn(actor, spawnParent, newOrder);
                     actor.LocalTransform = previousTrans;
+                    handled = true;
                 }
-                result = DragDropEffect.Move;
+                if (handled)
+                    result = DragDropEffect.Move;
             }
             // Drag actor type
             else if (_dragActorType != null && _dragActorType.HasValidDrag)

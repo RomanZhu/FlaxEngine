@@ -249,7 +249,7 @@ namespace FlaxEditor.Content
         /// Called when user drops the item into editor viewport or scene tree node.
         /// </summary>
         /// <param name="context">The editor context (eg. editor viewport or scene tree node).</param>
-        /// <returns>The spawned object.</returns>
+        /// <returns>The spawned object, or null if the item cannot be placed.</returns>
         public virtual Actor OnEditorDrop(object context)
         {
             throw new NotSupportedException($"Asset {GetType()} doesn't support dropping into viewport.");
