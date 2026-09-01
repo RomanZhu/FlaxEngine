@@ -578,12 +578,17 @@ namespace FlaxEditor.Modules
         /// <returns>Asset proxy or null if cannot find.</returns>
         public AssetProxy GetAssetProxy(string typeName, string path)
         {
+            return GetAssetProxy(typeName, path, true);
+        }
+
+        private AssetProxy GetAssetProxy(string typeName, string path, bool allowLegacyBinaryFallback)
+        {
             for (int i = 0; i < Proxy.Count; i++)
             {
                 if (Proxy[i] is AssetProxy proxy && proxy.AcceptsAsset(typeName, path))
                     return proxy;
             }
-            if (!path.EndsWith(".flax", StringComparison.OrdinalIgnoreCase))
+            if (allowLegacyBinaryFallback && !path.EndsWith(".flax", StringComparison.OrdinalIgnoreCase))
             {
                 for (int i = 0; i < Proxy.Count; i++)
                 {
@@ -613,14 +618,17 @@ namespace FlaxEditor.Modules
         {
             var id = record.ID;
             var itemType = GetCanonicalItemType(record);
-            var proxy = GetAssetProxy(itemType, path);
+            var authoredSource = record.SourceKind == AssetSourceKind.TextDocument;
+            var proxy = GetAssetProxy(itemType, path, !authoredSource);
             var item = proxy?.ConstructItem(path, itemType, ref id);
-            if (item == null)
+            if (item == null && !authoredSource)
             {
                 var type = TypeUtils.GetType(itemType).Type;
                 if (type != null && typeof(Asset).IsAssignableFrom(type))
                     item = new BinaryAssetItem(path, ref id, itemType, type, ContentItemSearchFilter.Other);
             }
+            if (item == null && authoredSource)
+                Editor.LogWarning($"Missing type-specific authored asset proxy for '{path}' ({itemType}).");
             item?.SetAssetDatabaseRecord(record);
             return item;
         }

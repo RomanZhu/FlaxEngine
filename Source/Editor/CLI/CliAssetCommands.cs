@@ -343,6 +343,7 @@ namespace FlaxEditor
                     case "types": data = ListAssetTypes(operation); break;
                     case "info": data = DescribeAsset(RequireItem(operation.Path)); break;
                     case "select": data = SelectAsset(operation); break;
+                    case "open": data = OpenAssetEditor(operation); break;
                     case "create": data = CreateAsset(operation); break;
                     case "mkdir": data = CreateFolder(operation); break;
                     case "import": BeginImport(operation, false); return;
@@ -434,6 +435,25 @@ namespace FlaxEditor
                            ?? throw new InvalidOperationException($"Content item '{options.Path}' is not an asset.");
                 Editor.Instance.Windows.ContentWin.Select(item, true);
                 return DescribeAsset(item);
+            }
+
+            private static object OpenAssetEditor(CliAssetOperationOptions options)
+            {
+                var item = RequireItem(options.Path) as AssetItem
+                           ?? throw new InvalidOperationException($"Content item '{options.Path}' is not an asset.");
+                var proxy = Editor.Instance.ContentDatabase.GetProxy(item)
+                            ?? throw new InvalidOperationException($"Asset '{item.Path}' has no Project-panel proxy.");
+                var window = Editor.Instance.ContentEditing.Open(item)
+                             ?? throw new InvalidOperationException($"Asset '{item.Path}' has no compatible editor factory.");
+                return new
+                {
+                    path = item.Path,
+                    type = item.TypeName,
+                    proxy = proxy.GetType().FullName,
+                    editor = window.GetType().FullName,
+                    canonical = item.IsCanonicalSource,
+                    processor = item.ProcessorID,
+                };
             }
 
             private object CreateAsset(CliAssetOperationOptions options)
