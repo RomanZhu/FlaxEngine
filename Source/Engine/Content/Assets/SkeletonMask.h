@@ -60,7 +60,7 @@ public:
     void GetReferences(Array<Guid>& assets, Array<String>& files) const override
     {
         BinaryAsset::GetReferences(assets, files);
-        assets.Add(Skeleton.GetRuntimeInstanceId());
+        assets.Add(Skeleton.GetID());
     }
     bool Save(const StringView& path = StringView::Empty) override;
 #endif

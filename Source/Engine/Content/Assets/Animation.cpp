@@ -190,7 +190,7 @@ void Animation::LoadTimeline(BytesContainer& result) const
             flags |= (byte)SceneAnimation::Track::Flags::Mute;
         if (nestedAnim.Loop)
             flags |= (byte)SceneAnimation::Track::Flags::Loop;
-        Guid id = nestedAnim.Anim.GetRuntimeInstanceId();
+        Guid id = nestedAnim.Anim.GetID();
 
         // Nested Animation track
         stream.Write((byte)20); // Track Type
@@ -445,7 +445,7 @@ bool Animation::Save(const StringView& path)
             auto& e = NestedAnims[i];
             stream.Write(e.First, 172);
             auto& nestedAnim = e.Second;
-            Guid id = nestedAnim.Anim.GetRuntimeInstanceId();
+            Guid id = nestedAnim.Anim.GetID();
             byte flags = 0;
             if (nestedAnim.Enabled)
                 flags |= 1;
@@ -560,7 +560,7 @@ void Animation::GetReferences(Array<Guid>& assets, Array<String>& files) const
     // Add nested animations
     for (const auto& e : NestedAnims)
     {
-        assets.Add(e.Second.Anim.GetRuntimeInstanceId());
+        assets.Add(e.Second.Anim.GetID());
     }
 }
 

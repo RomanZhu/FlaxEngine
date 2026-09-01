@@ -104,7 +104,7 @@ VisualScriptExecutor::VisualScriptExecutor()
 
 void VisualScriptExecutor::Invoke(const Guid& scriptId, int32 nodeId, int32 boxId, const Guid& instanceId, Variant& result) const
 {
-    auto script = Content::LoadRuntimeObject<VisualScript>(scriptId);
+    auto script = Content::LoadAsset<VisualScript>(scriptId);
     if (!script)
         return;
     const auto node = script->Graph.GetNode(nodeId);
@@ -1672,7 +1672,7 @@ void VisualScript::CacheScriptingType()
                     Guid id;
                     if (!Guid::Parse(eType.Fullname, id))
                     {
-                        if (const auto visualScript = Content::LoadRuntimeObjectAsync<VisualScript>(id))
+                        if (const auto visualScript = Content::LoadAssetAsync<VisualScript>(id))
                         {
                             node = visualScript->FindMethod(referenceMethod->GetName(), referenceMethod->GetParametersCount());
                         }
@@ -1884,7 +1884,7 @@ bool VisualScriptingBinaryModule::FindScriptingType(const StringAnsiView& typeNa
         Guid id;
         if (!Guid::Parse(typeName, id))
         {
-            const auto visualScript = Content::LoadRuntimeObjectAsync<VisualScript>(id);
+            const auto visualScript = Content::LoadAssetAsync<VisualScript>(id);
             if (visualScript)
             {
                 const auto handle = visualScript->GetScriptingType();

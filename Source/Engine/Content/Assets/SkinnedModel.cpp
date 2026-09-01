@@ -105,7 +105,7 @@ SkinnedModel::SkeletonMapping SkinnedModel::GetSkeletonMapping(Asset* source, bo
             if (retarget && retarget->SkeletonAsset)
             {
                 // Map retarget skeleton nodes from animation channels
-                if (auto* skeleton = Content::LoadRuntimeObject<SkinnedModel>(retarget->SkeletonAsset))
+                if (auto* skeleton = Content::LoadAsset<SkinnedModel>(retarget->SkeletonAsset))
                 {
                     const SkeletonMapping skeletonMapping = GetSkeletonMapping(skeleton);
                     mappingData.SourceSkeleton = skeleton;
