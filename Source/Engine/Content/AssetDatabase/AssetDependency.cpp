@@ -46,6 +46,7 @@ void AssetDependency::AppendKeyComponents(ArtifactKeyBuilder& builder, int32 ind
     {
     case AssetDependencyKind::SourceFile:
     case AssetDependencyKind::Toolchain:
+    case AssetDependencyKind::LogicalPath:
         builder.AddHash(prefix + "content", Content);
         break;
     case AssetDependencyKind::BuildInput:
@@ -72,7 +73,8 @@ bool AssetDependency::NormalizeAndSort(Array<AssetDependency>& dependencies, Ass
         dependency.StableIdentity.Replace(TEXT('\\'), TEXT('/'));
         if (dependency.StableIdentity.IsEmpty() ||
             ((dependency.Kind == AssetDependencyKind::BuildInput || dependency.Kind == AssetDependencyKind::RuntimeReference) && !dependency.ObjectID.IsValid()) ||
-            ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain) && dependency.Content.IsZero()) ||
+            ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain ||
+                dependency.Kind == AssetDependencyKind::LogicalPath) && dependency.Content.IsZero()) ||
             (dependency.Kind == AssetDependencyKind::BuildInput && dependency.ExactArtifact.IsZero() && dependency.SemanticInterface.IsZero()))
         {
             diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;

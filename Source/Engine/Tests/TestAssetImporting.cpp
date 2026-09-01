@@ -110,6 +110,7 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
     context.DependsOnCustomDependency(TEXT("render-pipeline"), ContentHash::Compute("rp", 2));
     const ArtifactKey exactArtifact(ContentHash::Compute("exact", 5));
     context.DependsOnArtifact(exactArtifact);
+    context.DependsOnLogicalPath(TEXT("path-sensitive test"));
     const int32 output = context.CreateOutput(TEXT("runtime"), "runtime", ".bin", ArtifactTargetDimension::Platform);
     REQUIRE(output >= 0);
     const byte firstOutputChunk[] = { 1, 2 };
@@ -121,7 +122,18 @@ TEST_CASE("AssetImportContext records controlled reads dependencies and declared
     REQUIRE_FALSE(context.Complete(true, result, diagnostic));
     CHECK(result.MainObject == object);
     CHECK(result.Objects.Count() == 1);
-    CHECK(result.Dependencies.Count() == 3);
+    CHECK(result.Dependencies.Count() == 4);
+    bool foundLogicalPath = false;
+    for (const AssetImportDependency& dependency : result.Dependencies)
+    {
+        if (dependency.Kind != AssetImportDependencyKind::LogicalPath)
+            continue;
+        foundLogicalPath = true;
+        CHECK(dependency.Identity == TEXT("Content/model.foo"));
+        CHECK(dependency.Origin == TEXT("path-sensitive test"));
+        CHECK_FALSE(dependency.ExpectedHash.IsZero());
+    }
+    CHECK(foundLogicalPath);
     REQUIRE(result.Outputs.Count() == 1);
     CHECK(result.Outputs[0].TargetDimensions == ArtifactTargetDimension::Platform);
     CHECK(result.Outputs[0].Data.Count() == 3);

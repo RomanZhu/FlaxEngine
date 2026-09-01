@@ -569,7 +569,7 @@ bool AssetImportWorkerProtocol::ValidateResult(const AssetImportJobRequest& requ
     }
     for (const AssetImportDependency& dependency : result.Dependencies)
     {
-        if (dependency.Kind > AssetImportDependencyKind::ProjectSetting)
+        if (dependency.Kind > AssetImportDependencyKind::LogicalPath)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, TEXT("Isolated import worker declared an unknown dependency kind."));
         switch (dependency.Kind)
         {

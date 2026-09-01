@@ -459,7 +459,7 @@ bool SourceAssetDatabaseState::Deserialize(const byte* data, uint32 length, Sour
             reader.Read(item.ExactArtifact) || reader.ReadString(item.CustomDependency) || reader.Read(item.Content) || reader.Read(item.Flags) ||
             reader.ReadString(item.OriginImporter) || reader.ReadString(item.OriginDescription) ||
             reader.ReadString(item.OriginPath) || reader.Read(item.OriginLine) || reader.Read(item.OriginColumn) ||
-            kind > (byte)AssetDependencyKind::Toolchain)
+            kind > (byte)AssetDependencyKind::LogicalPath)
             return Fail(diagnostic, TEXT("Source asset database dependency table is malformed."));
         item.Kind = (AssetDependencyKind)kind;
     }

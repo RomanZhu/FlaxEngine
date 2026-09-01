@@ -28,6 +28,11 @@ namespace
         dependency.Hash = manifest.SourceHash;
         dependency.Origin = TEXT("main source");
         manifest.Dependencies.Add(dependency);
+        dependency.Kind = AssetDependencyKind::LogicalPath;
+        dependency.Identity = TEXT("Content/Folder/source.synthetic");
+        dependency.Hash = ContentHash::Compute("Content/Folder/source.synthetic", 31);
+        dependency.Origin = TEXT("explicit logical path dependency");
+        manifest.Dependencies.Add(dependency);
         ArtifactManifestOutput output;
         output.Kind = "runtime";
         output.FormatVersion = 2;
@@ -63,6 +68,8 @@ TEST_CASE("ArtifactManifest canonical JSON round-trips coherently")
     REQUIRE_FALSE(ArtifactManifest::Parse(first, TEXT("manifest.json"), parsed, diagnostic));
     CHECK(parsed.ObjectID == manifest.ObjectID);
     CHECK(parsed.InputFingerprint == manifest.InputFingerprint);
+    REQUIRE(parsed.Dependencies.Count() == 2);
+    CHECK(parsed.Dependencies[1].Kind == AssetDependencyKind::LogicalPath);
     REQUIRE(parsed.Outputs.Count() == 1);
     CHECK(parsed.Outputs[0].Content == manifest.Outputs[0].Content);
     StringAnsi second;

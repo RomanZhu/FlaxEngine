@@ -147,6 +147,9 @@ namespace
         case AssetImportDependencyKind::Toolchain:
             result.Kind = AssetDependencyKind::Toolchain;
             break;
+        case AssetImportDependencyKind::LogicalPath:
+            result.Kind = AssetDependencyKind::LogicalPath;
+            break;
         case AssetImportDependencyKind::SourceAsset:
         case AssetImportDependencyKind::ImportedObject:
         case AssetImportDependencyKind::ImportedArtifact:
@@ -243,7 +246,11 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
     execution->Request.JobID = Guid::New();
     execution->Request.Capability = Guid::New();
     execution->Request.SourceRevision = record.DatabaseRevision;
-    execution->Request.SourcePath = record.SourcePath.Get();
+    AssetPathPolicy::ProjectPath normalizedSource;
+    if (AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        Globals::ProjectLibraryFolder, record.SourcePath.Get(), normalizedSource, diagnostic))
+        return true;
+    execution->Request.SourcePath = normalizedSource.ProjectRelativePath;
     if (ReadSnapshot(record.SourcePath.Get(), execution->Request.SourceSnapshot, execution->Request.SourceHash,
         record.ID, record.ProcessorID, diagnostic) ||
         ReadSnapshot(record.MetaPath.Get(), execution->Request.MetaSnapshot, execution->Request.MetaHash,
@@ -348,7 +355,7 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
         for (const AssetImportDependency& source : workerResult.Dependencies)
         {
             AssetDependency dependency = ConvertDependency(source);
-            if (dependency.Kind == AssetDependencyKind::SourceFile)
+            if (dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::LogicalPath)
             {
                 AssetPathPolicy::ProjectPath normalized;
                 if (AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder,

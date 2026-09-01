@@ -541,8 +541,20 @@ DEFINE_INTERNAL_CALL(void) ScriptedImporterContextInternal_DependsOnNamed(int32 
         CurrentContext->DependsOnSearchQuery(identity, hash);
     else if (kind == 3)
         CurrentContext->DependsOnToolchain(identity, hash);
-    else
+    else if (kind == 4)
         CurrentContext->DependsOnProjectSetting(identity, hash);
+    else if (kind == 5)
+        CurrentContext->DependsOnLogicalPath();
+    else
+    {
+        AssetPipelineDiagnostic diagnostic;
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidSettingsCombination;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Prepare;
+        diagnostic.AssetGuid = CurrentContext->GetAsset().Value;
+        diagnostic.SourcePath = CurrentContext->GetSourcePath();
+        diagnostic.Message = TEXT("Scripted importer declared an unknown dependency kind.");
+        CurrentContext->AddDiagnostic(diagnostic);
+    }
 }
 
 DEFINE_INTERNAL_CALL(bool) ScriptedImporterContextInternal_DependsOnFolder(MString* pathObject)

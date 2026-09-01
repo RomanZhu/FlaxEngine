@@ -13,6 +13,7 @@ enum class AssetDependencyKind : byte
     BuildInput,
     RuntimeReference,
     Toolchain,
+    LogicalPath,
 };
 
 /// <summary>Origin retained for dependency and cycle diagnostics.</summary>

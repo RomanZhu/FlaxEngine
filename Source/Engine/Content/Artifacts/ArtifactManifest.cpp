@@ -29,6 +29,7 @@ namespace
         case AssetDependencyKind::BuildInput: return "BuildInput";
         case AssetDependencyKind::RuntimeReference: return "RuntimeReference";
         case AssetDependencyKind::Toolchain: return "Toolchain";
+        case AssetDependencyKind::LogicalPath: return "LogicalPath";
         default: return "SourceFile";
         }
     }
@@ -39,6 +40,7 @@ namespace
         else if (text == "BuildInput") kind = AssetDependencyKind::BuildInput;
         else if (text == "RuntimeReference") kind = AssetDependencyKind::RuntimeReference;
         else if (text == "Toolchain") kind = AssetDependencyKind::Toolchain;
+        else if (text == "LogicalPath") kind = AssetDependencyKind::LogicalPath;
         else return true;
         return false;
     }
@@ -129,8 +131,9 @@ bool ArtifactManifest::Validate(const StringView& path, AssetPipelineDiagnostic&
         if (dependencyIdentities.Contains(identity))
             return Fail(diagnostic, path, TEXT("Artifact manifest contains a duplicate dependency."));
         dependencyIdentities.Add(identity);
-        if ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain) && dependency.Hash.IsZero())
-            return Fail(diagnostic, path, TEXT("Artifact manifest source/toolchain dependency lacks a content hash."));
+        if ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain ||
+            dependency.Kind == AssetDependencyKind::LogicalPath) && dependency.Hash.IsZero())
+            return Fail(diagnostic, path, TEXT("Artifact manifest source/toolchain/path dependency lacks a content hash."));
         if ((dependency.Kind == AssetDependencyKind::BuildInput || dependency.Kind == AssetDependencyKind::RuntimeReference) &&
             !dependency.ObjectID.IsValid())
             return Fail(diagnostic, path, TEXT("Artifact manifest asset dependency lacks a valid object identity."));

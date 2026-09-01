@@ -446,6 +446,8 @@ namespace FlaxEditor.Content.Import
         public void DependsOnQuery(AssetQuery query) => ScriptedImporterInterop.DependsOnNamed(2, query.Expression, ScriptedImporterRegistry.HashQuery(query));
         public void DependsOnToolchain(string tool, string versionHash) => ScriptedImporterInterop.DependsOnNamed(3, tool, versionHash);
         public void DependsOnProjectSetting(string setting, string valueHash) => ScriptedImporterInterop.DependsOnNamed(4, setting, valueHash);
+        /// <summary>Declares that the asset's project-relative logical path affects importer output.</summary>
+        public void DependsOnLogicalPath() => ScriptedImporterInterop.DependsOnNamed(5, string.Empty, null);
 
         public ImportedObjectHandle AddObjectToAsset(string stableIdentifier, ImportedObjectDescriptor descriptor)
         {

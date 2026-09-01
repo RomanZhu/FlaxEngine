@@ -155,7 +155,7 @@ namespace
             dependency.OriginPath = source.Origin;
             if (source.Kind == AssetDependencyKind::SourceFile)
                 dependency.SourcePath = source.Identity;
-            else if (source.Kind == AssetDependencyKind::Toolchain)
+            else if (source.Kind == AssetDependencyKind::Toolchain || source.Kind == AssetDependencyKind::LogicalPath)
                 dependency.CustomDependency = source.Identity;
             else
             {

@@ -137,6 +137,15 @@ void AssetImportContext::DependsOnProjectSetting(const StringView& name, const C
     AddNamedDependency(AssetImportDependencyKind::ProjectSetting, name, value, origin);
 }
 
+void AssetImportContext::DependsOnLogicalPath(const StringView& origin)
+{
+    String logicalPath(_sourcePath);
+    logicalPath.Replace(TEXT('\\'), TEXT('/'));
+    const StringAnsi value(logicalPath);
+    AddNamedDependency(AssetImportDependencyKind::LogicalPath, logicalPath,
+        ContentHash::Compute(value.Get(), value.Length()), origin);
+}
+
 int32 AssetImportContext::AddObjectToAsset(const StringView& stableIdentifier, const StringView& typeName, const StringView& displayName)
 {
     if (_completed || !SubAssetPolicy::IsKeyValid(stableIdentifier) || typeName.IsEmpty())

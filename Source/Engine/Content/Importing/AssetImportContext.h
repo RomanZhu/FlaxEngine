@@ -21,6 +21,7 @@ enum class AssetImportDependencyKind : byte
     ImporterAssembly,
     BuildTarget,
     ProjectSetting,
+    LogicalPath,
 };
 
 struct FLAXENGINE_API AssetImportDependency
@@ -93,6 +94,7 @@ public:
     void DependsOnSearchQuery(const StringView& query, const ContentHash& value, const StringView& origin = StringView::Empty);
     void DependsOnToolchain(const StringView& name, const ContentHash& value, const StringView& origin = StringView::Empty);
     void DependsOnProjectSetting(const StringView& name, const ContentHash& value, const StringView& origin = StringView::Empty);
+    void DependsOnLogicalPath(const StringView& origin = StringView::Empty);
 
     int32 AddObjectToAsset(const StringView& stableIdentifier, const StringView& typeName, const StringView& displayName = StringView::Empty);
     int32 CreateOutput(const StringView& name, const StringAnsiView& kind, const StringAnsiView& extension,
