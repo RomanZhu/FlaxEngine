@@ -1085,6 +1085,11 @@ namespace FlaxEditor.Windows.Assets
 
         private void SaveBreakpoints()
         {
+            // A window can close before its asset and surface finish linking (for example, headless editor routing checks).
+            // In that state there are no loaded breakpoint nodes to persist and clearing the cache would lose valid data.
+            if (_asset == null || _isWaitingForSurfaceLoad)
+                return;
+
             try
             {
                 var breakpointsCount = 0;
