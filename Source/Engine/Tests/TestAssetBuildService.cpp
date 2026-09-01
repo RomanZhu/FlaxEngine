@@ -64,7 +64,8 @@ TEST_CASE("Asset pipeline worker count scales conservatively with physical cores
     CHECK(TexturePipelineService::CalculateWorkerCount(2) == 1);
     CHECK(TexturePipelineService::CalculateWorkerCount(4) == 2);
     CHECK(TexturePipelineService::CalculateWorkerCount(8) == 4);
-    CHECK(TexturePipelineService::CalculateWorkerCount(64) == 4);
+    CHECK(TexturePipelineService::CalculateWorkerCount(16) == 8);
+    CHECK(TexturePipelineService::CalculateWorkerCount(64) == 8);
 }
 #endif
 

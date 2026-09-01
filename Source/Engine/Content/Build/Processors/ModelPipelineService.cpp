@@ -51,6 +51,7 @@ namespace
         SourceHashCache HashCache;
         Dictionary<Guid, AssetBuildRequestHandle> Handles;
         Dictionary<Guid, Array<AssetBuildRequestHandle>> FamilyHandles;
+        HashSet<Guid> CurrentAssets;
         Dictionary<Guid, ArtifactKey> Fingerprints;
         Dictionary<Guid, std::shared_ptr<std::mutex>> SourceLockers;
         uint64 ForceGeneration = 0;
@@ -417,13 +418,22 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     }
 
     Array<ArtifactResolutionPlan> plans;
+    Array<Guid> planAssetIDs;
+    Array<Guid> currentAssetIDs;
     plans.EnsureCapacity(records.Count());
+    planAssetIDs.EnsureCapacity(records.Count());
+    currentAssetIDs.EnsureCapacity(records.Count());
     for (const AssetRecord& current : records)
     {
         request.Object = AssetObjectId(AssetGuid(current.SourceAssetID), current.LocalId);
         ArtifactResolutionPlan plan;
         if (CreatePlan(current, request, plan, diagnostic))
             return true;
+        if (!force && ArtifactResolver::Get().IsExactCurrent(request, plan.CurrentInputFingerprint))
+        {
+            currentAssetIDs.Add(current.ID);
+            continue;
+        }
         plan.BuildRequest.Priority = priority;
         if (force)
         {
@@ -434,6 +444,7 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
             plan.BuildRequest.RebuildReason = TEXT("Explicit model family rebuild.");
         }
         plans.Add(MoveTemp(plan));
+        planAssetIDs.Add(current.ID);
     }
 
     Array<AssetBuildRequestHandle> familyHandles;
@@ -443,7 +454,7 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
         const AssetBuildRequestHandle handle = builds->Request(plans[i].BuildRequest);
         if (!handle.IsValid())
             return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, AssetPipelineDiagnosticStage::Build,
-                records[i].ID, TEXT("Model family build request was not accepted."));
+                planAssetIDs[i], TEXT("Model family build request was not accepted."));
         familyHandles.Add(handle);
         AssetBuildJobResult immediate;
         if (handle.TryGetResult(immediate) && immediate.Status == AssetBuildJobStatus::Failed)
@@ -455,10 +466,24 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     {
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
-        for (int32 i = 0; i < records.Count(); i++)
-            state.Handles[records[i].ID] = familyHandles[i];
+        for (const Guid& currentID : currentAssetIDs)
+        {
+            state.Handles.Remove(currentID);
+            state.CurrentAssets.Add(currentID);
+        }
+        for (int32 i = 0; i < planAssetIDs.Count(); i++)
+        {
+            state.Handles[planAssetIDs[i]] = familyHandles[i];
+            state.CurrentAssets.Remove(planAssetIDs[i]);
+        }
         if (record.IsMainAsset())
+        {
             state.FamilyHandles[record.ID] = familyHandles;
+            if (familyHandles.IsEmpty())
+                state.CurrentAssets.Add(record.ID);
+            else
+                state.CurrentAssets.Remove(record.ID);
+        }
     }
     diagnostic = AssetPipelineDiagnostic();
     return false;
@@ -467,9 +492,11 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
 AssetBuildJobStatus ModelPipelineService::GetStatus(const Guid& assetID, AssetPipelineDiagnostic& diagnostic)
 {
     Array<AssetBuildRequestHandle> handles;
+    bool current = false;
     {
         ModelPipelineState& state = State();
         std::lock_guard<std::mutex> lock(state.Locker);
+        current = state.CurrentAssets.Contains(assetID);
         const Array<AssetBuildRequestHandle>* family = state.FamilyHandles.TryGet(assetID);
         if (family)
         {
@@ -485,7 +512,7 @@ AssetBuildJobStatus ModelPipelineService::GetStatus(const Guid& assetID, AssetPi
     if (handles.IsEmpty())
     {
         diagnostic = AssetPipelineDiagnostic();
-        return AssetBuildJobStatus::Invalid;
+        return current ? AssetBuildJobStatus::Succeeded : AssetBuildJobStatus::Invalid;
     }
 
     AssetBuildJobStatus aggregate = AssetBuildJobStatus::Succeeded;
@@ -563,6 +590,7 @@ void ModelPipelineService::Shutdown()
             return;
         state.Handles.Clear();
         state.FamilyHandles.Clear();
+        state.CurrentAssets.Clear();
         state.Fingerprints.Clear();
         state.SourceLockers.Clear();
         registration = MoveTemp(state.Registration);

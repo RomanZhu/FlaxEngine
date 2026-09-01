@@ -62,6 +62,9 @@ public:
     /// <summary>Resolves one physical output. Returns true on failure.</summary>
     bool Resolve(const ArtifactRequest& request, ResolvedArtifact& result, AssetPipelineDiagnostic& diagnostic);
 
+    /// <summary>Checks one already-planned output without rebuilding its plan.</summary>
+    bool IsExactCurrent(const ArtifactRequest& request, const ArtifactKey& inputFingerprint) const;
+
     /// <summary>Resolves canonical identity and physical storage for Content/factory loading.</summary>
     bool ResolveLoadLocation(const ArtifactRequest& request, AssetLoadLocation& result, AssetPipelineDiagnostic& diagnostic);
 };

@@ -2912,9 +2912,11 @@ namespace FlaxEditor.Modules
             if (ids.Length == 0 || !TryGetMainRecord(ids[0], out var record) || !CanBuildCanonicalRecord(record) || record.Status != AssetRecordStatus.Ready)
                 return;
             _canonicalBuildTaskPath = record.SourcePath;
-            _canonicalBuildTask = Task.Run(() => AssetPipelineService.IsArtifactCurrent(ids[0])
-                ? false
-                : AssetPipelineService.BuildAsset(ids[0]));
+            _canonicalBuildTask = Task.Run(() => record.ProcessorID == "Flax.Model"
+                ? AssetPipelineService.BuildAsset(ids[0])
+                : AssetPipelineService.IsArtifactCurrent(ids[0])
+                    ? false
+                    : AssetPipelineService.BuildAsset(ids[0]));
         }
 
         private bool TrySuppressSelfAuthoredDiskChange(string path, DateTime now)

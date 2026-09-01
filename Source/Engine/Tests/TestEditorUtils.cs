@@ -7,6 +7,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
 using FlaxEditor.GUI.ContextMenu;
@@ -105,6 +106,12 @@ namespace FlaxEngine.Tests
                     Assert.AreEqual(value2, value1);
                 }
             }
+        }
+
+        [Test]
+        public void TestContentImporterCoordinatorDoesNotPreemptEditorWork()
+        {
+            Assert.AreEqual(ThreadPriority.BelowNormal, ContentImportingModule.WorkerThreadPriority);
         }
 
         [Test]

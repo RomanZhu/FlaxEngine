@@ -145,6 +145,19 @@ bool ArtifactResolver::IsConfigured() const
     return _database && _buildService && !_libraryRoot.IsEmpty() && _planProvider.IsBinded();
 }
 
+bool ArtifactResolver::IsExactCurrent(const ArtifactRequest& request, const ArtifactKey& inputFingerprint) const
+{
+    if (!IsConfigured() || !request.Object.IsValid() || request.OutputKind.IsEmpty() || inputFingerprint.IsZero())
+        return false;
+    AssetRecord record;
+    if (!_database->TryGetRecord(request.Object, record))
+        return false;
+    ArtifactInspection inspection;
+    Inspect(_libraryRoot, record, request, inspection);
+    const bool compatibilityMatches = request.RequiredCompatibility.IsEmpty() || inspection.IsCompatible;
+    return inspection.HasOutput && compatibilityMatches && inspection.Manifest.InputFingerprint == inputFingerprint;
+}
+
 bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact& result, AssetPipelineDiagnostic& diagnostic)
 {
     result = ResolvedArtifact();

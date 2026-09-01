@@ -449,7 +449,7 @@ bool TexturePipelineService::CreatePlan(const AssetRecord& record, const Artifac
 
 int32 TexturePipelineService::CalculateWorkerCount(uint32 processorCoreCount)
 {
-    return Math::Clamp<int32>(static_cast<int32>(processorCoreCount / 2), 1, 4);
+    return Math::Clamp<int32>(static_cast<int32>(processorCoreCount / 2), 1, 8);
 }
 
 bool TexturePipelineService::RequestBuild(const Guid& assetID, bool force, AssetPipelineDiagnostic& diagnostic,

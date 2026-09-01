@@ -19,6 +19,8 @@ namespace FlaxEditor.Modules
     /// <seealso cref="FlaxEditor.Modules.EditorModule" />
     public sealed class ContentImportingModule : EditorModule
     {
+        internal static ThreadPriority WorkerThreadPriority => ThreadPriority.BelowNormal;
+
         private sealed class InPlaceCanonicalImportEntry : IFileEntryAction
         {
             public string SourceUrl { get; }
@@ -1162,7 +1164,9 @@ namespace FlaxEditor.Modules
             _workerThread = new Thread(WorkerMain)
             {
                 Name = "Content Importer",
-                Priority = ThreadPriority.Highest
+                // Canonical source analysis can be CPU-intensive. Keep the Editor responsive while
+                // the build service processes independent source groups concurrently.
+                Priority = WorkerThreadPriority
             };
             _workerThread.Start();
         }
