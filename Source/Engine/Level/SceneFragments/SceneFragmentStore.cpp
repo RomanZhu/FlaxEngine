@@ -22,7 +22,7 @@ namespace
     constexpr const Char* IndexFileName = TEXT("scene-fragments.index");
     constexpr const Char* FragmentExtension = TEXT(".sceneactor");
     constexpr uint32 TransactionJournalMagic = 0x4A465353; // SSFJ
-    constexpr uint32 TransactionJournalVersion = 1;
+    constexpr uint32 TransactionJournalVersion = 2;
     CriticalSection TransactionLocker;
 
     enum class TransactionPhase : byte
@@ -53,6 +53,7 @@ namespace
         bool RemoveStore = false;
         String StorePath;
         Array<TransactionEntry> Entries;
+        Array<String> RemovedStores;
     };
 
     class JournalWriter
@@ -259,6 +260,9 @@ namespace
             writer.Byte(entry.Existed ? 1 : 0);
             writer.StringValue(entry.Destination);
         }
+        writer.UInt32(journal.RemovedStores.Count());
+        for (const String& store : journal.RemovedStores)
+            writer.StringValue(store);
         const String path = String(directory) / TEXT("journal.bin");
         const String staging = path + TEXT(".tmp");
         if (WriteDurable(staging, writer.Data.Get(), writer.Data.Count()) ||
@@ -284,7 +288,7 @@ namespace
         byte removeStore;
         if (reader.UInt32(magic) || reader.UInt32(version) || reader.Byte(phase) || reader.Byte(removeStore) ||
             reader.GuidValue(journal.TransactionId) || reader.StringValue(journal.StorePath) || reader.UInt32(count) ||
-            magic != TransactionJournalMagic || version != TransactionJournalVersion ||
+            magic != TransactionJournalMagic || (version != 1 && version != TransactionJournalVersion) ||
             phase > static_cast<byte>(TransactionPhase::Committed) || removeStore > 1 || count > 100000)
         {
             return Fail(error, TEXT("Scene save transaction journal is malformed or unsupported."));
@@ -295,7 +299,8 @@ namespace
         FileSystem::NormalizePath(normalizedStore);
         const String fragmentRoot = SceneFragmentStore::GetRootPath();
         if (!journal.TransactionId.IsValid() || normalizedStore != journal.StorePath ||
-            StringUtils::GetDirectoryName(normalizedStore).Compare(StringView(fragmentRoot), StringSearchCase::IgnoreCase) != 0)
+            (normalizedStore != fragmentRoot &&
+             StringUtils::GetDirectoryName(normalizedStore).Compare(StringView(fragmentRoot), StringSearchCase::IgnoreCase) != 0))
         {
             return Fail(error, TEXT("Scene save transaction journal contains invalid ownership."));
         }
@@ -313,6 +318,32 @@ namespace
             entry.Kind = static_cast<TransactionEntryKind>(kind);
             entry.Existed = existed != 0;
             journal.Entries.Add(MoveTemp(entry));
+        }
+        if (version >= 2)
+        {
+            uint32 removedStoreCount;
+            if (reader.UInt32(removedStoreCount) || removedStoreCount > 100000)
+                return Fail(error, TEXT("Scene save transaction journal has an invalid removed-store count."));
+            HashSet<String> removedStores;
+            for (uint32 i = 0; i < removedStoreCount; i++)
+            {
+                String store;
+                if (reader.StringValue(store))
+                    return Fail(error, TEXT("Scene save transaction journal contains an invalid removed store."));
+                String normalized(store);
+                FileSystem::NormalizePath(normalized);
+                if (normalized != store ||
+                    StringUtils::GetDirectoryName(normalized).Compare(StringView(fragmentRoot), StringSearchCase::IgnoreCase) != 0 ||
+                    !removedStores.Add(normalized))
+                {
+                    return Fail(error, TEXT("Scene save transaction journal contains an invalid removed store."));
+                }
+                journal.RemovedStores.Add(MoveTemp(store));
+            }
+        }
+        else if (journal.RemoveStore)
+        {
+            journal.RemovedStores.Add(journal.StorePath);
         }
         if (!reader.AtEnd())
             return Fail(error, TEXT("Scene save transaction journal has trailing data."));
@@ -334,8 +365,14 @@ namespace
                 AssetPathPolicy::IsSameOrChild(journal.Entries[i].Destination, journal.StorePath))
                 DurableDeleteDirectory(StringUtils::GetDirectoryName(journal.Entries[i].Destination), false);
         }
-        if (committed && journal.RemoveStore && FileSystem::DirectoryExists(journal.StorePath))
-            failed |= DurableDeleteDirectory(journal.StorePath, true);
+        if (committed)
+        {
+            for (const String& store : journal.RemovedStores)
+            {
+                if (FileSystem::DirectoryExists(store))
+                    failed |= DurableDeleteDirectory(store, true);
+            }
+        }
         else if (!committed && FileSystem::DirectoryExists(journal.StorePath))
             DurableDeleteDirectory(journal.StorePath, false);
         if (!failed && FileSystem::DirectoryExists(directory))
@@ -910,8 +947,29 @@ namespace
         journal.Entries.Add(MoveTemp(entry));
     }
 
-    bool PublishTransaction(TransactionJournal& journal, const SceneFragmentSavePlan& plan,
-        const SceneSourceRevision* expectedSource, const StringView& scenePath, String& error,
+    struct PreparedCommit
+    {
+        const SceneFragmentSavePlan* Plan = nullptr;
+        String ScenePath;
+        const void* SceneData = nullptr;
+        int32 SceneDataLength = 0;
+        const SceneSourceRevision* ExpectedSource = nullptr;
+    };
+
+    bool ValidateExpectedState(const Array<PreparedCommit>& commits, String& error)
+    {
+        for (const PreparedCommit& commit : commits)
+        {
+            if ((commit.ExpectedSource && ValidateExpectedSource(commit.ScenePath, *commit.ExpectedSource, error)) ||
+                ValidateExpectedIndex(*commit.Plan, error))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool PublishTransaction(TransactionJournal& journal, const Array<PreparedCommit>& commits, String& error,
         SceneFragmentTransactionFailurePoint failurePoint)
     {
         const String directory = GetTransactionDirectory(journal.TransactionId);
@@ -933,8 +991,7 @@ namespace
             }
         }
 
-        if ((expectedSource && ValidateExpectedSource(scenePath, *expectedSource, error)) ||
-            ValidateExpectedIndex(plan, error))
+        if (ValidateExpectedState(commits, error))
         {
             CleanupTransaction(directory, journal, false);
             return true;
@@ -990,65 +1047,113 @@ namespace
         return false;
     }
 
+    bool CommitPreparedPlans(const Array<PreparedCommit>& commits,
+        String& error, SceneFragmentTransactionFailurePoint failurePoint)
+    {
+        error.Clear();
+        if (commits.IsEmpty())
+            return false;
+        if (RecoverAllTransactions(error))
+            return true;
+
+        HashSet<Guid> owners;
+        HashSet<String> sourcePaths;
+        HashSet<String> destinations;
+        for (const PreparedCommit& commit : commits)
+        {
+            if (!commit.Plan)
+                return Fail(error, TEXT("Scene fragment save batch contains a missing plan."));
+            const SceneFragmentSavePlan& plan = *commit.Plan;
+            if (!plan.OwnerSceneGuid.IsValid() || !owners.Add(plan.OwnerSceneGuid) ||
+                (plan.RemoveStore && plan.IndexData.HasItems()) || (!plan.RemoveStore && plan.IndexData.IsEmpty()))
+            {
+                return Fail(error, TEXT("Scene fragment save batch contains an invalid or duplicate plan."));
+            }
+            if (commit.ExpectedSource)
+            {
+                if (!commit.SceneData || commit.SceneDataLength <= 0 || commit.ScenePath.IsEmpty() ||
+                    !AssetPathPolicy::IsSameOrChild(commit.ScenePath, Globals::ProjectContentFolder) ||
+                    !sourcePaths.Add(commit.ScenePath))
+                {
+                    return Fail(error, TEXT("Scene save batch contains an invalid or duplicate source."));
+                }
+            }
+        }
+        if (ValidateExpectedState(commits, error))
+            return true;
+
+        TransactionJournal journal;
+        journal.TransactionId = Guid::New();
+        journal.StorePath = SceneFragmentStore::GetRootPath();
+        for (const PreparedCommit& commit : commits)
+        {
+            const SceneFragmentSavePlan& plan = *commit.Plan;
+            const String storePath = SceneFragmentStore::GetScenePath(plan.OwnerSceneGuid);
+            for (const PreparedSceneFragment& fragment : plan.Fragments)
+            {
+                const String destination = storePath / fragment.RelativePhysicalPath;
+                String normalized(destination);
+                FileSystem::NormalizePath(normalized);
+                if (!AssetPathPolicy::IsSameOrChild(normalized, storePath) ||
+                    !fragment.RelativePhysicalPath.EndsWith(FragmentExtension, StringSearchCase::IgnoreCase) ||
+                    fragment.Data.IsEmpty() || ContentHash::Compute(fragment.Data.Get(), fragment.Data.Count()) != fragment.Content ||
+                    !destinations.Add(normalized))
+                {
+                    return Fail(error, TEXT("Scene fragment save plan contains an invalid prepared fragment."));
+                }
+                AddReplace(journal, normalized, fragment.Data.Get(), fragment.Data.Count());
+            }
+            for (const String& relativePath : plan.RemovedFragments)
+            {
+                const String destination = storePath / relativePath;
+                String normalized(destination);
+                FileSystem::NormalizePath(normalized);
+                if (!AssetPathPolicy::IsSameOrChild(normalized, storePath) ||
+                    !relativePath.EndsWith(FragmentExtension, StringSearchCase::IgnoreCase) ||
+                    !destinations.Add(normalized))
+                {
+                    return Fail(error, TEXT("Scene fragment save plan contains an invalid removal."));
+                }
+                AddDelete(journal, normalized);
+            }
+
+            const String indexPath = SceneFragmentStore::GetIndexPath(plan.OwnerSceneGuid);
+            if (!destinations.Add(indexPath))
+                return Fail(error, TEXT("Scene save batch contains a duplicate fragment index destination."));
+            if (plan.RemoveStore)
+            {
+                AddDelete(journal, indexPath);
+                journal.RemovedStores.Add(storePath);
+            }
+            else
+            {
+                AddReplace(journal, indexPath, plan.IndexData.Get(), plan.IndexData.Count());
+            }
+            if (commit.ExpectedSource)
+            {
+                if (!destinations.Add(commit.ScenePath))
+                    return Fail(error, TEXT("Scene save batch contains a duplicate destination."));
+                AddReplace(journal, commit.ScenePath, commit.SceneData, commit.SceneDataLength);
+            }
+        }
+        if (journal.Entries.IsEmpty() && journal.RemovedStores.IsEmpty())
+            return false;
+        return PublishTransaction(journal, commits, error, failurePoint);
+    }
+
     bool CommitPreparedPlan(const SceneFragmentSavePlan& plan, const StringView& scenePath,
         const void* sceneData, int32 sceneDataLength, const SceneSourceRevision* expectedSource,
         String& error, SceneFragmentTransactionFailurePoint failurePoint)
     {
-        error.Clear();
-        if (!plan.OwnerSceneGuid.IsValid() || (plan.RemoveStore && plan.IndexData.HasItems()) ||
-            (!plan.RemoveStore && plan.IndexData.IsEmpty()))
-        {
-            return Fail(error, TEXT("Scene fragment save plan is invalid."));
-        }
-        if (RecoverAllTransactions(error) || ValidateExpectedIndex(plan, error) ||
-            (expectedSource && ValidateExpectedSource(scenePath, *expectedSource, error)))
-        {
-            return true;
-        }
-
-        TransactionJournal journal;
-        journal.TransactionId = Guid::New();
-        journal.RemoveStore = plan.RemoveStore;
-        journal.StorePath = SceneFragmentStore::GetScenePath(plan.OwnerSceneGuid);
-        HashSet<String> destinations;
-        for (const PreparedSceneFragment& fragment : plan.Fragments)
-        {
-            const String destination = journal.StorePath / fragment.RelativePhysicalPath;
-            String normalized(destination);
-            FileSystem::NormalizePath(normalized);
-            if (!AssetPathPolicy::IsSameOrChild(normalized, journal.StorePath) ||
-                !fragment.RelativePhysicalPath.EndsWith(FragmentExtension, StringSearchCase::IgnoreCase) ||
-                fragment.Data.IsEmpty() || ContentHash::Compute(fragment.Data.Get(), fragment.Data.Count()) != fragment.Content ||
-                !destinations.Add(normalized))
-            {
-                return Fail(error, TEXT("Scene fragment save plan contains an invalid prepared fragment."));
-            }
-            AddReplace(journal, normalized, fragment.Data.Get(), fragment.Data.Count());
-        }
-        for (const String& relativePath : plan.RemovedFragments)
-        {
-            const String destination = journal.StorePath / relativePath;
-            String normalized(destination);
-            FileSystem::NormalizePath(normalized);
-            if (!AssetPathPolicy::IsSameOrChild(normalized, journal.StorePath) ||
-                !relativePath.EndsWith(FragmentExtension, StringSearchCase::IgnoreCase) ||
-                !destinations.Add(normalized))
-            {
-                return Fail(error, TEXT("Scene fragment save plan contains an invalid removal."));
-            }
-            AddDelete(journal, normalized);
-        }
-
-        const String indexPath = SceneFragmentStore::GetIndexPath(plan.OwnerSceneGuid);
-        if (plan.RemoveStore)
-            AddDelete(journal, indexPath);
-        else
-            AddReplace(journal, indexPath, plan.IndexData.Get(), plan.IndexData.Count());
-        if (expectedSource)
-            AddReplace(journal, scenePath, sceneData, sceneDataLength);
-        if (journal.Entries.IsEmpty() && !plan.RemoveStore)
-            return false;
-        return PublishTransaction(journal, plan, expectedSource, scenePath, error, failurePoint);
+        PreparedCommit commit;
+        commit.Plan = &plan;
+        commit.ScenePath = scenePath;
+        commit.SceneData = sceneData;
+        commit.SceneDataLength = sceneDataLength;
+        commit.ExpectedSource = expectedSource;
+        Array<PreparedCommit> commits;
+        commits.Add(MoveTemp(commit));
+        return CommitPreparedPlans(commits, error, failurePoint);
     }
 }
 
@@ -1062,6 +1167,26 @@ bool SceneFragmentStore::CommitSceneSave(const StringView& scenePath, const void
         return Fail(error, TEXT("Scene save destination or serialized data is invalid."));
     ScopeLock lock(TransactionLocker);
     return CommitPreparedPlan(plan, normalized, sceneData, sceneDataLength, &expectedSource, error, failurePoint);
+}
+
+bool SceneFragmentStore::CommitSceneSaves(const Array<PreparedSceneSave>& saves, String& error,
+    SceneFragmentTransactionFailurePoint failurePoint)
+{
+    Array<PreparedCommit> commits;
+    commits.EnsureCapacity(saves.Count());
+    for (const PreparedSceneSave& save : saves)
+    {
+        PreparedCommit commit;
+        commit.Plan = &save.FragmentPlan;
+        commit.ScenePath = save.SourcePath;
+        FileSystem::NormalizePath(commit.ScenePath);
+        commit.SceneData = save.SourceData.Get();
+        commit.SceneDataLength = save.SourceData.Count();
+        commit.ExpectedSource = &save.ExpectedSource;
+        commits.Add(MoveTemp(commit));
+    }
+    ScopeLock lock(TransactionLocker);
+    return CommitPreparedPlans(commits, error, failurePoint);
 }
 
 bool SceneFragmentStore::RecoverIncompleteTransactions(String& error)

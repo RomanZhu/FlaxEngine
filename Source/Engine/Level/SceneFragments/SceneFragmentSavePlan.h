@@ -34,6 +34,15 @@ struct FLAXENGINE_API SceneFragmentSavePlan
     Array<byte> IndexData;
 };
 
+/// <summary>One fully prepared scene source and private-fragment update.</summary>
+struct FLAXENGINE_API PreparedSceneSave
+{
+    String SourcePath;
+    Array<byte> SourceData;
+    SceneSourceRevision ExpectedSource;
+    SceneFragmentSavePlan FragmentPlan;
+};
+
 /// <summary>Test-only interruption points that leave durable recovery state behind.</summary>
 enum class SceneFragmentTransactionFailurePoint : byte
 {

@@ -361,21 +361,28 @@ namespace FlaxEditor.Modules
             if (!IsEdited())
                 return;
 
-            var queued = 0;
+            var scenes = new List<Scene>();
+            var injectedFailure = false;
             foreach (var scene in Root.ChildNodes)
             {
                 if (scene is SceneNode node && node.IsEdited)
                 {
                     QueueSaveCompletion(node);
                     if (SceneSaveFaults.ShouldFail(node.Scene))
-                        OnSceneSaveError(node.Scene, node.Scene.ID);
-                    else
-                        Level.SaveSceneAsync(node.Scene);
-                    queued++;
+                        injectedFailure = true;
+                    scenes.Add(node.Scene);
                 }
             }
-            if (queued != 0)
+            if (injectedFailure)
+            {
+                foreach (var scene in scenes)
+                    OnSceneSaveError(scene, scene.ID);
+            }
+            else if (scenes.Count != 0)
+            {
+                Level.SaveScenesAsync(scenes.ToArray());
                 Editor.UI.AddStatusMessage("Saving scenes...");
+            }
         }
 
         private void QueueSaveCompletion(SceneNode scene)
@@ -826,7 +833,8 @@ namespace FlaxEditor.Modules
             // Force viewport UI to have fixed size during scene/prefabs saving to result in stable data (less mess in version control diffs)
             if (_uiRootSizes == null)
                 _uiRootSizes = new Dictionary<ContainerControl, Float2>();
-            _uiRootSizes[uiRoot] = uiRoot.Size;
+            if (!_uiRootSizes.ContainsKey(uiRoot))
+                _uiRootSizes[uiRoot] = uiRoot.Size;
             uiRoot.Size = new Float2(1920, 1080);
         }
 

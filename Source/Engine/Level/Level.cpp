@@ -747,6 +747,7 @@ namespace LevelImpl
     bool unloadScenes();
     bool saveScene(Scene* scene);
     bool saveScene(Scene* scene, const String& path);
+    bool saveScenes(const Array<Scene*>& scenes);
     bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson,
         bool useExternalActorsStorage = true, SceneFragmentSavePlan* fragmentPlan = nullptr);
     bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool prettyJson,
@@ -1109,6 +1110,27 @@ public:
         if (saveScene(TargetScene))
         {
             LOG(Error, "Failed to save scene {0}", TargetScene ? TargetScene->GetName() : String::Empty);
+            return SceneResult::Failed;
+        }
+        return SceneResult::Success;
+    }
+};
+
+class SaveScenesAction : public SceneAction
+{
+public:
+    Array<Scene*> TargetScenes;
+
+    explicit SaveScenesAction(const Array<Scene*>& scenes)
+        : TargetScenes(scenes)
+    {
+    }
+
+    SceneResult Do(Context& context) override
+    {
+        if (saveScenes(TargetScenes))
+        {
+            LOG(Error, "Failed to save scene batch.");
             return SceneResult::Failed;
         }
         return SceneResult::Success;
@@ -2082,6 +2104,75 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     return false;
 }
 
+bool LevelImpl::saveScenes(const Array<Scene*>& scenes)
+{
+#if USE_EDITOR
+    PROFILE_CPU_NAMED("Level.SaveScenes");
+    if (scenes.IsEmpty())
+        return false;
+
+    const auto failBatch = [&scenes](const StringView& error)
+    {
+        LOG(Error, "Cannot save scene batch: {0}", error);
+        for (Scene* scene : scenes)
+        {
+            if (scene)
+                CallSceneEvent(SceneEventType::OnSceneSaveError, scene, scene->GetID());
+        }
+        return true;
+    };
+
+    Array<PreparedSceneSave> saves;
+    saves.Resize(scenes.Count());
+    HashSet<Guid> sceneIds;
+    String error;
+    for (int32 i = 0; i < scenes.Count(); i++)
+    {
+        Scene* scene = scenes[i];
+        if (!scene || EnumHasAnyFlags(scene->Flags, ObjectFlags::WasMarkedToDelete) ||
+            !sceneIds.Add(scene->GetID()) || scene->GetPath().IsEmpty())
+        {
+            return failBatch(TEXT("The scene list contains a missing, deleted, duplicate, or unsaved scene."));
+        }
+        PreparedSceneSave& save = saves[i];
+        save.SourcePath = scene->GetPath();
+        if (SceneFragmentStore::CaptureSourceRevision(save.SourcePath, save.ExpectedSource, error))
+            return failBatch(error);
+    }
+
+    Stopwatch stopwatch;
+    for (int32 i = 0; i < scenes.Count(); i++)
+    {
+        Scene* scene = scenes[i];
+        LOG(Info, "Preparing scene {0} for atomic batch save to '{1}'", scene->GetName(), saves[i].SourcePath);
+        rapidjson_flax::StringBuffer buffer;
+        if (saveScene(scene, buffer, true, true, &saves[i].FragmentPlan))
+            return failBatch(TEXT("A scene could not be serialized."));
+        saves[i].SourceData.Set(reinterpret_cast<const byte*>(buffer.GetString()), static_cast<int32>(buffer.GetSize()));
+    }
+
+    if (SceneFragmentStore::CommitSceneSaves(saves, error))
+        return failBatch(error);
+
+    stopwatch.Stop();
+    LOG(Info, "Saved {0} scenes atomically. Time {1}ms", scenes.Count(), stopwatch.GetMilliseconds());
+    for (Scene* scene : scenes)
+    {
+        const Guid sceneId = scene->GetID();
+        Asset* asset = Content::GetRuntimeObject(sceneId);
+        if (!asset)
+            asset = Content::GetAsset(scene->GetPath());
+        if (asset)
+            asset->Reload();
+        CallSceneEvent(SceneEventType::OnSceneSaved, scene, sceneId);
+    }
+    return false;
+#else
+    LOG(Error, "Cannot save scene batches to cooked content.");
+    return true;
+#endif
+}
+
 bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson,
     bool useExternalActorsStorage, SceneFragmentSavePlan* fragmentPlan)
 {
@@ -2287,23 +2378,30 @@ void Level::SaveSceneAsync(Scene* scene)
     _sceneActions.Enqueue(New<SaveSceneAction>(scene));
 }
 
+bool Level::SaveScenes(const Array<Scene*>& scenes)
+{
+    ScopeLock lock(_sceneActionsLocker);
+    SceneAction::Context context;
+    return SaveScenesAction(scenes).Do(context) != SceneResult::Success;
+}
+
+void Level::SaveScenesAsync(const Array<Scene*>& scenes)
+{
+    ScopeLock lock(_sceneActionsLocker);
+    _sceneActions.Enqueue(New<SaveScenesAction>(scenes));
+}
+
 bool Level::SaveAllScenes()
 {
     ScopeLock lock(_sceneActionsLocker);
     SceneAction::Context context;
-    for (int32 i = 0; i < Scenes.Count(); i++)
-    {
-        if (SaveSceneAction(Scenes[i]).Do(context) != SceneResult::Success)
-            return true;
-    }
-    return false;
+    return SaveScenesAction(Scenes).Do(context) != SceneResult::Success;
 }
 
 void Level::SaveAllScenesAsync()
 {
     ScopeLock lock(_sceneActionsLocker);
-    for (int32 i = 0; i < Scenes.Count(); i++)
-        _sceneActions.Enqueue(New<SaveSceneAction>(Scenes[i]));
+    _sceneActions.Enqueue(New<SaveScenesAction>(Scenes));
 }
 
 bool Level::LoadScene(const Guid& id)

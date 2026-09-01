@@ -34,6 +34,19 @@ namespace
         return a.Length() == b.Length() &&
                (a.Length() == 0 || Platform::MemoryCompare(a.Get(), b.Get(), a.Length()) == 0);
     }
+
+    void PrepareSceneSave(const Guid& sceneGuid, const StringView& scenePath, const char* fragmentName,
+        const char* sceneData, PreparedSceneSave& save)
+    {
+        String error;
+        save = PreparedSceneSave();
+        save.SourcePath = scenePath;
+        REQUIRE(!SceneFragmentStore::CaptureSourceRevision(scenePath, save.ExpectedSource, error));
+        Array<SceneFragmentWrite> writes;
+        writes.Add(MakeFragmentWrite(fragmentName));
+        REQUIRE(!SceneFragmentStore::PrepareSave(sceneGuid, writes, save.FragmentPlan, error));
+        save.SourceData.Set(reinterpret_cast<const byte*>(sceneData), StringAnsiView(sceneData).Length());
+    }
 }
 
 TEST_CASE("Scene fragment save transaction recovery")
@@ -130,6 +143,82 @@ TEST_CASE("Scene fragment save transaction recovery")
     REQUIRE(!SceneFragmentStore::CommitSceneSave(scenePath, internalScene, ARRAY_COUNT(internalScene) - 1,
         expectedSource, deletePlan, error));
     CHECK(!FileSystem::DirectoryExists(SceneFragmentStore::GetScenePath(sceneGuid)));
+}
+
+TEST_CASE("Scene fragment batch save transaction is atomic")
+{
+    const Guid sceneGuids[] = { Guid::New(), Guid::New() };
+    const String scenePaths[] = {
+        Globals::ProjectContentFolder / TEXT("__SceneFragmentBatchA.scene"),
+        Globals::ProjectContentFolder / TEXT("__SceneFragmentBatchB.scene"),
+    };
+    for (int32 i = 0; i < 2; i++)
+    {
+        FileSystem::DeleteFile(scenePaths[i]);
+        FileSystem::DeleteDirectory(SceneFragmentStore::GetScenePath(sceneGuids[i]), true);
+    }
+    SCOPE_EXIT
+    {
+        String recoveryError;
+        SceneFragmentStore::RecoverIncompleteTransactions(recoveryError);
+        for (int32 i = 0; i < 2; i++)
+        {
+            FileSystem::DeleteFile(scenePaths[i]);
+            FileSystem::DeleteDirectory(SceneFragmentStore::GetScenePath(sceneGuids[i]), true);
+        }
+    };
+
+    String error;
+    Array<PreparedSceneSave> saves;
+    saves.Resize(2);
+    PrepareSceneSave(sceneGuids[0], scenePaths[0], "old-a", "old-scene-a", saves[0]);
+    PrepareSceneSave(sceneGuids[1], scenePaths[1], "old-b", "old-scene-b", saves[1]);
+    REQUIRE(!SceneFragmentStore::CommitSceneSaves(saves, error));
+
+    BytesContainer oldSources[2];
+    BytesContainer oldIndexes[2];
+    BytesContainer oldFragments[2];
+    for (int32 i = 0; i < 2; i++)
+    {
+        ReadBytes(scenePaths[i], oldSources[i]);
+        ReadBytes(SceneFragmentStore::GetIndexPath(sceneGuids[i]), oldIndexes[i]);
+        ReadBytes(SceneFragmentStore::GetScenePath(sceneGuids[i]) /
+            SceneFragmentStore::GetRelativeFragmentPath(2), oldFragments[i]);
+    }
+
+    PrepareSceneSave(sceneGuids[0], scenePaths[0], "new-a", "new-scene-a", saves[0]);
+    PrepareSceneSave(sceneGuids[1], scenePaths[1], "new-b", "new-scene-b", saves[1]);
+    REQUIRE(SceneFragmentStore::CommitSceneSaves(saves, error,
+        SceneFragmentTransactionFailurePoint::AfterFirstApply));
+    REQUIRE(!SceneFragmentStore::RecoverIncompleteTransactions(error));
+
+    for (int32 i = 0; i < 2; i++)
+    {
+        BytesContainer source;
+        BytesContainer index;
+        BytesContainer fragment;
+        ReadBytes(scenePaths[i], source);
+        ReadBytes(SceneFragmentStore::GetIndexPath(sceneGuids[i]), index);
+        ReadBytes(SceneFragmentStore::GetScenePath(sceneGuids[i]) /
+            SceneFragmentStore::GetRelativeFragmentPath(2), fragment);
+        CHECK(SameBytes(oldSources[i], source));
+        CHECK(SameBytes(oldIndexes[i], index));
+        CHECK(SameBytes(oldFragments[i], fragment));
+    }
+
+    PrepareSceneSave(sceneGuids[0], scenePaths[0], "new-a", "new-scene-a", saves[0]);
+    PrepareSceneSave(sceneGuids[1], scenePaths[1], "new-b", "new-scene-b", saves[1]);
+    REQUIRE(!SceneFragmentStore::CommitSceneSaves(saves, error));
+    for (int32 i = 0; i < 2; i++)
+    {
+        BytesContainer source;
+        ReadBytes(scenePaths[i], source);
+        CHECK_FALSE(SameBytes(oldSources[i], source));
+        SceneFragmentIndex index;
+        Array<Array<byte>> fragments;
+        REQUIRE(!SceneFragmentStore::Load(sceneGuids[i], index, fragments, error));
+        REQUIRE(fragments.Count() == 1);
+    }
 }
 
 #endif

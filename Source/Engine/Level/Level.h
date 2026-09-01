@@ -287,6 +287,19 @@ public:
     API_FUNCTION() static void SaveSceneAsync(Scene* scene);
 
     /// <summary>
+    /// Saves the given scenes to their assets through one atomic transaction.
+    /// </summary>
+    /// <param name="scenes">Scenes to save.</param>
+    /// <returns>True if the action cannot be done, otherwise false.</returns>
+    API_FUNCTION() static bool SaveScenes(const Array<Scene*>& scenes);
+
+    /// <summary>
+    /// Saves the given scenes to their assets through one atomic transaction. Done in the background.
+    /// </summary>
+    /// <param name="scenes">Scenes to save.</param>
+    API_FUNCTION() static void SaveScenesAsync(const Array<Scene*>& scenes);
+
+    /// <summary>
     /// Saves all scenes to the assets.
     /// </summary>
     /// <returns>True if action cannot be done, otherwise false.</returns>

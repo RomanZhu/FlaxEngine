@@ -50,6 +50,10 @@ public:
         const SceneSourceRevision& expectedSource, const SceneFragmentSavePlan& plan, String& error,
         SceneFragmentTransactionFailurePoint failurePoint = SceneFragmentTransactionFailurePoint::None);
 
+    /// <summary>Commits several prepared scene sources and fragment sets through one recoverable journal. Returns true on failure.</summary>
+    static bool CommitSceneSaves(const Array<PreparedSceneSave>& saves, String& error,
+        SceneFragmentTransactionFailurePoint failurePoint = SceneFragmentTransactionFailurePoint::None);
+
     /// <summary>Recovers all interrupted scene-fragment transactions. Returns true on failure.</summary>
     static bool RecoverIncompleteTransactions(String& error);
 
