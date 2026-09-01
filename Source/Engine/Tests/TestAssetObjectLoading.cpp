@@ -55,7 +55,7 @@ namespace
                 diagnostic = AssetPipelineDiagnostic();
                 diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactMissing;
                 diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-                diagnostic.AssetGuid = object.Asset.Value;
+                diagnostic.AssetGuid = object;
                 diagnostic.Message = TEXT("Test object is unresolved.");
                 return true;
             }
