@@ -48,6 +48,8 @@ struct FLAXENGINE_API AssetTrashRecord
     String OriginalMetaPath;
     String TrashSourcePath;
     String TrashMetaPath;
+    String OriginalFragmentsPath;
+    String TrashFragmentsPath;
 };
 
 /// <summary>Committed filesystem mutation passed to the database refresh boundary.</summary>

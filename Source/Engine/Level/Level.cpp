@@ -851,8 +851,10 @@ namespace LevelImpl
     bool unloadScenes();
     bool saveScene(Scene* scene);
     bool saveScene(Scene* scene, const String& path);
-    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson, bool useExternalActorsStorage = true);
-    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool prettyJson, bool useExternalActorsStorage = true);
+    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson,
+        bool useExternalActorsStorage = true, SceneFragmentSavePlan* fragmentPlan = nullptr);
+    bool saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool prettyJson,
+        bool useExternalActorsStorage = true, SceneFragmentSavePlan* fragmentPlan = nullptr);
     bool spawnActor(Actor* actor, Actor* parent);
     bool deleteActor(Actor* actor);
 }
@@ -867,6 +869,7 @@ public:
     {
     }
 
+    bool Init() override;
     void Update() override;
     void LateUpdate() override;
     void FixedUpdate() override;
@@ -1006,6 +1009,19 @@ void LayersAndTagsSettings::Apply()
 #else
 #define TICK_LEVEL_EDITOR(tickingStage)
 #endif
+
+bool LevelService::Init()
+{
+#if USE_EDITOR
+    String error;
+    if (SceneFragmentStore::RecoverIncompleteTransactions(error))
+    {
+        LOG(Error, "Cannot recover an interrupted scene save: {0}", error);
+        return true;
+    }
+#endif
+    return false;
+}
 
 void LevelService::Update()
 {
@@ -1808,6 +1824,7 @@ SceneResult SceneLoader::OnBegin(Args& args)
     Scene->_persistentSourceAsset = AssetGuid(SceneId);
     Scene->_localFileId = 1;
     Modifier->CurrentSourceAssetId = SceneId;
+    Modifier->CurrentDocumentKind = GlobalObjectKind::SceneObject;
     Context.SourceAssetId = SceneId;
     Context.DocumentKind = GlobalObjectKind::SceneObject;
     Scene->RegisterObject();
@@ -2112,36 +2129,44 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     LOG(Info, "Saving scene {0} to \'{1}\'", scene->GetName(), path);
     Stopwatch stopwatch;
 
+#if USE_EDITOR
+    SceneSourceRevision expectedSource;
+    String fragmentError;
+    if (SceneFragmentStore::CaptureSourceRevision(path, expectedSource, fragmentError))
+    {
+        LOG(Error, "Cannot capture scene source revision for '{0}': {1}", path, fragmentError);
+        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+        return true;
+    }
+    SceneFragmentSavePlan fragmentPlan;
+#endif
+
     // Serialize to json
     rapidjson_flax::StringBuffer buffer;
-    if (saveScene(scene, buffer, true) && buffer.GetSize() > 0)
+    if (saveScene(scene, buffer, true, true,
+#if USE_EDITOR
+        &fragmentPlan
+#else
+        nullptr
+#endif
+        ))
     {
         CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
         return true;
     }
 
-    // Save to a same-directory staging file first. Publishing uses an atomic same-volume
-    // replacement on supported desktop platforms, so a failed write or replacement leaves
-    // the previous scene bytes untouched.
-    String stagingPath(path);
-    stagingPath += TEXT(".tmp-");
-    stagingPath += Guid::New().ToString(Guid::FormatType::N);
-    if (File::WriteAllBytes(stagingPath, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
+#if USE_EDITOR
+    if (SceneFragmentStore::CommitSceneSave(path, buffer.GetString(), static_cast<int32>(buffer.GetSize()),
+        expectedSource, fragmentPlan, fragmentError))
     {
-        LOG(Error, "Cannot write staged scene file '{0}'", stagingPath);
-        if (FileSystem::FileExists(stagingPath))
-            FileSystem::DeleteFile(stagingPath);
+        LOG(Error, "Cannot commit scene and private fragments for '{0}': {1}", path, fragmentError);
         CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
         return true;
     }
-    if (FileSystem::MoveFile(path, stagingPath, true))
-    {
-        LOG(Error, "Cannot replace scene file '{0}' with completed staging file '{1}'", path, stagingPath);
-        if (FileSystem::FileExists(stagingPath))
-            FileSystem::DeleteFile(stagingPath);
-        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+#else
+    if (File::WriteAllBytes(path, (byte*)buffer.GetString(), (int32)buffer.GetSize()))
         return true;
-    }
+#endif
 
     stopwatch.Stop();
     LOG(Info, "Scene saved! Time {0}ms", stopwatch.GetMilliseconds());
@@ -2161,23 +2186,25 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     return false;
 }
 
-bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson, bool useExternalActorsStorage)
+bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, bool prettyJson,
+    bool useExternalActorsStorage, SceneFragmentSavePlan* fragmentPlan)
 {
     PROFILE_CPU_NAMED("Level.SaveScene");
     PROFILE_MEM(Level);
     if (prettyJson)
     {
         PrettyJsonWriter writerObj(outBuffer);
-        return saveScene(scene, outBuffer, writerObj, true, useExternalActorsStorage);
+        return saveScene(scene, outBuffer, writerObj, true, useExternalActorsStorage, fragmentPlan);
     }
     else
     {
         CompactJsonWriter writerObj(outBuffer);
-        return saveScene(scene, outBuffer, writerObj, false, useExternalActorsStorage);
+        return saveScene(scene, outBuffer, writerObj, false, useExternalActorsStorage, fragmentPlan);
     }
 }
 
-bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer, bool prettyJson, bool useExternalActorsStorage)
+bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer, JsonWriter& writer,
+    bool prettyJson, bool useExternalActorsStorage, SceneFragmentSavePlan* fragmentPlan)
 {
     ASSERT(scene);
     const auto sceneId = scene->GetID();
@@ -2191,6 +2218,11 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
 
     if (useExternalActorsStorage && scene->UseExternalActors)
     {
+        if (!fragmentPlan)
+        {
+            LOG(Error, "External actor scene serialization requires a fragment save plan.");
+            return true;
+        }
         Array<SceneObject*> allObjects;
         SceneQuery::GetAllSerializableSceneObjects(scene, allObjects);
 
@@ -2211,9 +2243,9 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
             fragments.Add(MoveTemp(fragment));
         }
         String fragmentError;
-        if (SceneFragmentStore::Save(sceneId, fragments, fragmentError))
+        if (SceneFragmentStore::PrepareSave(sceneId, fragments, *fragmentPlan, fragmentError))
         {
-            LOG(Error, "Cannot save private scene fragments for scene '{0}': {1}", sceneId, fragmentError);
+            LOG(Error, "Cannot prepare private scene fragments for scene '{0}': {1}", sceneId, fragmentError);
             return true;
         }
 
@@ -2253,6 +2285,20 @@ bool LevelImpl::saveScene(Scene* scene, rapidjson_flax::StringBuffer& outBuffer,
             return true;
         }
         return false;
+    }
+    if (useExternalActorsStorage)
+    {
+        if (!fragmentPlan)
+        {
+            LOG(Error, "Scene serialization requires a fragment save plan.");
+            return true;
+        }
+        String fragmentError;
+        if (SceneFragmentStore::PrepareDelete(sceneId, *fragmentPlan, fragmentError))
+        {
+            LOG(Error, "Cannot prepare private scene fragment removal for scene '{0}': {1}", sceneId, fragmentError);
+            return true;
+        }
     }
 #endif
 
@@ -2600,13 +2646,6 @@ bool Level::ConvertSceneToInternalActors(Scene* scene)
         if (saveScene(scene))
         {
             scene->UseExternalActors = true;
-            return true;
-        }
-
-        String fragmentError;
-        if (SceneFragmentStore::Delete(scene->GetID(), fragmentError))
-        {
-            LOG(Error, "Cannot delete private scene fragments for scene '{0}': {1}", scene->GetID(), fragmentError);
             return true;
         }
     }

@@ -3,6 +3,7 @@
 #include "AssetOperations.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
+#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
@@ -14,7 +15,7 @@
 namespace
 {
     constexpr uint32 JournalMagic = 0x4A504F41; // AOPJ
-    constexpr uint32 JournalVersion = 1;
+    constexpr uint32 JournalVersion = 2;
 
     enum class JournalPhase : byte
     {
@@ -34,6 +35,9 @@ namespace
         String DestinationPath;
         String StageSourcePath;
         String StageMetaPath;
+        String SourceFragmentsPath;
+        String DestinationFragmentsPath;
+        String StageFragmentsPath;
     };
 
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const StringView& path,
@@ -186,6 +190,9 @@ namespace
         writer.StringValue(journal.DestinationPath);
         writer.StringValue(journal.StageSourcePath);
         writer.StringValue(journal.StageMetaPath);
+        writer.StringValue(journal.SourceFragmentsPath);
+        writer.StringValue(journal.DestinationFragmentsPath);
+        writer.StringValue(journal.StageFragmentsPath);
         const String destination = String(directory) / TEXT("journal.bin");
         const String staging = destination + TEXT(".tmp");
         if (File::WriteAllBytes(staging, writer.Data.Get(), writer.Data.Count()) || FlushFile(staging) ||
@@ -214,8 +221,15 @@ namespace
             reader.GuidValue(journal.TransactionId) || reader.GuidValue(journal.AssetGuid) ||
             reader.GuidValue(journal.SourceAssetGuid) || reader.StringValue(journal.SourcePath) ||
             reader.StringValue(journal.DestinationPath) || reader.StringValue(journal.StageSourcePath) ||
-            reader.StringValue(journal.StageMetaPath) || !reader.AtEnd() || magic != JournalMagic ||
-            version != JournalVersion || kind > static_cast<byte>(AssetOperationKind::Restore) ||
+            reader.StringValue(journal.StageMetaPath) || magic != JournalMagic ||
+            (version != 1 && version != JournalVersion))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Asset operation journal is malformed or unsupported."));
+        if (version >= 2 && (reader.StringValue(journal.SourceFragmentsPath) ||
+            reader.StringValue(journal.DestinationFragmentsPath) || reader.StringValue(journal.StageFragmentsPath)))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Asset operation journal is malformed or unsupported."));
+        if (!reader.AtEnd() || kind > static_cast<byte>(AssetOperationKind::Restore) ||
             phase > static_cast<byte>(JournalPhase::Committed))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
                 TEXT("Asset operation journal is malformed or unsupported."));
@@ -249,6 +263,9 @@ namespace
                 failed |= FileSystem::DeleteFile(journal.DestinationPath);
             if (FileSystem::FileExists(destinationMeta))
                 failed |= FileSystem::DeleteFile(destinationMeta);
+            if (journal.DestinationFragmentsPath.HasChars() &&
+                FileSystem::DirectoryExists(journal.DestinationFragmentsPath))
+                failed |= FileSystem::DeleteDirectory(journal.DestinationFragmentsPath, true);
             return failed;
         }
         if (!FileSystem::FileExists(journal.SourcePath))
@@ -264,6 +281,13 @@ namespace
                 failed |= FileSystem::MoveFile(sourceMeta, destinationMeta, false);
             else if (FileSystem::FileExists(journal.StageMetaPath))
                 failed |= FileSystem::MoveFile(sourceMeta, journal.StageMetaPath, false);
+        }
+        if (journal.SourceFragmentsPath.HasChars() && !FileSystem::DirectoryExists(journal.SourceFragmentsPath))
+        {
+            if (FileSystem::DirectoryExists(journal.DestinationFragmentsPath))
+                failed |= FileSystem::MoveFile(journal.SourceFragmentsPath, journal.DestinationFragmentsPath, false);
+            else if (FileSystem::DirectoryExists(journal.StageFragmentsPath))
+                failed |= FileSystem::MoveFile(journal.SourceFragmentsPath, journal.StageFragmentsPath, false);
         }
         return failed;
     }
@@ -535,11 +559,24 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
             TEXT("Asset move source and destination are the same exact path."));
     const String sourceMeta = MetaPath(source.AbsolutePath);
     const String destinationMeta = MetaPath(destinationAbsolute);
+    const bool canMoveFragments = kind == AssetOperationKind::Trash || kind == AssetOperationKind::Delete;
+    const String sourceFragments = canMoveFragments
+        ? SceneFragmentStore::GetScenePath(_projectRoot, initialMeta.ID)
+        : String::Empty;
+    const bool hasFragments = sourceFragments.HasChars() && FileSystem::DirectoryExists(sourceFragments);
+    const String destinationFragments = hasFragments
+        ? String(StringUtils::GetDirectoryName(destinationAbsolute)) / TEXT("scene-fragments")
+        : String::Empty;
     Array<String> lockPaths;
     lockPaths.Add(source.AbsolutePath);
     lockPaths.Add(sourceMeta);
     lockPaths.Add(destinationAbsolute);
     lockPaths.Add(destinationMeta);
+    if (hasFragments)
+    {
+        lockPaths.Add(sourceFragments);
+        lockPaths.Add(destinationFragments);
+    }
     Array<String> acquired;
     AcquirePaths(lockPaths, acquired, diagnostic);
     SCOPE_EXIT { ReleasePaths(acquired); };
@@ -548,8 +585,13 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     AssetPathPolicy::ProjectPath currentSource;
     if (ValidateExisting(target, currentSource, currentMeta, diagnostic))
         return true;
+    if (hasFragments != (sourceFragments.HasChars() && FileSystem::DirectoryExists(sourceFragments)))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, sourceFragments,
+            TEXT("Private scene fragments changed during move preparation."));
     if (FileSystem::FileExists(destinationAbsolute) || FileSystem::FileExists(destinationMeta) ||
-        FileSystem::DirectoryExists(destinationAbsolute) || EnsureParent(destinationAbsolute))
+        FileSystem::DirectoryExists(destinationAbsolute) ||
+        (hasFragments && (FileSystem::FileExists(destinationFragments) || FileSystem::DirectoryExists(destinationFragments))) ||
+        EnsureParent(destinationAbsolute))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destinationAbsolute,
             TEXT("Asset move destination is not an exact empty source-plus-meta target."));
 
@@ -559,14 +601,19 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     journal.AssetGuid = currentMeta.ID;
     journal.SourcePath = source.AbsolutePath;
     journal.DestinationPath = destinationAbsolute;
+    journal.SourceFragmentsPath = sourceFragments;
+    journal.DestinationFragmentsPath = destinationFragments;
     const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
     journal.StageSourcePath = transactionDirectory / TEXT("source.stage");
     journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
+    journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
     if (SaveJournal(transactionDirectory, journal, diagnostic) ||
+        (hasFragments && FileSystem::MoveFile(journal.StageFragmentsPath, sourceFragments, false)) ||
         FileSystem::MoveFile(journal.StageSourcePath, source.AbsolutePath, false) ||
         FileSystem::MoveFile(journal.StageMetaPath, sourceMeta, false) ||
         FileSystem::MoveFile(destinationAbsolute, journal.StageSourcePath, false) ||
-        FileSystem::MoveFile(destinationMeta, journal.StageMetaPath, false))
+        FileSystem::MoveFile(destinationMeta, journal.StageMetaPath, false) ||
+        (hasFragments && FileSystem::MoveFile(destinationFragments, journal.StageFragmentsPath, false)))
     {
         RollbackJournal(journal);
         FileSystem::DeleteDirectory(transactionDirectory, true);
@@ -610,6 +657,8 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
         trash->OriginalMetaPath = sourceMeta;
         trash->TrashSourcePath = destinationAbsolute;
         trash->TrashMetaPath = destinationMeta;
+        trash->OriginalFragmentsPath = sourceFragments;
+        trash->TrashFragmentsPath = destinationFragments;
     }
     diagnostic = AssetPipelineDiagnostic();
     return PublishCommit(commit, diagnostic);
@@ -654,6 +703,12 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
     if (ValidateExisting(target, source, sourceMeta, diagnostic) || NormalizeSource(destination, destinationPath, diagnostic) ||
         _modificationProcessor.ValidateOperation(AssetOperationKind::Copy, target, destination, diagnostic))
         return true;
+    const Guid copiedAssetGuid = Guid::New();
+    const String sourceFragments = SceneFragmentStore::GetScenePath(_projectRoot, sourceMeta.ID);
+    const bool hasFragments = FileSystem::DirectoryExists(sourceFragments);
+    const String destinationFragments = hasFragments
+        ? SceneFragmentStore::GetScenePath(_projectRoot, copiedAssetGuid)
+        : String::Empty;
     const String sourceMetaPath = MetaPath(source.AbsolutePath);
     const String destinationMeta = MetaPath(destinationPath.AbsolutePath);
     Array<String> lockPaths;
@@ -661,6 +716,11 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
     lockPaths.Add(sourceMetaPath);
     lockPaths.Add(destinationPath.AbsolutePath);
     lockPaths.Add(destinationMeta);
+    if (hasFragments)
+    {
+        lockPaths.Add(sourceFragments);
+        lockPaths.Add(destinationFragments);
+    }
     Array<String> acquired;
     AcquirePaths(lockPaths, acquired, diagnostic);
     SCOPE_EXIT { ReleasePaths(acquired); };
@@ -668,12 +728,18 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
     AssetPathPolicy::ProjectPath currentSource;
     if (ValidateExisting(target, currentSource, currentMeta, diagnostic))
         return true;
+    if (hasFragments != FileSystem::DirectoryExists(sourceFragments))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, sourceFragments,
+            TEXT("Private scene fragments changed during copy preparation."));
     if (FileSystem::FileExists(destinationPath.AbsolutePath) || FileSystem::FileExists(destinationMeta) ||
-        FileSystem::DirectoryExists(destinationPath.AbsolutePath) || EnsureParent(destinationPath.AbsolutePath))
+        FileSystem::DirectoryExists(destinationPath.AbsolutePath) ||
+        (hasFragments && (FileSystem::FileExists(destinationFragments) || FileSystem::DirectoryExists(destinationFragments))) ||
+        EnsureParent(destinationPath.AbsolutePath))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destinationPath.AbsolutePath,
             TEXT("Asset copy destination is not an exact empty source-plus-meta target."));
 
-    const AssetMeta copiedMeta = currentMeta.CloneWithNewIdentities();
+    AssetMeta copiedMeta = currentMeta.CloneWithNewIdentities();
+    copiedMeta.ID = copiedAssetGuid;
     OperationJournal journal;
     journal.TransactionId = Guid::New();
     journal.Kind = AssetOperationKind::Copy;
@@ -681,20 +747,28 @@ bool AssetOperations::CopyAsset(const AssetOperationTarget& target, const String
     journal.SourceAssetGuid = currentMeta.ID;
     journal.SourcePath = source.AbsolutePath;
     journal.DestinationPath = destinationPath.AbsolutePath;
+    journal.SourceFragmentsPath = hasFragments ? sourceFragments : String::Empty;
+    journal.DestinationFragmentsPath = destinationFragments;
     const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
     journal.StageSourcePath = transactionDirectory / TEXT("source.stage");
     journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
+    journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
+    String fragmentError;
     if (SaveJournal(transactionDirectory, journal, diagnostic) ||
+        (hasFragments && SceneFragmentStore::PrepareCloneDirectory(_projectRoot, currentMeta.ID, copiedMeta.ID,
+            journal.StageFragmentsPath, fragmentError)) ||
         FileSystem::CopyFile(journal.StageSourcePath, source.AbsolutePath) || FlushFile(journal.StageSourcePath) ||
         AssetMeta::SaveAtomic(journal.StageMetaPath, copiedMeta, diagnostic) ||
         FileSystem::MoveFile(destinationPath.AbsolutePath, journal.StageSourcePath, false) ||
-        FileSystem::MoveFile(destinationMeta, journal.StageMetaPath, false))
+        FileSystem::MoveFile(destinationMeta, journal.StageMetaPath, false) ||
+        (hasFragments && FileSystem::MoveFile(destinationFragments, journal.StageFragmentsPath, false)))
     {
         RollbackJournal(journal);
         FileSystem::DeleteDirectory(transactionDirectory, true);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destinationPath.AbsolutePath,
-                TEXT("Asset copy transaction could not publish source and cloned metadata."));
+                fragmentError.HasChars() ? fragmentError :
+                    TEXT("Asset copy transaction could not publish source, cloned metadata, and private fragments."));
         return true;
     }
     journal.Phase = JournalPhase::Applied;
@@ -758,8 +832,10 @@ bool AssetOperations::DeleteAsset(const AssetOperationTarget& target, AssetTrash
 
 bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineDiagnostic& diagnostic)
 {
+    const bool hasFragments = trash.TrashFragmentsPath.HasChars();
     if (!trash.AssetGuid.IsValid() || !FileSystem::FileExists(trash.TrashSourcePath) ||
-        !FileSystem::FileExists(trash.TrashMetaPath))
+        !FileSystem::FileExists(trash.TrashMetaPath) ||
+        (hasFragments && (trash.OriginalFragmentsPath.IsEmpty() || !FileSystem::DirectoryExists(trash.TrashFragmentsPath))))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, trash.TrashSourcePath,
             TEXT("Asset trash record is incomplete or its recoverable files are missing."));
     AssetMeta meta;
@@ -781,10 +857,17 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
     lockPaths.Add(trash.TrashMetaPath);
     lockPaths.Add(trash.OriginalSourcePath);
     lockPaths.Add(trash.OriginalMetaPath);
+    if (hasFragments)
+    {
+        lockPaths.Add(trash.TrashFragmentsPath);
+        lockPaths.Add(trash.OriginalFragmentsPath);
+    }
     Array<String> acquired;
     AcquirePaths(lockPaths, acquired, diagnostic);
     SCOPE_EXIT { ReleasePaths(acquired); };
     if (FileSystem::FileExists(trash.OriginalSourcePath) || FileSystem::FileExists(trash.OriginalMetaPath) ||
+        (hasFragments && (FileSystem::FileExists(trash.OriginalFragmentsPath) ||
+            FileSystem::DirectoryExists(trash.OriginalFragmentsPath))) ||
         EnsureParent(trash.OriginalSourcePath))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, trash.OriginalSourcePath,
             TEXT("Asset restore destination is no longer empty."));
@@ -799,14 +882,19 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
     journal.AssetGuid = trash.AssetGuid;
     journal.SourcePath = trash.TrashSourcePath;
     journal.DestinationPath = trash.OriginalSourcePath;
+    journal.SourceFragmentsPath = trash.TrashFragmentsPath;
+    journal.DestinationFragmentsPath = trash.OriginalFragmentsPath;
     const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
     journal.StageSourcePath = transactionDirectory / TEXT("source.stage");
     journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
+    journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
     if (SaveJournal(transactionDirectory, journal, diagnostic) ||
+        (hasFragments && FileSystem::MoveFile(journal.StageFragmentsPath, trash.TrashFragmentsPath, false)) ||
         FileSystem::MoveFile(journal.StageSourcePath, trash.TrashSourcePath, false) ||
         FileSystem::MoveFile(journal.StageMetaPath, trash.TrashMetaPath, false) ||
         FileSystem::MoveFile(trash.OriginalSourcePath, journal.StageSourcePath, false) ||
-        FileSystem::MoveFile(trash.OriginalMetaPath, journal.StageMetaPath, false))
+        FileSystem::MoveFile(trash.OriginalMetaPath, journal.StageMetaPath, false) ||
+        (hasFragments && FileSystem::MoveFile(trash.OriginalFragmentsPath, journal.StageFragmentsPath, false)))
     {
         RollbackJournal(journal);
         FileSystem::DeleteDirectory(transactionDirectory, true);

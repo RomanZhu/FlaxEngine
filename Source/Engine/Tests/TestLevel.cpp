@@ -16,6 +16,8 @@
 #include "Engine/Scripting/Scripting.h"
 #if USE_EDITOR
 #include "Engine/Content/Content.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
+#include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/AssetObjectRegistry.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Assets/Material.h"
@@ -52,6 +54,10 @@ namespace
 
     Guid GetSceneGuid(const String& scenePath)
     {
+        AssetMeta meta;
+        AssetPipelineDiagnostic diagnostic;
+        if (!AssetMeta::Load(scenePath + TEXT(".meta"), meta, diagnostic))
+            return meta.ID;
         BytesContainer bytes;
         if (File::ReadAllBytes(scenePath, bytes))
             return Guid::Empty;
@@ -82,6 +88,10 @@ namespace
         if (sceneGuid.IsValid())
             FileSystem::DeleteDirectory(SceneFragmentStore::GetScenePath(sceneGuid));
         FileSystem::DeleteFile(scenePath);
+        FileSystem::DeleteFile(scenePath + TEXT(".meta"));
+        Array<String> refresh;
+        refresh.Add(scenePath);
+        AssetPipelineService::RefreshSources(refresh);
     }
 
     void EnsureDirectory(const StringView& directory)
@@ -90,32 +100,35 @@ namespace
             REQUIRE(!FileSystem::CreateDirectory(directory));
     }
 
+    void RefreshTestScene(const String& scenePath)
+    {
+        Array<String> refresh;
+        refresh.Add(scenePath);
+        REQUIRE(!AssetPipelineService::RefreshSources(refresh));
+    }
+
     void WriteTestSceneAsset(const String& scenePath, const Guid& sceneId, bool externalActors)
     {
         rapidjson_flax::StringBuffer buffer;
         PrettyJsonWriter writer(buffer);
         writer.StartObject();
-        writer.JKEY("ID");
-        writer.Guid(sceneId);
-        writer.JKEY("TypeName");
-        writer.String("FlaxEngine.SceneAsset", ARRAY_COUNT("FlaxEngine.SceneAsset") - 1);
-        writer.JKEY("EngineBuild");
-        writer.Int(FLAXENGINE_VERSION_BUILD);
+        writer.JKEY("sceneVersion");
+        writer.Int(4);
         if (externalActors)
         {
-            writer.JKEY("ExternalActors");
+            writer.JKEY("externalActors");
             writer.Bool(true);
         }
-        writer.JKEY("Data");
+        writer.JKEY("objects");
         writer.StartArray();
         writer.StartObject();
-        writer.JKEY("ID");
-        writer.Guid(sceneId);
-        writer.JKEY("TypeName");
+        writer.JKEY("fileId");
+        writer.Int64(1);
+        writer.JKEY("type");
         writer.String("FlaxEngine.Scene", ARRAY_COUNT("FlaxEngine.Scene") - 1);
         if (externalActors)
         {
-            writer.JKEY("UseExternalActors");
+            writer.JKEY("useExternalActors");
             writer.Bool(true);
         }
         writer.EndObject();
@@ -124,7 +137,22 @@ namespace
 
         EnsureDirectory(StringUtils::GetDirectoryName(scenePath));
         REQUIRE(!File::WriteAllBytes(scenePath, buffer.GetString(), static_cast<int32>(buffer.GetSize())));
-        Content::GetObjectRegistry()->RegisterTransientObject(sceneId, SceneAsset::TypeName, scenePath);
+        AssetMeta meta;
+        meta.ID = sceneId;
+        meta.AssetType = SceneAsset::TypeName;
+        meta.SourceKind = AssetSourceKind::TextDocument;
+        meta.Processor.ID = TEXT("Flax.JsonDocument");
+        meta.Processor.SettingsVersion = 1;
+        meta.Processor.SettingsJson = "{}\n";
+        AssetPipelineDiagnostic diagnostic;
+        REQUIRE(!AssetMeta::SaveAtomic(scenePath + TEXT(".meta"), meta, diagnostic));
+        if (externalActors)
+        {
+            Array<SceneFragmentWrite> emptyFragments;
+            String error;
+            REQUIRE(!SceneFragmentStore::Save(sceneId, emptyFragments, error));
+        }
+        RefreshTestScene(scenePath);
     }
 
     void ReadFileBytes(const String& path, BytesContainer& data)
@@ -210,9 +238,26 @@ namespace
     const rapidjson_flax::Value& GetDataArray(const rapidjson_flax::Document& document)
     {
         const auto data = document.FindMember("Data");
-        REQUIRE(data != document.MemberEnd());
-        REQUIRE(data->value.IsArray());
-        return data->value;
+        if (data != document.MemberEnd())
+        {
+            REQUIRE(data->value.IsArray());
+            return data->value;
+        }
+        const auto payload = document.FindMember("payload");
+        if (payload != document.MemberEnd())
+        {
+            REQUIRE(payload->value.IsArray());
+            return payload->value;
+        }
+        const auto objects = document.FindMember("objects");
+        REQUIRE(objects != document.MemberEnd());
+        REQUIRE(objects->value.IsArray());
+        return objects->value;
+    }
+
+    rapidjson_flax::Value& GetDataArray(rapidjson_flax::Document& document)
+    {
+        return const_cast<rapidjson_flax::Value&>(GetDataArray(static_cast<const rapidjson_flax::Document&>(document)));
     }
 
     bool ContainsObject(const rapidjson_flax::Value& data, const Guid& id)
@@ -221,8 +266,36 @@ namespace
         {
             if (JsonTools::GetGuid(data[i], "ID") == id)
                 return true;
+            auto fileId = data[i].FindMember("fileId");
+            if (fileId == data[i].MemberEnd())
+                fileId = data[i].FindMember("FileId");
+            if (fileId != data[i].MemberEnd() && fileId->value.IsInt64() &&
+                fileId->value.GetInt64() == SceneObject::MakeLocalFileId(id))
+                return true;
         }
         return false;
+    }
+
+    int64 GetObjectLocalId(const rapidjson_flax::Value& object)
+    {
+        auto fileId = object.FindMember("fileId");
+        if (fileId == object.MemberEnd())
+            fileId = object.FindMember("FileId");
+        if (fileId != object.MemberEnd() && fileId->value.IsInt64())
+            return fileId->value.GetInt64();
+        const Guid id = JsonTools::GetGuid(object, "ID");
+        return id.IsValid() ? SceneObject::MakeLocalFileId(id) : 0;
+    }
+
+    int64 GetParentLocalId(const rapidjson_flax::Value& object)
+    {
+        auto parent = object.FindMember("parentFileId");
+        if (parent == object.MemberEnd())
+            parent = object.FindMember("ParentFileId");
+        if (parent != object.MemberEnd() && parent->value.IsInt64())
+            return parent->value.GetInt64();
+        const Guid id = JsonTools::GetGuid(object, "ParentID");
+        return id.IsValid() ? SceneObject::MakeLocalFileId(id) : 0;
     }
 }
 
@@ -369,6 +442,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         sibling->SetOrderInParent(0);
 
         REQUIRE(!Level::SaveScene(scene));
+        RefreshTestScene(scenePath);
 
         Array<String> actorFiles;
         REQUIRE(!FileSystem::DirectoryGetFiles(actorFiles, GetExternalActorsFolder(scenePath), TEXT("*.sceneactor"), DirectorySearchOption::AllDirectories));
@@ -383,7 +457,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         rapidjson_flax::Document sceneDocument;
         sceneDocument.Parse(sceneFileData.Get<char>(), sceneFileData.Length());
         REQUIRE(!sceneDocument.HasParseError());
-        REQUIRE(JsonTools::GetBool(sceneDocument, "ExternalActors", false));
+        REQUIRE(JsonTools::GetBool(sceneDocument, "externalActors", false));
         const rapidjson_flax::Value& savedData = GetDataArray(sceneDocument);
         REQUIRE(savedData.Size() == 1);
 
@@ -398,21 +472,21 @@ TEST_CASE("ExternalActorsSceneStorage")
         ParseJson(unifiedDocument, unifiedBuffer);
         const rapidjson_flax::Value& unifiedData = GetDataArray(unifiedDocument);
         REQUIRE(unifiedData.Size() == 4);
-        CHECK(ContainsObject(unifiedData, sceneId));
+        CHECK(GetObjectLocalId(unifiedData[0]) == 1);
+        CHECK(ContainsObject(unifiedData, siblingId));
         CHECK(ContainsObject(unifiedData, parentId));
         CHECK(ContainsObject(unifiedData, childId));
-        CHECK(ContainsObject(unifiedData, siblingId));
-        CHECK(externalActorFiles.Count() == 4);
+        CHECK(externalActorFiles.IsEmpty());
 
-        Array<Guid> rootChildIds;
+        Array<int64> rootChildIds;
         for (rapidjson::SizeType i = 0; i < unifiedData.Size(); i++)
         {
-            if (JsonTools::GetGuid(unifiedData[i], "ParentID") == sceneId)
-                rootChildIds.Add(JsonTools::GetGuid(unifiedData[i], "ID"));
+            if (GetParentLocalId(unifiedData[i]) == 1)
+                rootChildIds.Add(GetObjectLocalId(unifiedData[i]));
         }
         REQUIRE(rootChildIds.Count() == 2);
-        CHECK(rootChildIds[0] == siblingId);
-        CHECK(rootChildIds[1] == parentId);
+        CHECK(rootChildIds[0] == SceneObject::MakeLocalFileId(siblingId));
+        CHECK(rootChildIds[1] == SceneObject::MakeLocalFileId(parentId));
     }
 
     SECTION("Reorder changes only the moved external actor key")
@@ -504,13 +578,14 @@ TEST_CASE("ExternalActorsSceneStorage")
             REQUIRE(actorData.Size() >= 1);
             if (i == 3)
             {
-                CHECK(actorData[0].HasMember("SiblingOrderKey"));
-                CHECK(!actorData[0].HasMember("OrderInParent"));
+                CHECK(actorData[0].HasMember("siblingOrderKey"));
+                CHECK(!actorData[0].HasMember("orderInParent"));
             }
             else
             {
-                CHECK(actorData[0]["OrderInParent"].GetInt64() == 1024 + i);
-                CHECK(!actorData[0].HasMember("SiblingOrderKey"));
+                REQUIRE(actorData[0].HasMember("orderInParent"));
+                CHECK(actorData[0]["orderInParent"].GetInt64() == 1024 + i);
+                CHECK(!actorData[0].HasMember("siblingOrderKey"));
             }
         }
 
@@ -522,7 +597,7 @@ TEST_CASE("ExternalActorsSceneStorage")
             const rapidjson_flax::Value* scriptData = nullptr;
             for (rapidjson::SizeType j = 1; j < parentData.Size(); j++)
             {
-                if (JsonTools::GetGuid(parentData[j], "ID") == scripts[i]->GetID())
+                if (GetObjectLocalId(parentData[j]) == scripts[i]->GetLocalFileId())
                 {
                     scriptData = &parentData[j];
                     break;
@@ -531,13 +606,14 @@ TEST_CASE("ExternalActorsSceneStorage")
             REQUIRE(scriptData);
             if (i == 3)
             {
-                CHECK(scriptData->HasMember("SiblingOrderKey"));
-                CHECK(!scriptData->HasMember("OrderInParent"));
+                CHECK(scriptData->HasMember("siblingOrderKey"));
+                CHECK(!scriptData->HasMember("orderInParent"));
             }
             else
             {
-                CHECK((*scriptData)["OrderInParent"].GetInt64() == 1024 + i);
-                CHECK(!scriptData->HasMember("SiblingOrderKey"));
+                REQUIRE(scriptData->HasMember("orderInParent"));
+                CHECK((*scriptData)["orderInParent"].GetInt64() == 1024 + i);
+                CHECK(!scriptData->HasMember("siblingOrderKey"));
             }
         }
 
@@ -548,8 +624,8 @@ TEST_CASE("ExternalActorsSceneStorage")
             ParseJsonFile(actorDocument, GetExternalActorPath(scenePath, child->GetID()));
             const rapidjson_flax::Value& actorData = GetDataArray(actorDocument);
             REQUIRE(actorData.Size() >= 1);
-            CHECK(actorData[0].HasMember("SiblingOrderKey"));
-            CHECK(!actorData[0].HasMember("OrderInParent"));
+            CHECK(actorData[0].HasMember("siblingOrderKey"));
+            CHECK(!actorData[0].HasMember("orderInParent"));
         }
 
         rapidjson_flax::Document migratedParentDocument;
@@ -557,10 +633,10 @@ TEST_CASE("ExternalActorsSceneStorage")
         const rapidjson_flax::Value& migratedParentData = GetDataArray(migratedParentDocument);
         for (rapidjson::SizeType i = 0; i < migratedParentData.Size(); i++)
         {
-            if (migratedParentData[i].HasMember("ParentID"))
+            if (migratedParentData[i].HasMember("parentFileId"))
             {
-                CHECK(migratedParentData[i].HasMember("SiblingOrderKey"));
-                CHECK(!migratedParentData[i].HasMember("OrderInParent"));
+                CHECK(migratedParentData[i].HasMember("siblingOrderKey"));
+                CHECK(!migratedParentData[i].HasMember("orderInParent"));
             }
         }
     }
@@ -714,26 +790,26 @@ TEST_CASE("ExternalActorsSceneStorage")
         ParseJson(snapshotDocument, snapshotBuffer);
         const rapidjson_flax::Value& snapshotData = GetDataArray(snapshotDocument);
         REQUIRE(snapshotData.Size() == 3);
-        CHECK(ContainsObject(snapshotData, sceneId));
+        CHECK(GetObjectLocalId(snapshotData[0]) == 1);
         CHECK(ContainsObject(snapshotData, actorId));
         CHECK(ContainsObject(snapshotData, childId));
         const rapidjson_flax::Value* actorData = nullptr;
         const rapidjson_flax::Value* childData = nullptr;
         for (rapidjson::SizeType i = 0; i < snapshotData.Size(); i++)
         {
-            const Guid id = JsonTools::GetGuid(snapshotData[i], "ID");
-            if (id == actorId)
+            const int64 localId = GetObjectLocalId(snapshotData[i]);
+            if (localId == SceneObject::MakeLocalFileId(actorId))
                 actorData = &snapshotData[i];
-            else if (id == childId)
+            else if (localId == SceneObject::MakeLocalFileId(childId))
                 childData = &snapshotData[i];
         }
         REQUIRE(actorData);
         REQUIRE(childData);
-        REQUIRE(actorData->HasMember("OrderInParent"));
-        REQUIRE(childData->HasMember("OrderInParent"));
-        CHECK((*actorData)["OrderInParent"].GetInt64() == 512);
-        CHECK((*childData)["OrderInParent"].GetInt64() == 1024);
-        CHECK(!JsonTools::GetBool(snapshotDocument, "ExternalActors", false));
+        REQUIRE(actorData->HasMember("orderInParent"));
+        REQUIRE(childData->HasMember("orderInParent"));
+        CHECK((*actorData)["orderInParent"].GetInt64() == 512);
+        CHECK((*childData)["orderInParent"].GetInt64() == 1024);
+        CHECK(!JsonTools::GetBool(snapshotDocument, "externalActors", false));
         CHECK(FileSystem::FileExists(GetExternalActorPath(scenePath, staleId)));
         CHECK(!FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
         CHECK(!FileSystem::FileExists(GetExternalActorPath(scenePath, childId)));
@@ -766,24 +842,6 @@ TEST_CASE("ExternalActorsSceneStorage")
 
         REQUIRE(!Level::SaveScene(scene));
         const String actorPath = GetExternalActorPath(scenePath, actorId);
-        rapidjson_flax::Document actorDocument;
-        ParseJsonFile(actorDocument, actorPath);
-        const rapidjson_flax::Value& actorData = GetDataArray(actorDocument);
-
-        rapidjson_flax::StringBuffer staleWrapperBuffer;
-        PrettyJsonWriter staleWriter(staleWrapperBuffer);
-        staleWriter.StartObject();
-        staleWriter.JKEY("ID");
-        staleWriter.Guid(actorId);
-        staleWriter.JKEY("TypeName");
-        staleWriter.String("FlaxEngine.SceneActor", ARRAY_COUNT("FlaxEngine.SceneActor") - 1);
-        staleWriter.JKEY("EngineBuild");
-        staleWriter.Int(FLAXENGINE_VERSION_BUILD + 1);
-        staleWriter.JKEY("Data");
-        actorData.Accept(staleWriter.GetWriter());
-        staleWriter.EndObject();
-        REQUIRE(!File::WriteAllBytes(actorPath, staleWrapperBuffer.GetString(), static_cast<int32>(staleWrapperBuffer.GetSize())));
-
         BytesContainer beforeSave;
         BytesContainer afterSave;
         ReadFileBytes(actorPath, beforeSave);
@@ -793,7 +851,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         CHECK(AreBytesEqual(beforeSave, afterSave));
     }
 
-    SECTION("Save ignores one ULP external actor drift")
+    SECTION("Save repairs externally modified indexed fragments")
     {
         const Guid sceneId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1");
         const Guid actorId = ParseGuid("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2");
@@ -820,9 +878,11 @@ TEST_CASE("ExternalActorsSceneStorage")
 
         REQUIRE(!Level::SaveScene(scene));
         const String actorPath = GetExternalActorPath(scenePath, actorId);
+        BytesContainer originalBytes;
+        ReadFileBytes(actorPath, originalBytes);
         rapidjson_flax::Document actorDocument;
         ParseJsonFile(actorDocument, actorPath);
-        auto& actorData = actorDocument["Data"][0];
+        auto& actorData = GetDataArray(actorDocument)[0];
         REQUIRE(actorData.HasMember("Transform"));
         auto& translationX = actorData["Transform"]["Translation"]["X"];
         REQUIRE(translationX.IsDouble());
@@ -833,25 +893,10 @@ TEST_CASE("ExternalActorsSceneStorage")
         actorDocument.Accept(oneUlpWriter.GetWriter());
         REQUIRE(!File::WriteAllBytes(actorPath, oneUlpBuffer.GetString(), static_cast<int32>(oneUlpBuffer.GetSize())));
 
-        BytesContainer oneUlpBeforeSave;
-        BytesContainer oneUlpAfterSave;
-        ReadFileBytes(actorPath, oneUlpBeforeSave);
+        BytesContainer repairedBytes;
         REQUIRE(!Level::SaveScene(scene));
-        ReadFileBytes(actorPath, oneUlpAfterSave);
-        CHECK(AreBytesEqual(oneUlpBeforeSave, oneUlpAfterSave));
-
-        translationX.SetDouble(1.0000000000000004);
-        rapidjson_flax::StringBuffer twoUlpBuffer;
-        PrettyJsonWriter twoUlpWriter(twoUlpBuffer);
-        actorDocument.Accept(twoUlpWriter.GetWriter());
-        REQUIRE(!File::WriteAllBytes(actorPath, twoUlpBuffer.GetString(), static_cast<int32>(twoUlpBuffer.GetSize())));
-
-        BytesContainer twoUlpBeforeSave;
-        BytesContainer twoUlpAfterSave;
-        ReadFileBytes(actorPath, twoUlpBeforeSave);
-        REQUIRE(!Level::SaveScene(scene));
-        ReadFileBytes(actorPath, twoUlpAfterSave);
-        CHECK(!AreBytesEqual(twoUlpBeforeSave, twoUlpAfterSave));
+        ReadFileBytes(actorPath, repairedBytes);
+        CHECK(AreBytesEqual(originalBytes, repairedBytes));
     }
 
     SECTION("Convert external actors scene to internal actors")
@@ -893,11 +938,11 @@ TEST_CASE("ExternalActorsSceneStorage")
 
         rapidjson_flax::Document sceneDocument;
         ParseJsonFile(sceneDocument, scenePath);
-        CHECK(!JsonTools::GetBool(sceneDocument, "ExternalActors", false));
+        CHECK(!JsonTools::GetBool(sceneDocument, "externalActors", false));
         const rapidjson_flax::Value& savedData = GetDataArray(sceneDocument);
         REQUIRE(savedData.Size() == 3);
-        CHECK(!JsonTools::GetBool(savedData[0], "UseExternalActors", false));
-        CHECK(ContainsObject(savedData, sceneId));
+        CHECK(!JsonTools::GetBool(savedData[0], "useExternalActors", false));
+        CHECK(GetObjectLocalId(savedData[0]) == 1);
         CHECK(ContainsObject(savedData, actorId));
         CHECK(ContainsObject(savedData, childId));
         CHECK(!ContainsObject(savedData, staleId));
@@ -917,6 +962,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         WriteTestSceneAsset(scenePath, sceneId, true);
         WriteExternalActorFile(scenePath, childId, parentId, "Child", 1024);
         WriteExternalActorFile(scenePath, parentId, sceneId, "Parent", 1024);
+        RefreshTestScene(scenePath);
 
         SceneAsset* sceneAsset = Content::Load<SceneAsset>(scenePath);
         REQUIRE(sceneAsset);
@@ -928,9 +974,9 @@ TEST_CASE("ExternalActorsSceneStorage")
         ParseJson(unifiedDocument, unifiedBuffer);
         const rapidjson_flax::Value& unifiedData = GetDataArray(unifiedDocument);
         REQUIRE(unifiedData.Size() == 3);
-        CHECK(JsonTools::GetGuid(unifiedData[0], "ID") == sceneId);
-        CHECK(JsonTools::GetGuid(unifiedData[1], "ID") == parentId);
-        CHECK(JsonTools::GetGuid(unifiedData[2], "ID") == childId);
+        CHECK(GetObjectLocalId(unifiedData[0]) == 1);
+        CHECK(GetObjectLocalId(unifiedData[1]) == SceneObject::MakeLocalFileId(parentId));
+        CHECK(GetObjectLocalId(unifiedData[2]) == SceneObject::MakeLocalFileId(childId));
     }
 
     SECTION("Clone external actors scene copies and remaps actor files")
@@ -938,7 +984,7 @@ TEST_CASE("ExternalActorsSceneStorage")
         const Guid sceneId = ParseGuid("33333333333333333333333333333331");
         const Guid parentId = ParseGuid("33333333333333333333333333333332");
         const Guid childId = ParseGuid("33333333333333333333333333333333");
-        const Guid cloneSceneId = ParseGuid("33333333333333333333333333333334");
+        Guid cloneSceneId;
         const String scenePath = GetTestScenePath(TEXT("CloneSource"));
         const String clonePath = GetTestScenePath(TEXT("CloneTarget"));
         CleanupTestSceneFiles(scenePath);
@@ -951,47 +997,46 @@ TEST_CASE("ExternalActorsSceneStorage")
         WriteTestSceneAsset(scenePath, sceneId, true);
         WriteExternalActorFile(scenePath, parentId, sceneId, "Parent", 1024);
         WriteExternalActorFile(scenePath, childId, parentId, "Child", 1024);
+        RefreshTestScene(scenePath);
 
-        REQUIRE(!Content::CloneAssetFile(clonePath, scenePath, cloneSceneId));
+        REQUIRE(!AssetOperationService::CopyAsset(scenePath, clonePath, cloneSceneId));
+        REQUIRE(cloneSceneId.IsValid());
+        CHECK(cloneSceneId != sceneId);
 
         rapidjson_flax::Document cloneSceneDocument;
         ParseJsonFile(cloneSceneDocument, clonePath);
         const rapidjson_flax::Value& cloneSceneData = GetDataArray(cloneSceneDocument);
         REQUIRE(cloneSceneData.Size() == 1);
-        CHECK(JsonTools::GetGuid(cloneSceneDocument, "ID") == cloneSceneId);
-        CHECK(JsonTools::GetGuid(cloneSceneData[0], "ID") == cloneSceneId);
+        CHECK(GetSceneGuid(clonePath) == cloneSceneId);
+        CHECK(GetObjectLocalId(cloneSceneData[0]) == 1);
 
         Array<String> cloneActorFiles;
         REQUIRE(!FileSystem::DirectoryGetFiles(cloneActorFiles, GetExternalActorsFolder(clonePath), TEXT("*.sceneactor"), DirectorySearchOption::AllDirectories));
         REQUIRE(cloneActorFiles.Count() == 2);
 
-        Array<Guid> cloneActorIds;
-        Array<Guid> cloneParentIds;
+        Array<int64> cloneActorIds;
+        Array<int64> cloneParentIds;
         for (const String& file : cloneActorFiles)
         {
             rapidjson_flax::Document actorDocument;
             ParseJsonFile(actorDocument, file);
             const rapidjson_flax::Value& actorData = GetDataArray(actorDocument);
             REQUIRE(actorData.Size() == 1);
-            cloneActorIds.Add(JsonTools::GetGuid(actorData[0], "ID"));
-            cloneParentIds.Add(JsonTools::GetGuid(actorData[0], "ParentID"));
+            cloneActorIds.Add(GetObjectLocalId(actorData[0]));
+            cloneParentIds.Add(GetParentLocalId(actorData[0]));
         }
 
-        CHECK(!cloneActorIds.Contains(parentId));
-        CHECK(!cloneActorIds.Contains(childId));
-        REQUIRE(cloneParentIds.Contains(cloneSceneId));
-        Guid cloneRootActorId = Guid::Empty;
-        for (int32 i = 0; i < cloneParentIds.Count(); i++)
-        {
-            if (cloneParentIds[i] == cloneSceneId)
-            {
-                cloneRootActorId = cloneActorIds[i];
-                break;
-            }
-        }
-        REQUIRE(cloneRootActorId.IsValid());
-        CHECK(cloneParentIds.Contains(cloneRootActorId));
+        const int64 parentLocalId = SceneObject::MakeLocalFileId(parentId);
+        CHECK(cloneActorIds.Contains(parentLocalId));
+        CHECK(cloneActorIds.Contains(SceneObject::MakeLocalFileId(childId)));
+        CHECK(cloneParentIds.Contains(1));
+        CHECK(cloneParentIds.Contains(parentLocalId));
     }
+
+}
+
+TEST_CASE("LegacyExternalActorsClone")
+{
 
     SECTION("Clone external actors scene rejects empty destination actors folder")
     {
@@ -1009,13 +1054,18 @@ TEST_CASE("ExternalActorsSceneStorage")
         };
         WriteTestSceneAsset(scenePath, sceneId, true);
         WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
-        EnsureDirectory(GetExternalActorsFolder(clonePath));
+        EnsureDirectory(SceneFragmentStore::GetScenePath(cloneSceneId));
 
         REQUIRE(Content::CloneAssetFile(clonePath, scenePath, cloneSceneId));
 
         CHECK(!FileSystem::FileExists(clonePath));
-        CHECK(FileSystem::DirectoryExists(GetExternalActorsFolder(clonePath)));
+        CHECK(FileSystem::DirectoryExists(SceneFragmentStore::GetScenePath(cloneSceneId)));
     }
+
+}
+
+TEST_CASE("LegacyContentAssetFileOperations")
+{
 
     SECTION("Clone malformed binary fails without partial output")
     {
@@ -1114,6 +1164,11 @@ TEST_CASE("ExternalActorsSceneStorage")
         }
     }
 
+}
+
+TEST_CASE("ExternalActorsSceneStorage Lifecycle")
+{
+
     SECTION("Rename external actors scene preserves GUID-keyed fragments")
     {
         const Guid sceneId = ParseGuid("44444444444444444444444444444441");
@@ -1129,14 +1184,20 @@ TEST_CASE("ExternalActorsSceneStorage")
         };
         WriteTestSceneAsset(scenePath, sceneId, true);
         WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
+        RefreshTestScene(scenePath);
         const String fragmentsFolder = SceneFragmentStore::GetScenePath(sceneId);
         CHECK(FileSystem::DirectoryExists(fragmentsFolder));
 
-        REQUIRE(!Content::RenameAsset(scenePath, renamedPath));
+        REQUIRE(!AssetOperationService::MoveAsset(scenePath, renamedPath));
 
         CHECK(FileSystem::DirectoryExists(fragmentsFolder));
         CHECK(FileSystem::FileExists(GetExternalActorPath(renamedPath, actorId)));
     }
+
+}
+
+TEST_CASE("LegacyContentAssetFileOperations Rename")
+{
 
     SECTION("Rename Json asset replaces empty destination file")
     {
@@ -1189,6 +1250,7 @@ TEST_CASE("ExternalActorsSceneStorage")
 
         WriteTestSceneAsset(sourceScenePath, sceneId, true);
         WriteExternalActorFile(sourceScenePath, actorId, sceneId, "Actor", 1024);
+        RefreshTestScene(sourceScenePath);
         sceneAsset = Content::Load<SceneAsset>(sourceScenePath);
         REQUIRE(sceneAsset);
         REQUIRE(!sceneAsset->WaitForLoaded());
@@ -1321,11 +1383,16 @@ TEST_CASE("ExternalActorsSceneStorage")
     }
 #endif
 
+}
+
+TEST_CASE("ExternalActorsSceneStorage Operations")
+{
+
     SECTION("Rename duplicated external actors scene preserves cloned fragment identity")
     {
         const Guid sceneId = ParseGuid("88888888888888888888888888888881");
         const Guid actorId = ParseGuid("88888888888888888888888888888882");
-        const Guid cloneSceneId = ParseGuid("88888888888888888888888888888883");
+        Guid cloneSceneId;
         const String scenePath = GetTestScenePath(TEXT("DuplicateRenameSource"));
         const String clonePath = GetTestScenePath(TEXT("DuplicateRenameSource 0"));
         const String renamedPath = GetTestScenePath(TEXT("CopyOfDuplicateRenameSource"));
@@ -1340,12 +1407,15 @@ TEST_CASE("ExternalActorsSceneStorage")
         };
         WriteTestSceneAsset(scenePath, sceneId, true);
         WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
+        RefreshTestScene(scenePath);
 
-        REQUIRE(!Content::CloneAssetFile(clonePath, scenePath, cloneSceneId));
+        REQUIRE(!AssetOperationService::CopyAsset(scenePath, clonePath, cloneSceneId));
+        REQUIRE(cloneSceneId.IsValid());
+        RefreshTestScene(clonePath);
         const String clonedFragments = SceneFragmentStore::GetScenePath(cloneSceneId);
         CHECK(FileSystem::DirectoryExists(clonedFragments));
 
-        REQUIRE(!Content::RenameAsset(clonePath, renamedPath));
+        REQUIRE(!AssetOperationService::MoveAsset(clonePath, renamedPath));
 
         CHECK(FileSystem::DirectoryExists(clonedFragments));
 
@@ -1369,10 +1439,11 @@ TEST_CASE("ExternalActorsSceneStorage")
 
         CHECK(FileSystem::DirectoryExists(GetSceneFragmentsFolder(scenePath)));
         REQUIRE(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+        const String fragmentsFolder = SceneFragmentStore::GetScenePath(sceneId);
 
-        Content::DeleteAsset(scenePath);
+        REQUIRE(!AssetOperationService::DeleteAsset(scenePath));
 
-        CHECK(!FileSystem::DirectoryExists(GetSceneFragmentsFolder(scenePath)));
+        CHECK(!FileSystem::DirectoryExists(fragmentsFolder));
     }
 
     SECTION("Delete loaded external actors scene removes scene fragments")
@@ -1387,17 +1458,24 @@ TEST_CASE("ExternalActorsSceneStorage")
         };
         WriteTestSceneAsset(scenePath, sceneId, true);
         WriteExternalActorFile(scenePath, actorId, sceneId, "Actor", 1024);
+        RefreshTestScene(scenePath);
 
         SceneAsset* sceneAsset = Content::Load<SceneAsset>(scenePath);
         REQUIRE(sceneAsset);
         CHECK(FileSystem::DirectoryExists(GetSceneFragmentsFolder(scenePath)));
         REQUIRE(FileSystem::FileExists(GetExternalActorPath(scenePath, actorId)));
+        const String fragmentsFolder = SceneFragmentStore::GetScenePath(sceneId);
 
-        Content::DeleteAsset(sceneAsset);
-        ObjectsRemovalService::Flush();
+        REQUIRE(!AssetOperationService::DeleteAsset(scenePath));
 
-        CHECK(!FileSystem::DirectoryExists(GetSceneFragmentsFolder(scenePath)));
+        CHECK(!FileSystem::DirectoryExists(fragmentsFolder));
+        Content::UnloadAsset(sceneAsset);
     }
+
+}
+
+TEST_CASE("LegacyExternalActorsInvalidHierarchy")
+{
 
     SECTION("Recompose ignores actors with missing parent chains")
     {
