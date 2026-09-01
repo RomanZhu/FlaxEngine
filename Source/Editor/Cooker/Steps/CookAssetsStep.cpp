@@ -1539,7 +1539,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         bytes[length + 401] = 0;
         *(int32*)(bytes.Get() + 800) = (int32)gameFlags;
         *(int32*)(bytes.Get() + 804) = contentKey;
-        *(Guid*)(bytes.Get() + 808) = gameSettings->SplashScreen.IsValid() ? gameSettings->SplashScreen.GetID() : Guid::Empty;
+        *(Guid*)(bytes.Get() + 808) = gameSettings->SplashScreen;
         Encryption::EncryptBytes(bytes.Get(), bytes.Count());
         stream->Write(bytes);
 
