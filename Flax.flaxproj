@@ -1,30 +1,29 @@
 {
   "Name": "Flax",
-  "Version": {
-    "Major": 1,
-    "Minor": 12,
-    "Revision": 0,
-    "Build": 6915
-  },
+  "Version": "1.12.6915",
+  "AssetSystemVersion": 2,
+  "ProjectSettingsIndexGuid": "8d3a79f366b94e58a322da7a1b5f9c41",
   "Company": "Flax",
   "Copyright": "Copyright (c) 2012-2026 Wojciech Figat. All rights reserved.",
   "GameTarget": "FlaxGame",
   "EditorTarget": "FlaxEditor",
+  "References": [],
+  "MinEngineVersion": "1.12.6915",
   "Configuration": {
     "UseCSharp": true,
     "UseLargeWorlds": true,
     "UseDotNet": true,
     "Windows": {
-      "UseSDL": false,
+      "UseSDL": false
     },
     "Mac": {
-      "UseSDL": false,
+      "UseSDL": false
     },
     "Linux": {
-      "UseSDL": true,
+      "UseSDL": true
     },
     "Web": {
-      "Threads": false,
-    },
+      "Threads": false
+    }
   }
 }
