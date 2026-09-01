@@ -343,7 +343,7 @@ TEST_CASE("External actor scene preparation embeds project-root fragments for se
     REQUIRE(initData.Header.Chunks[0]);
     const auto& runtimeBytes = initData.Header.Chunks[0]->Data;
     rapidjson_flax::Document runtime;
-    runtime.Parse(reinterpret_cast<const char*>(runtimeBytes.Get()), runtimeBytes.Count());
+    runtime.Parse(reinterpret_cast<const char*>(runtimeBytes.Get()), runtimeBytes.Length());
     REQUIRE_FALSE(runtime.HasParseError());
     CHECK_FALSE(runtime.HasMember("ExternalActors"));
     REQUIRE(runtime.HasMember("Data"));
