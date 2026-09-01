@@ -79,8 +79,8 @@ API_STRUCT() struct FLAXENGINE_API AssetObjectId
     }
 
     /// <summary>
-    /// Produces the internal storage/runtime key used while legacy binary containers are being removed.
-    /// This value is derived, is never serialized as persistent identity, and is collision-checked by the database.
+    /// Produces the transitional storage/runtime key used while legacy binary containers are being removed.
+    /// This derived value can collide and must never be used as authority for exact object identity.
     /// </summary>
     Guid ToRuntimeObjectGuid() const
     {

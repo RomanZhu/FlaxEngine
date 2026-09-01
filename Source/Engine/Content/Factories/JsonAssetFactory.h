@@ -21,6 +21,7 @@ public:
     Asset* New(const AssetLoadLocation& location) override
     {
         if (location.Artifact.StoragePath.Get().IsEmpty() ||
+            location.Artifact.ObjectID != location.Info.ObjectID ||
             location.Artifact.AssetID != location.Info.ID ||
             location.Artifact.TypeName != location.Info.TypeName)
             return nullptr;

@@ -31,7 +31,7 @@ namespace
     {
         AssetPipelineDiagnostic diagnostic;
         ArtifactStoragePath path;
-        REQUIRE_FALSE(ArtifactStore::TryGetArtifactPath(library, target, ArtifactTargetDimension::All, assetId,
+        REQUIRE_FALSE(ArtifactStore::TryGetArtifactPath(library, target, ArtifactTargetDimension::All, AssetObjectId::Main(AssetGuid(assetId)),
             StringAnsiView("Runtime"), GCKey(keyText), StringAnsiView(".bin"), path, diagnostic));
         const String directory = StringUtils::GetDirectoryName(path.Get());
         if (!FileSystem::DirectoryExists(directory))
@@ -45,7 +45,6 @@ namespace
         AssetPipelineDiagnostic diagnostic;
         ArtifactManifest manifest;
         manifest.ObjectID = AssetObjectId::Main(AssetGuid(assetId));
-        manifest.AssetID = assetId;
         manifest.DatabaseRevision = 1;
         manifest.ProcessorID = TEXT("test.gc");
         manifest.ProcessorImplementationVersion = 1;
@@ -65,7 +64,7 @@ namespace
         StringAnsi json;
         REQUIRE_FALSE(manifest.ToJson(json, diagnostic));
         ArtifactStoragePath manifestPath;
-        REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, target, assetId, manifestPath, diagnostic));
+        REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(library, target, manifest.ObjectID, manifestPath, diagnostic));
         const String directory = StringUtils::GetDirectoryName(manifestPath.Get());
         if (!FileSystem::DirectoryExists(directory))
             REQUIRE_FALSE(FileSystem::CreateDirectory(directory));

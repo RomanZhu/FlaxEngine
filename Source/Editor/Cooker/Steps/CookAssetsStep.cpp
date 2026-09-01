@@ -1287,6 +1287,7 @@ bool CookAssetsStep::Perform(CookingData& data)
     }
     Array<ArtifactLease> cookArtifactLeases;
     Dictionary<AssetObjectId, ArtifactKey> pinnedArtifactKeys;
+    Dictionary<AssetObjectId, String> cookedObjectPaths;
     AssetReference<Asset> assetRef;
     assetRef.Unload.Bind([]
     {
@@ -1330,7 +1331,7 @@ bool CookAssetsStep::Perform(CookingData& data)
                 return true;
             }
             ArtifactRequest request;
-            request.AssetID = assetId;
+            request.Object = objectId;
             request.Target = cookArtifactTarget;
             request.OutputKind = "runtime";
             request.Policy = ArtifactResolvePolicy::Exact;
@@ -1353,20 +1354,7 @@ bool CookAssetsStep::Perform(CookingData& data)
             pinnedArtifactKeys[objectId] = pinnedArtifact;
 
             cookArtifactLeases.Add(ArtifactLease::Acquire(artifact.StoragePath.Get()));
-            String cachedFilePath;
-            cache.GetFilePath(assetId, cachedFilePath);
-            if (FileSystem::CopyFile(cachedFilePath, artifact.StoragePath.Get()))
-            {
-                LOG(Error, "Failed to copy exact canonical artifact from '{0}' to cooker cache '{1}'", artifact.StoragePath.Get(), cachedFilePath);
-                return true;
-            }
-            auto& cacheEntry = cache.Entries[assetId];
-            cacheEntry.ID = assetId;
-            cacheEntry.TypeName = canonicalRecord.TypeName;
-            cacheEntry.FileModified = FileSystem::GetFileLastEditTime(canonicalRecord.SourcePath.Get());
-            cacheEntry.FileDependencies.Clear();
-            cacheEntry.FileDependencies.Add(ToPair(String(canonicalRecord.SourcePath.Get()), cacheEntry.FileModified));
-            cacheEntry.FileDependencies.Add(ToPair(String(canonicalRecord.MetaPath.Get()), FileSystem::GetFileLastEditTime(canonicalRecord.MetaPath.Get())));
+            cookedObjectPaths[objectId] = artifact.StoragePath.Get();
             e.Info.TypeName = canonicalRecord.TypeName;
             data.Stats.CookedAssets++;
             continue;
@@ -1532,7 +1520,11 @@ bool CookAssetsStep::Perform(CookingData& data)
             const Guid assetId = objectId.ToRuntimeObjectGuid();
 
             String cookedFilePath;
-            cache.GetFilePath(assetId, cookedFilePath);
+            const String* exactCookedPath = cookedObjectPaths.TryGet(objectId);
+            if (exactCookedPath)
+                cookedFilePath = *exactCookedPath;
+            else
+                cache.GetFilePath(assetId, cookedFilePath);
             if (!FileSystem::FileExists(cookedFilePath))
             {
                 data.Error(String::Format(TEXT("Missing cooked file for asset {0}."), assetId));
@@ -1605,18 +1597,16 @@ bool CookAssetsStep::Perform(CookingData& data)
             return true;
         }
     }
-    Dictionary<Guid, AssetObjectId> objectsByRuntimeID;
     Array<RuntimeObjectDependencyRecord> dependencyRecords;
     dependencyRecords.EnsureCapacity(buildDatabaseSnapshot.Records.Count() + data.BuiltinRootAssets.Count());
     for (const AssetRecord& record : buildDatabaseSnapshot.Records)
     {
         const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
-        if (!object.IsValid() || record.ID != object.ToRuntimeObjectGuid() || objectsByRuntimeID.ContainsKey(record.ID))
+        if (!object.IsValid())
         {
-            data.Error(TEXT("Build snapshot contains an invalid or duplicate runtime object mapping."));
+            data.Error(TEXT("Build snapshot contains an invalid object identity."));
             return true;
         }
-        objectsByRuntimeID.Add(record.ID, object);
         RuntimeObjectDependencyRecord dependencyRecord;
         dependencyRecord.Object = object;
         dependencyRecords.Add(MoveTemp(dependencyRecord));
@@ -1624,16 +1614,8 @@ bool CookAssetsStep::Perform(CookingData& data)
     const int32 databaseRecordCount = buildDatabaseSnapshot.Records.Count();
     for (auto i = data.BuiltinRootAssets.Begin(); i.IsNotEnd(); ++i)
     {
-        const Guid runtimeID = i->Item.ToRuntimeObjectGuid();
-        const AssetObjectId* existing = objectsByRuntimeID.TryGet(runtimeID);
-        if (existing && *existing != i->Item)
-        {
-            data.Error(TEXT("An engine built-in root collides with a project asset object."));
-            return true;
-        }
-        if (existing)
+        if (frozenRecords.ContainsKey(i->Item))
             continue;
-        objectsByRuntimeID.Add(runtimeID, i->Item);
         RuntimeObjectDependencyRecord dependencyRecord;
         dependencyRecord.Object = i->Item;
         dependencyRecords.Add(MoveTemp(dependencyRecord));
@@ -1702,7 +1684,11 @@ bool CookAssetsStep::Perform(CookingData& data)
             return true;
         }
         String cookedFilePath;
-        cache.GetFilePath(runtimeID, cookedFilePath);
+        const String* exactCookedPath = cookedObjectPaths.TryGet(object);
+        if (exactCookedPath)
+            cookedFilePath = *exactCookedPath;
+        else
+            cache.GetFilePath(runtimeID, cookedFilePath);
         ContentHash contentHash;
         if (HashCookedFile(cookedFilePath, contentHash))
         {

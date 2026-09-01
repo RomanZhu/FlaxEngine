@@ -113,7 +113,7 @@ namespace
 
 bool ArtifactManifest::Validate(const StringView& path, AssetPipelineDiagnostic& diagnostic) const
 {
-    if (ManifestVersion != CurrentVersion || !ObjectID.IsValid() || !AssetID.IsValid() || AssetID != ObjectID.ToRuntimeObjectGuid() ||
+    if (ManifestVersion != CurrentVersion || !ObjectID.IsValid() ||
         ProcessorID.IsEmpty() || ProcessorImplementationVersion < 1 ||
         InputFingerprint.IsZero() || SourceHash.IsZero() || SettingsHash.IsZero() || BuildID.IsEmpty() || Outputs.IsEmpty())
         return Fail(diagnostic, path, TEXT("Artifact manifest is missing a required identity, version, hash, build, or output field."));
@@ -132,7 +132,7 @@ bool ArtifactManifest::Validate(const StringView& path, AssetPipelineDiagnostic&
         if ((dependency.Kind == AssetDependencyKind::SourceFile || dependency.Kind == AssetDependencyKind::Toolchain) && dependency.Hash.IsZero())
             return Fail(diagnostic, path, TEXT("Artifact manifest source/toolchain dependency lacks a content hash."));
         if ((dependency.Kind == AssetDependencyKind::BuildInput || dependency.Kind == AssetDependencyKind::RuntimeReference) &&
-            (!dependency.ObjectID.IsValid() || dependency.AssetID != dependency.ObjectID.ToRuntimeObjectGuid()))
+            !dependency.ObjectID.IsValid())
             return Fail(diagnostic, path, TEXT("Artifact manifest asset dependency lacks a valid object identity."));
         if (dependency.Kind == AssetDependencyKind::BuildInput && dependency.ExactArtifact.IsZero() && dependency.InterfaceHash.IsZero())
             return Fail(diagnostic, path, TEXT("Artifact manifest build input lacks an exact artifact or semantic interface hash."));
@@ -186,7 +186,6 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
     result.ManifestVersion = version->value.GetInt();
     if (ReadObjectID(document, "objectId", result.ObjectID))
         return Fail(diagnostic, path, TEXT("Artifact manifest object identity is invalid."));
-    result.AssetID = result.ObjectID.ToRuntimeObjectGuid();
     result.DatabaseRevision = databaseRevision->value.GetUint64();
     if (ReadString(processor->value, "id", result.ProcessorID))
         return Fail(diagnostic, path, TEXT("Artifact manifest processor ID is invalid."));
@@ -233,7 +232,6 @@ bool ArtifactManifest::Parse(const StringAnsiView& json, const StringView& path,
         {
             if (ReadObjectID(value, "objectId", dependency.ObjectID))
                 return Fail(diagnostic, path, TEXT("Artifact manifest dependency object identity is invalid."));
-            dependency.AssetID = dependency.ObjectID.ToRuntimeObjectGuid();
         }
         const auto interfaceVersion = value.FindMember("interfaceVersion");
         if (interfaceVersion != value.MemberEnd())

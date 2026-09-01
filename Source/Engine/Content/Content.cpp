@@ -132,6 +132,7 @@ namespace
             AssetInfo info(instanceId, location.Object, String(location.TypeName), sourcePath, location.Revision);
             AssetLoadLocation contentLocation;
             contentLocation.Info = info;
+            contentLocation.Artifact.ObjectID = location.Object;
             contentLocation.Artifact.AssetID = info.ID;
             contentLocation.Artifact.TypeName = info.TypeName;
             contentLocation.Artifact.StoragePath = ArtifactStoragePath(storagePath);
@@ -1897,7 +1898,8 @@ bool Content::RegisterAssetLoadLocation(const AssetLoadLocation& location, Asset
         diagnostic.Message = TEXT("Built-in asset load locations are immutable and cannot be overridden.");
         return true;
     }
-    if (!location.Info.ID.IsValid() || !location.Info.ObjectID.IsValid() || location.Info.ObjectID.ToRuntimeObjectGuid() != location.Info.ID ||
+    if (!location.Info.ID.IsValid() || !location.Info.ObjectID.IsValid() || location.Artifact.ObjectID != location.Info.ObjectID ||
+        location.Info.ObjectID.ToRuntimeObjectGuid() != location.Info.ID ||
         location.Artifact.AssetID != location.Info.ID || location.Artifact.TypeName != location.Info.TypeName ||
         !AssetPathPolicy::IsCanonicalPathValid(CanonicalAssetPath(location.Info.Path), Globals::ProjectContentFolder) ||
         !AssetPathPolicy::IsArtifactPathValid(location.Artifact.StoragePath, Globals::ProjectLibraryFolder))

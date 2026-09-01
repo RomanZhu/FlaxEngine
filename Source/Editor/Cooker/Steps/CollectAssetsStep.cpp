@@ -21,35 +21,28 @@ bool CollectAssetsStep::Perform(CookingData& data)
         return true;
     }
 
-    Dictionary<Guid, AssetObjectId> objectsByRuntimeId;
     Dictionary<AssetObjectId, const AssetRecord*> recordsByObject;
     Array<RuntimeObjectDependencyRecord> dependencyRecords;
     dependencyRecords.EnsureCapacity(snapshot.Records.Count() + data.BuiltinRootAssets.Count());
     for (const AssetRecord& record : snapshot.Records)
     {
         const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
-        if (!record.ID.IsValid() || !object.IsValid() || record.ID != object.ToRuntimeObjectGuid() ||
-            objectsByRuntimeId.ContainsKey(record.ID) || recordsByObject.ContainsKey(object))
+        if (!record.ID.IsValid() || !object.IsValid() || recordsByObject.ContainsKey(object))
         {
             data.Error(TEXT("The frozen asset database contains an invalid or duplicate object identity."));
             return true;
         }
-        objectsByRuntimeId.Add(record.ID, object);
         recordsByObject.Add(object, &record);
     }
 
     for (auto i = data.BuiltinRootAssets.Begin(); i.IsNotEnd(); ++i)
     {
         const AssetObjectId object = i->Item;
-        const Guid runtimeId = object.ToRuntimeObjectGuid();
-        const AssetObjectId* existing = objectsByRuntimeId.TryGet(runtimeId);
-        if (existing && *existing != object)
+        if (!object.IsValid())
         {
-            data.Error(TEXT("An engine built-in root collides with a project asset object."));
+            data.Error(TEXT("The engine built-in root set contains an invalid object identity."));
             return true;
         }
-        if (!existing)
-            objectsByRuntimeId.Add(runtimeId, object);
     }
 
     for (const AssetRecord& record : snapshot.Records)

@@ -123,7 +123,7 @@ TEST_CASE("Runtime asset catalog rejects source and Library paths")
     entries.Clear();
     entries.Add(CatalogEntry(subAsset, "FlaxEngine.Texture", "base/objects.pak", "sub"));
     entries.Add(CatalogEntry(collidingMain, "FlaxEngine.Texture", "base/objects.pak", "main"));
-    CHECK(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
+    CHECK_FALSE(catalog.Set(StringAnsiView("build"), TestHash("target"), entries, diagnostic));
 }
 
 TEST_CASE("Runtime dependency closure follows recorded object edges without asset loading")

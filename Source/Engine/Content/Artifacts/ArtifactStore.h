@@ -4,6 +4,7 @@
 
 #include "ArtifactTarget.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
+#include "Engine/Content/AssetDatabase/Identity/AssetObjectId.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineDiagnostics.h"
 
 /// <summary>
@@ -35,11 +36,11 @@ public:
 
     /// <summary>Builds one immutable output path from engine-owned semantic fields.</summary>
     static bool TryGetArtifactPath(const StringView& libraryRoot, const ArtifactTarget& target, ArtifactTargetDimension dimensions,
-        const Guid& assetId, const StringAnsiView& outputKind, const ArtifactKey& key, const StringAnsiView& extension,
+        const AssetObjectId& object, const StringAnsiView& outputKind, const ArtifactKey& key, const StringAnsiView& extension,
         ArtifactStoragePath& path, AssetPipelineDiagnostic& diagnostic);
 
-    /// <summary>Builds the mutable current-manifest path for one asset and complete target.</summary>
-    static bool TryGetManifestPath(const StringView& libraryRoot, const ArtifactTarget& target, const Guid& assetId,
+    /// <summary>Builds the mutable current-manifest path for one exact object and complete target.</summary>
+    static bool TryGetManifestPath(const StringView& libraryRoot, const ArtifactTarget& target, const AssetObjectId& object,
         ArtifactStoragePath& path, AssetPipelineDiagnostic& diagnostic);
 
     static bool TryGetLockPath(const StringView& libraryRoot, const ArtifactKey& key, ArtifactStoragePath& path, AssetPipelineDiagnostic& diagnostic);

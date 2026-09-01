@@ -139,27 +139,31 @@ String ArtifactStore::GetGcPath(const StringView& libraryRoot)
 }
 
 bool ArtifactStore::TryGetArtifactPath(const StringView& libraryRoot, const ArtifactTarget& target, ArtifactTargetDimension dimensions,
-    const Guid& assetId, const StringAnsiView& outputKind, const ArtifactKey& key, const StringAnsiView& extension,
+    const AssetObjectId& object, const StringAnsiView& outputKind, const ArtifactKey& key, const StringAnsiView& extension,
     ArtifactStoragePath& path, AssetPipelineDiagnostic& diagnostic)
 {
     path = ArtifactStoragePath();
-    if (!assetId.IsValid() || outputKind.IsEmpty() || key.IsZero() || !IsExtensionValid(extension))
-        return PathFail(diagnostic, libraryRoot, TEXT("Artifact output path requires a valid asset, kind, key, and extension."));
+    if (!object.IsValid() || outputKind.IsEmpty() || key.IsZero() || !IsExtensionValid(extension))
+        return PathFail(diagnostic, libraryRoot, TEXT("Artifact output path requires a valid object, kind, key, and extension."));
     const String targetDirectory(target.BuildKey(dimensions).ToString());
+    const String sourceDirectory = object.Asset.Value.ToString(Guid::FormatType::N).ToLower();
+    const String objectDirectory = String::Format(TEXT("{0}"), object.LocalId);
     const String outputDirectory(SanitizeIdentifier(outputKind));
     const String fileName = String(key.ToString()) + String(extension);
-    const String candidate = GetArtifactsPath(libraryRoot) / targetDirectory / assetId.ToString(Guid::FormatType::N).ToLower() / outputDirectory / fileName;
+    const String candidate = GetArtifactsPath(libraryRoot) / targetDirectory / sourceDirectory / objectDirectory / outputDirectory / fileName;
     return SetStoragePath(libraryRoot, candidate, path, diagnostic);
 }
 
-bool ArtifactStore::TryGetManifestPath(const StringView& libraryRoot, const ArtifactTarget& target, const Guid& assetId,
+bool ArtifactStore::TryGetManifestPath(const StringView& libraryRoot, const ArtifactTarget& target, const AssetObjectId& object,
     ArtifactStoragePath& path, AssetPipelineDiagnostic& diagnostic)
 {
     path = ArtifactStoragePath();
-    if (!assetId.IsValid())
-        return PathFail(diagnostic, libraryRoot, TEXT("Artifact manifest path requires a valid asset GUID."));
+    if (!object.IsValid())
+        return PathFail(diagnostic, libraryRoot, TEXT("Artifact manifest path requires a valid asset object ID."));
     const String targetDirectory(target.BuildKey(ArtifactTargetDimension::All).ToString());
-    const String candidate = GetManifestsPath(libraryRoot) / targetDirectory / (assetId.ToString(Guid::FormatType::N).ToLower() + TEXT(".json"));
+    const String sourceDirectory = object.Asset.Value.ToString(Guid::FormatType::N).ToLower();
+    const String fileName = String::Format(TEXT("{0}.json"), object.LocalId);
+    const String candidate = GetManifestsPath(libraryRoot) / targetDirectory / sourceDirectory / fileName;
     return SetStoragePath(libraryRoot, candidate, path, diagnostic);
 }
 

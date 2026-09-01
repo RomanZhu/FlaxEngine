@@ -413,7 +413,8 @@ namespace
         }
 
         ArtifactKeyBuilder jobBuilder(StringAnsiView("synthetic-build-job-v1"));
-        jobBuilder.AddGuid(StringAnsiView("asset"), prepared.AssetID);
+        jobBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
+        jobBuilder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
         jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
         jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
         jobBuilder.AddKey(StringAnsiView("manifest-target"), request.Target.BuildKey(ArtifactTargetDimension::All));
@@ -581,7 +582,7 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
     const String firstStoragePath = loadedAsset->GetStoragePath();
 
     ArtifactStoragePath manifestPath;
-    REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(fixture.LibraryRoot, fixture.Target, fixture.AssetID, manifestPath, diagnostic));
+    REQUIRE_FALSE(ArtifactStore::TryGetManifestPath(fixture.LibraryRoot, fixture.Target, AssetObjectId::Main(AssetGuid(fixture.AssetID)), manifestPath, diagnostic));
     StringAnsi manifestJson;
     ArtifactManifest manifest;
     REQUIRE_FALSE(File::ReadAllText(manifestPath.Get(), manifestJson));
@@ -591,7 +592,7 @@ TEST_CASE("AssetPipeline.Artifacts synthetic processor covers end-to-end state t
 
     // Output keys honor their declared target masks.
     ArtifactRequest baseRequest;
-    baseRequest.AssetID = fixture.AssetID;
+    baseRequest.Object = AssetObjectId::Main(AssetGuid(fixture.AssetID));
     baseRequest.Target = fixture.Target;
     baseRequest.OutputKind = "runtime";
     baseRequest.RequiredCompatibility = "synthetic-runtime-v1";

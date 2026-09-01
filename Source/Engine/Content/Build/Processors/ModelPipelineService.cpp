@@ -142,7 +142,10 @@ namespace
 
     void QueueHotSwap(const ArtifactManifest& manifest, const String& typeName)
     {
-        const Guid assetID = manifest.AssetID;
+        AssetRecord record;
+        if (!AssetDatabase::Get().TryGetRecord(manifest.ObjectID, record))
+            return;
+        const Guid assetID = record.ID;
         const ArtifactManifestOutput* runtime = nullptr;
         for (const ArtifactManifestOutput& output : manifest.Outputs)
         {
@@ -160,6 +163,7 @@ namespace
             AssetPipelineDiagnostic diagnostic;
             if (!ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
             {
+                artifact.ObjectID = manifest.ObjectID;
                 artifact.AssetID = assetID;
                 artifact.TypeName = typeName;
                 artifact.StoragePath = storagePath;
@@ -271,7 +275,8 @@ bool ModelPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         return true;
 
     ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-model-build-job-v1"));
-    jobBuilder.AddGuid(StringAnsiView("asset"), prepared.AssetID);
+    jobBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
+    jobBuilder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
     jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
     jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
     jobBuilder.AddKey(StringAnsiView("manifest-target"), request.Target.BuildKey(ArtifactTargetDimension::All));
@@ -399,7 +404,7 @@ bool ModelPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
     plans.EnsureCapacity(records.Count());
     for (const AssetRecord& current : records)
     {
-        request.AssetID = current.ID;
+        request.Object = AssetObjectId(AssetGuid(current.SourceAssetID), current.LocalId);
         ArtifactResolutionPlan plan;
         if (CreatePlan(current, request, plan, diagnostic))
             return true;

@@ -2283,7 +2283,7 @@ bool AssetPipelineService::IsArtifactCurrent(const Guid& assetID)
     for (const AssetRecord& current : records)
     {
         ArtifactRequest request;
-        request.AssetID = current.ID;
+        request.Object = AssetObjectId(AssetGuid(current.SourceAssetID), current.LocalId);
         request.Target = ArtifactResolver::Get().GetDefaultTarget();
         request.OutputKind = "runtime";
         request.Policy = ArtifactResolvePolicy::NoBuild;

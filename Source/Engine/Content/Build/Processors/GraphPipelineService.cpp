@@ -124,7 +124,10 @@ namespace
 
     void QueueHotSwap(const ArtifactManifest& manifest, const String& typeName)
     {
-        const Guid assetID = manifest.AssetID;
+        AssetRecord record;
+        if (!AssetDatabase::Get().TryGetRecord(manifest.ObjectID, record))
+            return;
+        const Guid assetID = record.ID;
         const ArtifactManifestOutput* runtime = nullptr;
         for (const ArtifactManifestOutput& output : manifest.Outputs)
         {
@@ -142,6 +145,7 @@ namespace
             AssetPipelineDiagnostic diagnostic;
             if (!ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
             {
+                artifact.ObjectID = manifest.ObjectID;
                 artifact.AssetID = assetID;
                 artifact.TypeName = typeName;
                 artifact.StoragePath = storagePath;
@@ -350,7 +354,8 @@ bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactR
         return true;
 
     ArtifactKeyBuilder jobBuilder(StringAnsiView("flax-graph-document-build-job-v2"));
-    jobBuilder.AddGuid(StringAnsiView("asset"), prepared.AssetID);
+    jobBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
+    jobBuilder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
     jobBuilder.AddUInt64(StringAnsiView("database-revision"), prepared.DatabaseRevision);
     jobBuilder.AddKey(StringAnsiView("prepared-input"), prepared.InputFingerprint);
     jobBuilder.AddKey(StringAnsiView("manifest-target"), request.Target.BuildKey(ArtifactTargetDimension::All));
@@ -456,7 +461,7 @@ bool GraphPipelineService::RequestBuild(const Guid& assetID, bool force, AssetPi
             assetID, TEXT("Graph asset is not registered."));
 
     ArtifactRequest request;
-    request.AssetID = assetID;
+    request.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
     request.Target = TexturePipelineService::GetHostTarget();
     request.OutputKind = "runtime";
     request.RequiredCompatibility = "flax-graph-document-v1";

@@ -44,7 +44,7 @@ bool EditorArtifactAssetObjectResolver::ResolveArtifactObject(const AssetObjectI
             TEXT("Editor artifact resolver is not configured."));
 
     ArtifactRequest request;
-    request.AssetID = record.ID;
+    request.Object = object;
     request.Target = ArtifactResolver::Get().GetDefaultTarget();
     request.OutputKind = "runtime";
     request.Policy = ArtifactResolvePolicy::Exact;

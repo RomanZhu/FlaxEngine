@@ -284,14 +284,12 @@ bool RuntimeAssetCatalog::ValidateCanonical(AssetPipelineDiagnostic& diagnostic)
         return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog requires a build ID, target hash, and bounded object entries."));
 
     HashSet<AssetObjectId> objects;
-    HashSet<Guid> runtimeObjects;
     for (int32 i = 0; i < _entries.Count(); i++)
     {
         const RuntimeAssetCatalogEntry& entry = _entries[i];
         if (!entry.Object.IsValid() || !IsTextValid(entry.TypeName) || !IsPackageNameValid(entry.PackageName) || entry.Size == 0 ||
             entry.Offset > MAX_uint64 - entry.Size || entry.Content.IsZero() || entry.Compression > RuntimeAssetCompression::Zstd ||
-            entry.Dependencies.Count() > MaximumDependenciesPerEntry || !objects.Add(entry.Object) ||
-            !runtimeObjects.Add(entry.Object.ToRuntimeObjectGuid()))
+            entry.Dependencies.Count() > MaximumDependenciesPerEntry || !objects.Add(entry.Object))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog contains an invalid or duplicate object entry."));
         if (i != 0 && !Less(_entries[i - 1].Object, entry.Object))
             return Fail(diagnostic, StringView::Empty, TEXT("Runtime catalog object entries are not in canonical order."));

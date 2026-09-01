@@ -9,7 +9,6 @@ namespace
     {
         ArtifactManifest manifest;
         manifest.ObjectID = AssetObjectId::Main(AssetGuid(Guid(1, 2, 3, 4)));
-        manifest.AssetID = manifest.ObjectID.ToRuntimeObjectGuid();
         manifest.DatabaseRevision = 42;
         manifest.ProcessorID = TEXT("Tests.Manifest");
         manifest.ProcessorImplementationVersion = 3;
@@ -62,7 +61,6 @@ TEST_CASE("ArtifactManifest canonical JSON round-trips coherently")
 
     ArtifactManifest parsed;
     REQUIRE_FALSE(ArtifactManifest::Parse(first, TEXT("manifest.json"), parsed, diagnostic));
-    CHECK(parsed.AssetID == manifest.AssetID);
     CHECK(parsed.ObjectID == manifest.ObjectID);
     CHECK(parsed.InputFingerprint == manifest.InputFingerprint);
     REQUIRE(parsed.Outputs.Count() == 1);

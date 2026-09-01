@@ -12,8 +12,6 @@ struct FLAXENGINE_API ArtifactManifestDependency
     AssetDependencyKind Kind = AssetDependencyKind::SourceFile;
     String Identity;
     AssetObjectId ObjectID;
-    /// <summary>Transient runtime/storage key derived from ObjectID.</summary>
-    Guid AssetID = Guid::Empty;
     ContentHash Hash;
     ArtifactKey ExactArtifact;
     ContentHash InterfaceHash;
@@ -40,8 +38,6 @@ struct FLAXENGINE_API ArtifactManifest
 
     int32 ManifestVersion = CurrentVersion;
     AssetObjectId ObjectID;
-    /// <summary>Transient artifact-storage identity. Never serialized as a persistent reference.</summary>
-    Guid AssetID = Guid::Empty;
     uint64 DatabaseRevision = 0;
     String ProcessorID;
     uint32 ProcessorImplementationVersion = 0;

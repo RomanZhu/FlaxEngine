@@ -23,7 +23,7 @@ namespace
         diagnostic = AssetPipelineDiagnostic();
         diagnostic.Code = code;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Resolution;
-        diagnostic.AssetGuid = request.AssetID;
+        diagnostic.AssetGuid = request.Object.Asset.Value;
         diagnostic.SourcePath = path;
         diagnostic.OutputKind = String(request.OutputKind);
         diagnostic.Message = message;
@@ -55,7 +55,7 @@ namespace
         result = ArtifactInspection();
         ArtifactStoragePath manifestPath;
         AssetPipelineDiagnostic diagnostic;
-        if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, request.AssetID, manifestPath, diagnostic))
+        if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, request.Object, manifestPath, diagnostic))
         {
             result.InvalidDiagnostic = diagnostic;
             return false;
@@ -64,7 +64,7 @@ namespace
             return false;
         StringAnsi json;
         if (File::ReadAllText(manifestPath.Get(), json) || ArtifactManifest::Parse(json, manifestPath.Get(), result.Manifest, diagnostic) ||
-            result.Manifest.AssetID != request.AssetID || result.Manifest.Target.BuildKey(ArtifactTargetDimension::All) != request.Target.BuildKey(ArtifactTargetDimension::All))
+            result.Manifest.ObjectID != request.Object || result.Manifest.Target.BuildKey(ArtifactTargetDimension::All) != request.Target.BuildKey(ArtifactTargetDimension::All))
         {
             if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
                 ResolveFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, request, manifestPath.Get(), TEXT("Current artifact manifest identity or target is invalid."));
@@ -97,6 +97,7 @@ namespace
         }
         result.HasOutput = true;
         result.IsCompatible = ArtifactCompatibility::IsCompatible(request.RequiredCompatibility, selected->Compatibility);
+        result.Artifact.ObjectID = request.Object;
         result.Artifact.AssetID = record.ID;
         result.Artifact.TypeName = record.TypeName;
         result.Artifact.StoragePath = outputPath;
@@ -143,14 +144,14 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
 {
     result = ResolvedArtifact();
     diagnostic = AssetPipelineDiagnostic();
-    if (!IsConfigured() || !request.AssetID.IsValid() || request.OutputKind.IsEmpty())
+    if (!IsConfigured() || !request.Object.IsValid() || request.OutputKind.IsEmpty())
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, StringView::Empty, TEXT("Artifact resolver is not configured or the request is incomplete."));
     constexpr int32 MaxExactResolveAttempts = 8;
     for (int32 resolveAttempt = 0; resolveAttempt < MaxExactResolveAttempts; resolveAttempt++)
     {
     AssetRecord record;
-    if (!_database->TryGetRecord(request.AssetID, record))
-        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested GUID."));
+    if (!_database->TryGetRecord(request.Object, record))
+        return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested object."));
     ArtifactInspection inspection;
     Inspect(_libraryRoot, record, request, inspection);
     if (request.Policy == ArtifactResolvePolicy::PublishedOnly)
@@ -240,7 +241,7 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
         return true;
     }
     AssetRecord currentRecord;
-    if (!_database->TryGetRecord(request.AssetID, currentRecord))
+    if (!_database->TryGetRecord(request.Object, currentRecord))
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, record.SourcePath.Get(), TEXT("Asset database lost the requested record while waiting for the exact build."));
     if (currentRecord.DatabaseRevision != record.DatabaseRevision)
     {
@@ -276,7 +277,7 @@ bool ArtifactResolver::ResolveLoadLocation(const ArtifactRequest& request, Asset
     if (Resolve(request, artifact, diagnostic))
         return true;
     AssetRecord record;
-    if (!_database->TryGetRecord(request.AssetID, record))
+    if (!_database->TryGetRecord(request.Object, record))
         return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Resolved artifact lost its canonical database record."));
     result.Info = record.ToAssetInfo();
     result.Artifact = artifact;

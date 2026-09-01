@@ -17,7 +17,7 @@ enum class ArtifactResolvePolicy : byte
 
 struct FLAXENGINE_API ArtifactRequest
 {
-    Guid AssetID = Guid::Empty;
+    AssetObjectId Object;
     ArtifactTarget Target;
     StringAnsi OutputKind;
     StringAnsi RequiredCompatibility;

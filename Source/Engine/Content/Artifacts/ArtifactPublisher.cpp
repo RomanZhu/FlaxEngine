@@ -74,7 +74,7 @@ namespace
         diagnostic = AssetPipelineDiagnostic();
         diagnostic.Code = code;
         diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
-        diagnostic.AssetGuid = prepared.AssetID;
+        diagnostic.AssetGuid = prepared.ObjectID.Asset.Value;
         diagnostic.SourcePath = path;
         diagnostic.Message = message;
         return true;
@@ -130,7 +130,7 @@ namespace
             diagnostic = AssetPipelineDiagnostic();
             diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
             diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
-            diagnostic.AssetGuid = manifest.AssetID;
+            diagnostic.AssetGuid = manifest.ObjectID.Asset.Value;
             diagnostic.Message = TEXT("Artifact publication has no deterministic primary output key.");
             return true;
         }
@@ -164,7 +164,7 @@ namespace
                     diagnostic = AssetPipelineDiagnostic();
                     diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactMissing;
                     diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
-                    diagnostic.AssetGuid = manifest.AssetID;
+                    diagnostic.AssetGuid = manifest.ObjectID.Asset.Value;
                     diagnostic.SourcePath = source.Identity;
                     diagnostic.Message = TEXT("Cannot persist an artifact dependency that has no asset-object database record.");
                     return true;
@@ -273,7 +273,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         if (cleanupRequired)
             context.Cancel();
     };
-    if (!context.IsInitialized() || context.IsClosed() || prepared.Outputs.IsEmpty() || request.Outputs.Count() != prepared.Outputs.Count() ||
+    if (!context.IsInitialized() || context.IsClosed() || !prepared.ObjectID.IsValid() || prepared.Outputs.IsEmpty() || request.Outputs.Count() != prepared.Outputs.Count() ||
         request.ProcessorID.IsEmpty() || request.ProcessorImplementationVersion < 1 || request.BuildID.IsEmpty() || !request.QueryCurrentState.IsBinded())
         return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, prepared, context.GetStagingPath(), TEXT("Artifact publication request is incomplete or context is not active."));
     if (context.Close(diagnostic))
@@ -316,7 +316,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         if (ReadAndHash(staged->AbsolutePath, size, contentHash) || size != staged->Size || contentHash != staged->Hash)
             return PublicationFail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, prepared, staged->AbsolutePath, TEXT("Staged artifact output changed before publication."));
         ArtifactStoragePath finalPath;
-        if (ArtifactStore::TryGetArtifactPath(libraryRoot, request.Target, declared.TargetDimensions, declared.EffectiveAssetID,
+        if (ArtifactStore::TryGetArtifactPath(libraryRoot, request.Target, declared.TargetDimensions, prepared.ObjectID,
             declared.Kind, plan->Key, declared.Extension, finalPath, diagnostic))
             return true;
         String relativePath;
@@ -398,7 +398,8 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     // Output kinds may be built independently. Serialize manifest updates per asset so
     // concurrent output publications can merge without dropping each other's entries.
     ArtifactKeyBuilder manifestLockBuilder(StringAnsiView("flax-artifact-manifest-lock-v1"));
-    manifestLockBuilder.AddGuid(StringAnsiView("asset"), prepared.AssetID);
+    manifestLockBuilder.AddGuid(StringAnsiView("asset-guid"), prepared.ObjectID.Asset.Value);
+    manifestLockBuilder.AddUInt64(StringAnsiView("asset-file-id"), static_cast<uint64>(prepared.ObjectID.LocalId));
     manifestLockBuilder.AddKey(StringAnsiView("target"), request.Target.BuildKey(ArtifactTargetDimension::All));
     ArtifactLock manifestLock;
     if (manifestLock.Acquire(libraryRoot, manifestLockBuilder.Finalize(), context.GetJobID(), context.GetCancellation(), diagnostic))
@@ -417,7 +418,6 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
 
     ArtifactManifest manifest;
     manifest.ObjectID = prepared.ObjectID;
-    manifest.AssetID = prepared.AssetID;
     manifest.DatabaseRevision = prepared.DatabaseRevision;
     manifest.ProcessorID = request.ProcessorID;
     manifest.ProcessorImplementationVersion = request.ProcessorImplementationVersion;
@@ -434,10 +434,6 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
         dependency.Kind = source.Kind;
         dependency.Identity = source.StableIdentity;
         dependency.ObjectID = source.ObjectID;
-        if (source.Kind == AssetDependencyKind::BuildInput || source.Kind == AssetDependencyKind::RuntimeReference)
-        {
-            dependency.AssetID = dependency.ObjectID.ToRuntimeObjectGuid();
-        }
         dependency.Hash = source.Content;
         dependency.ExactArtifact = source.ExactArtifact;
         dependency.InterfaceHash = source.SemanticInterface;
@@ -452,7 +448,7 @@ bool ArtifactPublisher::Publish(const StringView& libraryRoot, const PreparedAss
     manifest.KeyComponents.Add(MoveTemp(fingerprintComponent));
 
     ArtifactStoragePath manifestPath;
-    if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, prepared.AssetID, manifestPath, diagnostic))
+    if (ArtifactStore::TryGetManifestPath(libraryRoot, request.Target, prepared.ObjectID, manifestPath, diagnostic))
         return true;
     if (NativeFileExists(manifestPath.Get()))
     {

@@ -36,7 +36,8 @@ namespace
         keyBuilder.AddKey(StringAnsiView("input"), fingerprint);
         const ArtifactKey outputKey = keyBuilder.Finalize();
         ArtifactStoragePath outputPath;
-        if (ArtifactStore::TryGetArtifactPath(library, request.Target, ArtifactTargetDimension::All, record.ID, request.OutputKind,
+        const AssetObjectId object(AssetGuid(record.SourceAssetID), record.LocalId);
+        if (ArtifactStore::TryGetArtifactPath(library, request.Target, ArtifactTargetDimension::All, object, request.OutputKind,
             outputKey, StringAnsiView(".bin"), outputPath, diagnostic))
             return true;
         const String directory = StringUtils::GetDirectoryName(outputPath.Get());
@@ -46,8 +47,7 @@ namespace
         if (ArtifactStore::TryMakeLibraryRelative(library, outputPath.Get(), relative, diagnostic))
             return true;
         ArtifactManifest manifest;
-        manifest.ObjectID = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
-        manifest.AssetID = record.ID;
+        manifest.ObjectID = object;
         manifest.DatabaseRevision = record.DatabaseRevision;
         manifest.ProcessorID = record.ProcessorID;
         manifest.ProcessorImplementationVersion = 1;
@@ -68,7 +68,7 @@ namespace
         if (manifest.ToJson(json, diagnostic))
             return true;
         ArtifactStoragePath manifestPath;
-        if (ArtifactStore::TryGetManifestPath(library, request.Target, record.ID, manifestPath, diagnostic))
+        if (ArtifactStore::TryGetManifestPath(library, request.Target, object, manifestPath, diagnostic))
             return true;
         const String manifestDirectory = StringUtils::GetDirectoryName(manifestPath.Get());
         return (!FileSystem::DirectoryExists(manifestDirectory) && FileSystem::CreateDirectory(manifestDirectory)) ||
@@ -84,6 +84,17 @@ namespace
             Platform::Sleep(1);
         }
         return false;
+    }
+
+    AssetObjectId MakeRuntimeGuidCollision(const Guid& runtimeId, int64 localId)
+    {
+        const uint64 local = static_cast<uint64>(localId);
+        const uint32 low = static_cast<uint32>(local);
+        const uint32 high = static_cast<uint32>(local >> 32);
+        const Guid source(runtimeId.A ^ low, runtimeId.B ^ high,
+            runtimeId.C ^ ((low << 13) | (low >> 19)),
+            runtimeId.D ^ ((high << 7) | (high >> 25)) ^ 0x9e3779b9u);
+        return AssetObjectId(AssetGuid(source), localId);
     }
 }
 
@@ -123,7 +134,7 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
     REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
     const ArtifactTarget target = ResolverTarget();
     ArtifactRequest baseRequest;
-    baseRequest.AssetID = record.ID;
+    baseRequest.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
     baseRequest.Target = target;
     baseRequest.OutputKind = "Runtime";
     baseRequest.RequiredCompatibility = "runtime-v1";
@@ -211,6 +222,97 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
     request.Policy = ArtifactResolvePolicy::Exact;
     CHECK(resolver.Resolve(request, artifact, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SourceMissing);
+}
+
+TEST_CASE("ArtifactResolver isolates composite objects with colliding derived runtime GUIDs")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("ArtifactResolverCollision-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const AssetObjectId firstObject(AssetGuid(Guid(101, 202, 303, 404)), 2);
+    const Guid runtimeId = firstObject.ToRuntimeObjectGuid();
+    const AssetObjectId secondObject = MakeRuntimeGuidCollision(runtimeId, 0x0000000200000003LL);
+    REQUIRE(firstObject != secondObject);
+    REQUIRE(firstObject.ToRuntimeObjectGuid() == secondObject.ToRuntimeObjectGuid());
+
+    const String firstSource = content / TEXT("first.source");
+    const String secondSource = content / TEXT("second.source");
+    REQUIRE_FALSE(File::WriteAllText(firstSource, TEXT("first"), Encoding::ANSI));
+    REQUIRE_FALSE(File::WriteAllText(secondSource, TEXT("second"), Encoding::ANSI));
+
+    AssetRecord firstInput;
+    firstInput.ID = Guid(501, 502, 503, 504);
+    firstInput.SourceAssetID = firstObject.Asset.Value;
+    firstInput.LocalId = firstObject.LocalId;
+    firstInput.TypeName = TEXT("FlaxEngine.RawDataAsset");
+    firstInput.CanonicalPath = CanonicalAssetPath(firstSource);
+    firstInput.SourcePath = SourceFilePath(firstSource);
+    firstInput.ProcessorID = TEXT("test.resolver.collision");
+    firstInput.SourceKind = AssetSourceKind::ImportedSource;
+    firstInput.Status = AssetRecordStatus::Ready;
+    firstInput.SubAsset = SubAssetKey(TEXT("first-collision-subobject"));
+    AssetRecord secondInput = firstInput;
+    secondInput.ID = Guid(601, 602, 603, 604);
+    secondInput.SourceAssetID = secondObject.Asset.Value;
+    secondInput.LocalId = secondObject.LocalId;
+    secondInput.CanonicalPath = CanonicalAssetPath(secondSource);
+    secondInput.SourcePath = SourceFilePath(secondSource);
+    secondInput.SubAsset = SubAssetKey(TEXT("collision-subobject"));
+
+    AssetPipelineDiagnostic diagnostic;
+    AssetDatabase database;
+    Array<AssetRecord> records;
+    records.Add(firstInput);
+    records.Add(secondInput);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+    AssetRecord firstRecord;
+    AssetRecord secondRecord;
+    REQUIRE(database.TryGetRecord(firstObject, firstRecord));
+    REQUIRE(database.TryGetRecord(secondObject, secondRecord));
+
+    AssetBuildService service;
+    AssetBuildServiceLimits limits;
+    limits.MaximumWorkers = 1;
+    limits.MaximumMemoryBytes = 64;
+    limits.MaximumExternalTools = 1;
+    REQUIRE_FALSE(service.Initialize(library, limits, diagnostic));
+    const ArtifactTarget target = ResolverTarget();
+    const ArtifactKey fingerprint = ResolverKey("collision-input");
+    ArtifactResolutionPlanProvider provider = [fingerprint](const AssetRecord& record, const ArtifactRequest&,
+        ArtifactResolutionPlan& plan, AssetPipelineDiagnostic& planDiagnostic)
+    {
+        plan.CurrentInputFingerprint = fingerprint;
+        ArtifactKeyBuilder builder(StringAnsiView("resolver-collision-job-v1"));
+        builder.AddGuid(StringAnsiView("object-guid"), record.SourceAssetID);
+        builder.AddUInt64(StringAnsiView("object-local"), static_cast<uint64>(record.LocalId));
+        plan.BuildRequest.Key.ExactPlan = builder.Finalize();
+        planDiagnostic = AssetPipelineDiagnostic();
+        return false;
+    };
+
+    ArtifactRequest firstRequest;
+    firstRequest.Object = firstObject;
+    firstRequest.Target = target;
+    firstRequest.OutputKind = "Runtime";
+    firstRequest.Policy = ArtifactResolvePolicy::NoBuild;
+    ArtifactRequest secondRequest = firstRequest;
+    secondRequest.Object = secondObject;
+    REQUIRE_FALSE(WriteResolvedManifest(library, firstRecord, firstRequest, fingerprint, StringAnsiView(), diagnostic));
+    REQUIRE_FALSE(WriteResolvedManifest(library, secondRecord, secondRequest, fingerprint, StringAnsiView(), diagnostic));
+
+    ArtifactResolver resolver;
+    resolver.Configure(database, service, library, target, provider);
+    ResolvedArtifact firstArtifact;
+    ResolvedArtifact secondArtifact;
+    REQUIRE_FALSE(resolver.Resolve(firstRequest, firstArtifact, diagnostic));
+    REQUIRE_FALSE(resolver.Resolve(secondRequest, secondArtifact, diagnostic));
+    CHECK(firstArtifact.ObjectID == firstObject);
+    CHECK(secondArtifact.ObjectID == secondObject);
+    CHECK(firstArtifact.StoragePath.Get() != secondArtifact.StoragePath.Get());
 }
 
 #endif

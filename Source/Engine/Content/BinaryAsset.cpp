@@ -124,7 +124,8 @@ BinaryAssetStorageSwitchResult BinaryAsset::SwitchStorage(const ResolvedArtifact
         LOG(Error, "Binary asset storage can only be switched from the main thread. Asset: '{0}'.", GetPath());
         return BinaryAssetStorageSwitchResult::InvalidThread;
     }
-    if (!artifact.AssetID.IsValid() || artifact.AssetID != GetID() || artifact.TypeName != GetTypeName() || artifact.StoragePath.Get().IsEmpty())
+    if (artifact.ObjectID != GetPersistentObjectId() || !artifact.AssetID.IsValid() || artifact.AssetID != GetID() ||
+        artifact.TypeName != GetTypeName() || artifact.StoragePath.Get().IsEmpty())
         return BinaryAssetStorageSwitchResult::InvalidArtifact;
 
     const FlaxStorageReference newStorage = ContentStorageManager::GetStorage(artifact.StoragePath.Get(), false);

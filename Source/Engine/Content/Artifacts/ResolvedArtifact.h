@@ -23,6 +23,8 @@ enum class ArtifactLoadDisposition : byte
 /// <summary>Resolved physical bytes for one asset output.</summary>
 struct FLAXENGINE_API ResolvedArtifact
 {
+    AssetObjectId ObjectID;
+    /// <summary>Transient runtime/container instance identifier.</summary>
     Guid AssetID;
     String TypeName;
     ArtifactStoragePath StoragePath;
