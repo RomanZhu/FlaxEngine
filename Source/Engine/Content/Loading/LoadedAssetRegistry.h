@@ -70,6 +70,16 @@ struct FLAXENGINE_API LoadedAssetSwap
     uint64 Revision = 0;
 };
 
+/// <summary>Loaded object removed by an accepted atomic publication.</summary>
+struct FLAXENGINE_API LoadedAssetInvalidation
+{
+    Guid Object = Guid::Empty;
+    void* PreviousInstance = nullptr;
+    StringAnsi PreviousTypeName;
+    ContentHash PreviousContent;
+    uint64 PreviousRevision = 0;
+};
+
 /// <summary>Thread-safe object-level registry used to deduplicate loads and publish hot-reload swaps.</summary>
 class FLAXENGINE_API LoadedAssetRegistry : public NonCopyable
 {
@@ -106,6 +116,15 @@ public:
     /// <returns>True on missing objects, duplicate objects, or stale revisions.</returns>
     bool ReplaceBatch(const Array<LoadedAssetReplacement>& replacements, Array<LoadedAssetSwap>& swaps,
         AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Atomically replaces retained objects and removes inventory entries.</summary>
+    /// <returns>True on invalid, duplicate, missing, or stale inputs.</returns>
+    bool PublishBatch(const Array<LoadedAssetReplacement>& replacements, const Array<Guid>& removals,
+        Array<LoadedAssetSwap>& swaps, Array<LoadedAssetInvalidation>& invalidations,
+        AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Copies all currently loaded records for dependency analysis.</summary>
+    void GetLoadedRecords(Array<LoadedAssetRecord>& records) const;
 
     int32 Count() const;
 };

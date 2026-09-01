@@ -147,10 +147,20 @@ bool LoadedAssetRegistry::Remove(const Guid& object, void* instance)
 bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& replacements, Array<LoadedAssetSwap>& swaps,
     AssetPipelineDiagnostic& diagnostic)
 {
+    Array<Guid> removals;
+    Array<LoadedAssetInvalidation> invalidations;
+    return PublishBatch(replacements, removals, swaps, invalidations, diagnostic);
+}
+
+bool LoadedAssetRegistry::PublishBatch(const Array<LoadedAssetReplacement>& replacements, const Array<Guid>& removals,
+    Array<LoadedAssetSwap>& swaps, Array<LoadedAssetInvalidation>& invalidations,
+    AssetPipelineDiagnostic& diagnostic)
+{
     swaps.Clear();
-    if (replacements.IsEmpty())
+    invalidations.Clear();
+    if (replacements.IsEmpty() && removals.IsEmpty())
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, Guid::Empty,
-            TEXT("Asset replacement batch cannot be empty."));
+            TEXT("Asset publication batch cannot be empty."));
 
     _locker.Lock();
     HashSet<Guid> objects;
@@ -170,6 +180,16 @@ bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& repl
             _locker.Unlock();
             return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, replacement.Object,
                 TEXT("Asset replacement revision is stale."));
+        }
+    }
+    for (const Guid& removal : removals)
+    {
+        Entry** entry = _entries.TryGet(removal);
+        if (!removal.IsValid() || !objects.Add(removal) || !entry || (*entry)->Record.State != LoadedAssetState::Loaded)
+        {
+            _locker.Unlock();
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, removal,
+                TEXT("Asset invalidation requires one unique, currently loaded object."));
         }
     }
 
@@ -195,9 +215,35 @@ bool LoadedAssetRegistry::ReplaceBatch(const Array<LoadedAssetReplacement>& repl
         entry->Record.Dependencies = replacement.Dependencies;
         entry->Record.Diagnostic = AssetPipelineDiagnostic();
     }
+    invalidations.EnsureCapacity(removals.Count());
+    for (const Guid& removal : removals)
+    {
+        Entry* entry = *_entries.TryGet(removal);
+        LoadedAssetInvalidation invalidation;
+        invalidation.Object = removal;
+        invalidation.PreviousInstance = entry->Record.Instance;
+        invalidation.PreviousTypeName = entry->Record.TypeName;
+        invalidation.PreviousContent = entry->Record.Content;
+        invalidation.PreviousRevision = entry->Record.Revision;
+        invalidations.Add(MoveTemp(invalidation));
+        Delete(entry);
+        _entries.Remove(removal);
+    }
     diagnostic = AssetPipelineDiagnostic();
     _locker.Unlock();
     return false;
+}
+
+void LoadedAssetRegistry::GetLoadedRecords(Array<LoadedAssetRecord>& records) const
+{
+    records.Clear();
+    ScopeLock lock(_locker);
+    records.EnsureCapacity(_entries.Count());
+    for (const auto& entry : _entries)
+    {
+        if (entry.Value->Record.State == LoadedAssetState::Loaded)
+            records.Add(entry.Value->Record);
+    }
 }
 
 int32 LoadedAssetRegistry::Count() const

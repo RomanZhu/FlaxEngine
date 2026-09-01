@@ -164,3 +164,183 @@ bool AssetHotReloadCoordinator::Reload(const Array<AssetObjectRevision>& changes
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
+
+bool AssetHotReloadCoordinator::ReloadInventory(const AssetObjectInventoryChange& change,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    if (!change.Source.IsValid() || !change.PreviousMainObject.IsValid() || !change.MainObject.IsValid())
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, change.Source,
+            TEXT("Asset inventory change has an invalid source or main-object identity."));
+
+    HashSet<Guid> previousObjects;
+    HashSet<Guid> objects;
+    for (const Guid& object : change.PreviousObjects)
+    {
+        if (!object.IsValid() || !previousObjects.Add(object))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, object,
+                TEXT("Previous asset inventory contains an invalid or duplicate object GUID."));
+    }
+    for (const Guid& object : change.Objects)
+    {
+        if (!object.IsValid() || !objects.Add(object))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, object,
+                TEXT("Published asset inventory contains an invalid or duplicate object GUID."));
+    }
+    if (!previousObjects.Contains(change.PreviousMainObject) || !objects.Contains(change.MainObject))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, change.Source,
+            TEXT("Asset inventory does not contain its declared main object."));
+
+    HashSet<Guid> revisionObjects;
+    for (const AssetObjectRevision& revision : change.Revisions)
+    {
+        if (!revision.Object.IsValid() || revision.Revision == 0 || !revisionObjects.Add(revision.Object))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, revision.Object,
+                TEXT("Asset inventory contains an invalid or duplicate object revision."));
+    }
+
+    Array<Guid> removed;
+    bool inventoryChanged = previousObjects.Count() != objects.Count() ||
+        change.PreviousMainObject != change.MainObject;
+    for (const Guid& object : previousObjects)
+    {
+        if (!objects.Contains(object))
+        {
+            inventoryChanged = true;
+            removed.Add(object);
+        }
+    }
+    if (!inventoryChanged)
+        return false; // Ordering is not identity and cannot invalidate a loaded object.
+
+    Array<LoadedAssetRecord> loaded;
+    _registry.GetLoadedRecords(loaded);
+    HashSet<Guid> loadedObjects;
+    for (const LoadedAssetRecord& record : loaded)
+        loadedObjects.Add(record.Object);
+
+    Array<Guid> loadedRemovals;
+    HashSet<Guid> affected;
+    for (const Guid& object : removed)
+    {
+        affected.Add(object);
+        if (loadedObjects.Contains(object))
+            loadedRemovals.Add(object);
+    }
+    if (loadedObjects.Contains(change.MainObject))
+        affected.Add(change.MainObject);
+    if (change.PreviousMainObject != change.MainObject && objects.Contains(change.PreviousMainObject) &&
+        loadedObjects.Contains(change.PreviousMainObject))
+        affected.Add(change.PreviousMainObject);
+
+    bool addedDependent = true;
+    while (addedDependent)
+    {
+        addedDependent = false;
+        for (const LoadedAssetRecord& record : loaded)
+        {
+            if (affected.Contains(record.Object) ||
+                (!objects.Contains(record.Object) && previousObjects.Contains(record.Object)))
+                continue;
+            for (const Guid& dependency : record.Dependencies)
+            {
+                if (affected.Contains(dependency))
+                {
+                    affected.Add(record.Object);
+                    addedDependent = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    Array<AssetObjectRevision> reloads;
+    for (const LoadedAssetRecord& record : loaded)
+    {
+        if (!affected.Contains(record.Object) ||
+            (!objects.Contains(record.Object) && previousObjects.Contains(record.Object)))
+            continue;
+        const AssetObjectRevision* revision = nullptr;
+        for (const AssetObjectRevision& candidate : change.Revisions)
+        {
+            if (candidate.Object == record.Object)
+            {
+                revision = &candidate;
+                break;
+            }
+        }
+        if (!revision)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, record.Object,
+                TEXT("A loaded object affected by inventory publication has no exact published revision."));
+        reloads.Add(*revision);
+    }
+    if (reloads.IsEmpty() && loadedRemovals.IsEmpty())
+    {
+        diagnostic = AssetPipelineDiagnostic();
+        return false;
+    }
+
+    Array<LoadedAssetReplacement> replacements;
+    replacements.EnsureCapacity(reloads.Count());
+    for (const AssetObjectRevision& reload : reloads)
+    {
+        LoadedAssetReplacement replacement;
+        if (_loader.PrepareReplacement(reload.Object, reload.Revision, replacement, diagnostic))
+        {
+            for (const LoadedAssetReplacement& prepared : replacements)
+                _loader.DiscardInstance(prepared.Instance);
+            return true;
+        }
+        replacements.Add(MoveTemp(replacement));
+    }
+
+    Array<int32> notificationOrder;
+    if (!replacements.IsEmpty() && BuildNotificationOrder(replacements, notificationOrder, diagnostic))
+    {
+        for (const LoadedAssetReplacement& replacement : replacements)
+            _loader.DiscardInstance(replacement.Instance);
+        return true;
+    }
+    if (loadedRemovals.Count() > 1)
+        std::sort(loadedRemovals.Get(), loadedRemovals.Get() + loadedRemovals.Count(), Less);
+
+    Array<LoadedAssetSwap> swaps;
+    Array<LoadedAssetInvalidation> invalidations;
+    AssetPipelineDiagnostic publicationDiagnostic;
+    bool publicationFailed = false;
+    const bool dispatchFailed = _dispatcher.InvokeAndWait([&]()
+    {
+        publicationFailed = _registry.PublishBatch(replacements, loadedRemovals, swaps, invalidations,
+            publicationDiagnostic);
+        if (publicationFailed)
+            return;
+        for (const LoadedAssetInvalidation& invalidation : invalidations)
+            _listener.OnAssetObjectInvalidated(invalidation);
+        for (int32 index : notificationOrder)
+        {
+            for (const LoadedAssetSwap& swap : swaps)
+            {
+                if (swap.Object == replacements[index].Object)
+                {
+                    _listener.OnAssetObjectReplaced(swap);
+                    break;
+                }
+            }
+        }
+        for (const LoadedAssetInvalidation& invalidation : invalidations)
+            _loader.DiscardInstance(invalidation.PreviousInstance);
+        for (const LoadedAssetSwap& swap : swaps)
+            _loader.DiscardInstance(swap.PreviousInstance);
+    });
+    if (dispatchFailed || publicationFailed)
+    {
+        for (const LoadedAssetReplacement& replacement : replacements)
+            _loader.DiscardInstance(replacement.Instance);
+        if (dispatchFailed)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, change.Source,
+                TEXT("Asset inventory publication could not run on the main thread."));
+        diagnostic = publicationDiagnostic;
+        return true;
+    }
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}

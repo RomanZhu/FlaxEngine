@@ -12,6 +12,18 @@ struct FLAXENGINE_API AssetObjectRevision
     uint64 Revision = 0;
 };
 
+/// <summary>Previous and newly published object inventory for one source asset.</summary>
+struct FLAXENGINE_API AssetObjectInventoryChange
+{
+    Guid Source = Guid::Empty;
+    Guid PreviousMainObject = Guid::Empty;
+    Guid MainObject = Guid::Empty;
+    Array<Guid> PreviousObjects;
+    Array<Guid> Objects;
+    /// <summary>Exact revisions for published objects that may need rematerialization.</summary>
+    Array<AssetObjectRevision> Revisions;
+};
+
 /// <summary>Synchronous bridge for publishing one atomic replacement batch on the main thread.</summary>
 class FLAXENGINE_API IAssetMainThreadDispatcher
 {
@@ -28,6 +40,7 @@ class FLAXENGINE_API IAssetObjectReloadListener
 public:
     virtual ~IAssetObjectReloadListener() = default;
     virtual void OnAssetObjectReplaced(const LoadedAssetSwap& swap) = 0;
+    virtual void OnAssetObjectInvalidated(const LoadedAssetInvalidation& invalidation) = 0;
 };
 
 /// <summary>Prepares replacements off-thread and commits them atomically with dependency-first notifications.</summary>
@@ -54,4 +67,7 @@ public:
 
     /// <summary>Reloads one exact revision batch. Returns true without partial publication on failure.</summary>
     bool Reload(const Array<AssetObjectRevision>& changes, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Applies a published inventory change, preserving retained GUIDs and precisely reloading loaded dependents.</summary>
+    bool ReloadInventory(const AssetObjectInventoryChange& change, AssetPipelineDiagnostic& diagnostic);
 };

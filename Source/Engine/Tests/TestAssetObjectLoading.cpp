@@ -153,6 +153,9 @@ namespace
         Array<ContentHash> PreviousContents;
         Array<ContentHash> Contents;
         Array<LoadedAssetRecord> PublishedRecords;
+        Array<Guid> InvalidatedObjects;
+        bool ObserveAtomicInventory = false;
+        Array<Guid> ExpectedPublishedObjects;
 
         void OnAssetObjectReplaced(const LoadedAssetSwap& swap) override
         {
@@ -168,6 +171,21 @@ namespace
                 LoadedAssetRecord record;
                 REQUIRE(Registry->TryGet(swap.Object, record));
                 PublishedRecords.Add(MoveTemp(record));
+            }
+        }
+
+        void OnAssetObjectInvalidated(const LoadedAssetInvalidation& invalidation) override
+        {
+            InvalidatedObjects.Add(invalidation.Object);
+            if (Registry && ObserveAtomicInventory)
+            {
+                LoadedAssetRecord record;
+                CHECK_FALSE(Registry->TryGet(invalidation.Object, record));
+                for (const Guid& object : ExpectedPublishedObjects)
+                {
+                    REQUIRE(Registry->TryGet(object, record));
+                    CHECK(record.Revision == 2);
+                }
             }
         }
     };
@@ -410,4 +428,108 @@ TEST_CASE("Hot reload replaces payload and concrete type under the persistent GU
     CHECK(listener.PublishedRecords[0].Content == location.Content);
     CHECK(factory.Destroys.load() == 1);
     CHECK(dispatcher.Calls == 1);
+}
+
+TEST_CASE("Hot reload treats subasset reorder as identity preserving")
+{
+    const Guid source(109, 0, 0, 0);
+    const Guid mainObject(109, 0, 0, 1);
+    const Guid childA(109, 0, 0, 2);
+    const Guid childB(109, 0, 0, 3);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    TestMainThreadDispatcher dispatcher;
+    TestReloadListener listener;
+    AssetHotReloadCoordinator coordinator(registry, loader, dispatcher, listener);
+    AssetObjectInventoryChange change;
+    change.Source = source;
+    change.PreviousMainObject = mainObject;
+    change.MainObject = mainObject;
+    change.PreviousObjects.Add(mainObject);
+    change.PreviousObjects.Add(childA);
+    change.PreviousObjects.Add(childB);
+    change.Objects.Add(childB);
+    change.Objects.Add(mainObject);
+    change.Objects.Add(childA);
+    AssetPipelineDiagnostic diagnostic;
+    CHECK_FALSE(coordinator.ReloadInventory(change, diagnostic));
+    CHECK(dispatcher.Calls == 0);
+    CHECK(factory.Creates.load() == 0);
+    CHECK(listener.Objects.IsEmpty());
+    CHECK(listener.InvalidatedObjects.IsEmpty());
+}
+
+TEST_CASE("Hot reload publishes subasset removal and main-object changes atomically")
+{
+    const Guid source(110, 0, 0, 0);
+    const Guid previousMain(110, 0, 0, 1);
+    const Guid mainObject(110, 0, 0, 2);
+    const Guid removed(110, 0, 0, 3);
+    const Guid retained(110, 0, 0, 4);
+    const Guid added(110, 0, 0, 5);
+    const Guid dependent(111, 0, 0, 1);
+    LoadedAssetRegistry registry;
+    TestObjectResolver resolver;
+    resolver.Set(TestLocation(previousMain, 1));
+    resolver.Set(TestLocation(mainObject, 1));
+    resolver.Set(TestLocation(removed, 1));
+    resolver.Set(TestLocation(retained, 1));
+    AssetObjectLoadLocation dependentLocation = TestLocation(dependent, 1);
+    dependentLocation.Dependencies.Add(removed);
+    resolver.Set(dependentLocation);
+    TestObjectFactory factory;
+    AssetObjectLoader loader(registry, static_cast<IEditorAssetObjectResolver&>(resolver), factory);
+    AssetPipelineDiagnostic diagnostic;
+    AssetObjectLoadResult loaded;
+    REQUIRE_FALSE(loader.Load(previousMain, loaded, diagnostic));
+    REQUIRE_FALSE(loader.Load(mainObject, loaded, diagnostic));
+    REQUIRE_FALSE(loader.Load(removed, loaded, diagnostic));
+    REQUIRE_FALSE(loader.Load(retained, loaded, diagnostic));
+    void* retainedInstance = loaded.Instance;
+    REQUIRE_FALSE(loader.Load(dependent, loaded, diagnostic));
+
+    resolver.Set(TestLocation(previousMain, 2));
+    resolver.Set(TestLocation(mainObject, 2));
+    dependentLocation.Revision = 2;
+    resolver.Set(dependentLocation);
+    AssetObjectInventoryChange change;
+    change.Source = source;
+    change.PreviousMainObject = previousMain;
+    change.MainObject = mainObject;
+    change.PreviousObjects.Add(previousMain);
+    change.PreviousObjects.Add(mainObject);
+    change.PreviousObjects.Add(removed);
+    change.PreviousObjects.Add(retained);
+    change.Objects.Add(added);
+    change.Objects.Add(retained);
+    change.Objects.Add(mainObject);
+    change.Objects.Add(previousMain);
+    change.Revisions.Add({previousMain, 2});
+    change.Revisions.Add({mainObject, 2});
+    change.Revisions.Add({dependent, 2});
+    TestMainThreadDispatcher dispatcher;
+    TestReloadListener listener;
+    listener.Registry = &registry;
+    listener.ObserveAtomicInventory = true;
+    listener.ExpectedPublishedObjects.Add(previousMain);
+    listener.ExpectedPublishedObjects.Add(mainObject);
+    listener.ExpectedPublishedObjects.Add(dependent);
+    AssetHotReloadCoordinator coordinator(registry, loader, dispatcher, listener);
+    REQUIRE_FALSE(coordinator.ReloadInventory(change, diagnostic));
+
+    REQUIRE(listener.InvalidatedObjects.Count() == 1);
+    CHECK(listener.InvalidatedObjects[0] == removed);
+    CHECK(listener.Objects.Count() == 3);
+    LoadedAssetRecord record;
+    CHECK_FALSE(registry.TryGet(removed, record));
+    CHECK_FALSE(registry.TryGet(added, record));
+    REQUIRE(registry.TryGet(retained, record));
+    CHECK(record.Instance == retainedInstance);
+    CHECK(record.Revision == 1);
+    REQUIRE(registry.TryGet(dependent, record));
+    CHECK(record.Revision == 2);
+    CHECK(dispatcher.Calls == 1);
+    CHECK(factory.Destroys.load() == 4);
 }
