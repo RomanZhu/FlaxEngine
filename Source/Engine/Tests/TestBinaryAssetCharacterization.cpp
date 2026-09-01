@@ -4,13 +4,16 @@
 #include "Engine/Content/AssetObjectRegistry.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
+#include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/Artifacts/ResolvedArtifact.h"
+#include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Content/Loading/ContentLoadTask.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/Content/Storage/FlaxStorage.h"
 #include "Engine/Content/Upgraders/BinaryAssetUpgrader.h"
+#include "Engine/Core/Log.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/ObjectsRemovalService.h"
 #include "Engine/Engine/Globals.h"
@@ -398,6 +401,68 @@ TEST_CASE("Content reads editor-private transient binary assets")
     CHECK(legacyAsset->GetPath() == legacyPath);
     CHECK(legacyAsset->GetStoragePath() == legacyPath);
     CHECK_FALSE(legacyAsset->IsUsingGeneratedArtifact());
+}
+
+TEST_CASE("Canonical missing source path reaches exact asset object loader diagnostics")
+{
+    AssetDatabase& database = AssetDatabase::Get();
+    const AssetDatabaseSnapshot savedDatabase = database.GetSnapshot();
+    AssetPipelineDiagnostic diagnostic;
+    const String missingPath = Globals::ProjectContentFolder / (TEXT("__CanonicalMissingSource-") + Guid::New().ToString(Guid::FormatType::N) + TEXT(".source"));
+    REQUIRE_FALSE(FileSystem::FileExists(missingPath));
+
+    AssetPathPolicy::ProjectPath projectPath;
+    REQUIRE_FALSE(AssetPathPolicy::TryNormalizeProjectPath(Globals::ProjectFolder, Globals::ProjectContentFolder,
+        Globals::ProjectLibraryFolder, missingPath, projectPath, diagnostic));
+    const Guid id = Guid::New();
+    AssetRecord record;
+    record.ID = id;
+    record.SourceAssetID = id;
+    record.TypeName = RawDataAsset::TypeName;
+    record.CanonicalPath = CanonicalAssetPath(projectPath.AbsolutePath);
+    record.SourcePath = SourceFilePath(projectPath.AbsolutePath);
+    record.PortabilityKey = projectPath.PortabilityKey;
+    record.ProcessorID = TEXT("tests.missing-source");
+    record.Status = AssetRecordStatus::MissingSource;
+    Array<AssetRecord> records;
+    records.Add(record);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
+
+    AssetBuildService buildService;
+    ArtifactTarget target;
+    bool planRequested = false;
+    ArtifactResolutionPlanProvider provider = [&planRequested](const AssetRecord&, const ArtifactRequest&,
+        ArtifactResolutionPlan&, AssetPipelineDiagnostic&)
+    {
+        planRequested = true;
+        return true;
+    };
+    ArtifactResolver::Get().Configure(database, buildService, Globals::ProjectLibraryFolder, target, provider);
+    SCOPE_EXIT
+    {
+        ArtifactResolver::Get().Reset();
+        database.PublishFullSnapshot(savedDatabase.Records, diagnostic);
+    };
+
+    String loaderDiagnostic;
+    bool sawFilesystemGate = false;
+    Delegate<LogType, const StringView&>::FunctionType logHandler = [&loaderDiagnostic, &sawFilesystemGate](LogType type, const StringView& message)
+    {
+        if (type != LogType::Error)
+            return;
+        if (message.Contains(TEXT("ASSET_SOURCE_MISSING")))
+            loaderDiagnostic = message;
+        if (message.Contains(TEXT("Missing file")))
+            sawFilesystemGate = true;
+    };
+    Log::Logger::OnMessage.Bind(logHandler);
+    SCOPE_EXIT { Log::Logger::OnMessage.Unbind(logHandler); };
+
+    CHECK(Content::LoadAsync<RawDataAsset>(missingPath) == nullptr);
+    CHECK_FALSE(planRequested);
+    CHECK_FALSE(sawFilesystemGate);
+    CHECK(loaderDiagnostic.Contains(TEXT("ASSET_SOURCE_MISSING")));
+    CHECK(loaderDiagnostic.Contains(record.SourcePath.Get()));
 }
 
 TEST_CASE("Runtime packages persist and resolve exact composite object entries")

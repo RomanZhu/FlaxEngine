@@ -1119,14 +1119,6 @@ Asset* Content::LoadAsync(const StringView& path, const ScriptingTypeHandle& typ
     ContentStorageManager::FormatPath(pathNorm);
     const StringView filePath = pathNorm;
 
-#if USE_EDITOR
-    if (!FileSystem::FileExists(filePath))
-    {
-        LOG(Error, "Missing file \'{0}\'", filePath);
-        return nullptr;
-    }
-#endif
-
     AssetInfo assetInfo;
     if (GetAssetInfo(filePath, assetInfo))
     {
