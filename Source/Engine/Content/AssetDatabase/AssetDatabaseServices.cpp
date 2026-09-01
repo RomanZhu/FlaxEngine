@@ -741,6 +741,11 @@ namespace
         return true;
     }
 
+    bool TryGetTypedAuthoredDocumentMetadata(const StringView& extension, String& typeName, String& processorID);
+    void ConfigureTypedAuthoredDocumentMetadata(AssetMeta& metadata, const StringView& typeName, const StringView& processorID);
+    bool ValidateTypedAuthoredDocumentType(const StringView& sourcePath, const StringView& expectedType,
+        AssetPipelineDiagnostic& diagnostic);
+
     bool TryResolveCallbackImporter(const StringView& sourcePath, AssetImporterDescriptor& descriptor)
     {
         AssetPipelineDiagnostic ignored;
@@ -781,6 +786,17 @@ namespace
         AssetMeta& meta = work.Meta;
         meta.ID = Guid::New();
         meta.SourceKind = AssetSourceKind::ImportedSource;
+
+        String authoredType;
+        String authoredProcessor;
+        if (TryGetTypedAuthoredDocumentMetadata(extension, authoredType, authoredProcessor))
+        {
+            if (ValidateTypedAuthoredDocumentType(work.SourcePath, authoredType, work.Diagnostic))
+                return true;
+            ConfigureTypedAuthoredDocumentMetadata(meta, authoredType, authoredProcessor);
+            work.BuildKind = CanonicalBatchBuildKind::Imported;
+            return false;
+        }
 
         AssetImporterDescriptor callbackImporter;
         if (TryResolveCallbackImporter(work.SourcePath, callbackImporter))
@@ -952,6 +968,56 @@ namespace
         metadata.Processor.SettingsJson = "{}\n";
     }
 
+    bool TryGetTypedAuthoredDocumentMetadata(const StringView& extension, String& typeName, String& processorID)
+    {
+        if (!GraphDocumentCodec::TypeForExtension(extension, typeName))
+        {
+            processorID = TEXT("Flax.GraphDocument");
+            return true;
+        }
+        if (extension == TEXT("materialinstance"))
+        {
+            typeName = TEXT("FlaxEngine.MaterialInstance");
+            processorID = TEXT("Flax.MaterialInstance");
+        }
+        else if (extension == TEXT("skeletonmask"))
+        {
+            typeName = TEXT("FlaxEngine.SkeletonMask");
+            processorID = TEXT("Flax.SkeletonMask");
+        }
+        else if (extension == TEXT("sceneanimation"))
+        {
+            typeName = TEXT("FlaxEngine.SceneAnimation");
+            processorID = TEXT("Flax.SceneAnimation");
+        }
+        else if (extension == TEXT("particlesystem"))
+        {
+            typeName = TEXT("FlaxEngine.ParticleSystem");
+            processorID = TEXT("Flax.ParticleSystem");
+        }
+        else if (extension == TEXT("collisiondata"))
+        {
+            typeName = TEXT("FlaxEngine.CollisionData");
+            processorID = TEXT("Flax.CollisionData");
+        }
+        else
+        {
+            typeName.Clear();
+            processorID.Clear();
+            return false;
+        }
+        return true;
+    }
+
+    void ConfigureTypedAuthoredDocumentMetadata(AssetMeta& metadata, const StringView& typeName, const StringView& processorID)
+    {
+        metadata.AssetType = typeName;
+        metadata.SourceKind = AssetSourceKind::TextDocument;
+        metadata.Processor.ID = processorID;
+        metadata.Processor.SettingsVersion = 1;
+        metadata.Processor.SettingsJson = "{}\n";
+    }
+
     bool GetJsonSourceDocumentType(const StringView& sourcePath, String& dataType, AssetPipelineDiagnostic& diagnostic)
     {
         dataType.Clear();
@@ -1014,6 +1080,41 @@ namespace
         return false;
     }
 
+    bool ValidateTypedAuthoredDocumentType(const StringView& sourcePath, const StringView& expectedType,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        Array<byte> bytes;
+        rapidjson_flax::Document json;
+        if (File::ReadAllBytes(sourcePath, bytes))
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = TEXT("Cannot read typed authored source document.");
+            return true;
+        }
+        json.Parse(reinterpret_cast<const char*>(bytes.Get()), bytes.Count());
+        if (json.HasParseError() || !json.IsObject())
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = TEXT("Typed authored source type does not match its extension.");
+            return true;
+        }
+        const auto type = json.FindMember("type");
+        if (type == json.MemberEnd() || !type->value.IsString() ||
+            String(StringAnsiView(type->value.GetString(), type->value.GetStringLength())) != expectedType)
+        {
+            diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = TEXT("Typed authored source type does not match its extension.");
+            return true;
+        }
+        return false;
+    }
+
     bool EnsureDefaultCanonicalMetadata(const StringView& sourcePath, AssetPipelineDiagnostic& diagnostic)
     {
         const String metaPath = String(sourcePath) + TEXT(".meta");
@@ -1027,6 +1128,39 @@ namespace
             AssetMeta metadata;
             if (AssetMeta::Load(metaPath, metadata, diagnostic))
                 return true;
+            String authoredType;
+            String authoredProcessor;
+            if (TryGetTypedAuthoredDocumentMetadata(extension, authoredType, authoredProcessor))
+            {
+                if (ValidateTypedAuthoredDocumentType(sourcePath, authoredType, diagnostic))
+                {
+                    diagnostic.AssetGuid = metadata.ID;
+                    return true;
+                }
+                const bool exactMetadata = metadata.AssetType == authoredType &&
+                    metadata.SourceKind == AssetSourceKind::TextDocument && metadata.Processor.ID == authoredProcessor &&
+                    metadata.Processor.SettingsVersion == 1 && metadata.Processor.SettingsJson == StringAnsiView("{}\n");
+                const bool regressionDamagedMetadata = !metadata.MetaUpgradeRequired &&
+                    metadata.AssetType == RawDataAsset::TypeName && metadata.SourceKind == AssetSourceKind::ImportedSource &&
+                    metadata.Processor.ID == TEXT("Flax.Binary") && metadata.Processor.SettingsVersion == 1 &&
+                    metadata.Processor.SettingsJson == StringAnsiView("{}\n");
+                if (regressionDamagedMetadata)
+                {
+                    ConfigureTypedAuthoredDocumentMetadata(metadata, authoredType, authoredProcessor);
+                    return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+                }
+                if (!exactMetadata)
+                {
+                    diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+                    diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+                    diagnostic.SourcePath = sourcePath;
+                    diagnostic.AssetGuid = metadata.ID;
+                    diagnostic.Message = TEXT("Typed authored metadata does not match its extension and declared source type.");
+                    return true;
+                }
+                if (!metadata.MetaUpgradeRequired)
+                    return false;
+            }
             AssetImporterDescriptor callbackImporter;
             if (metadata.Processor.ID == TEXT("Flax.Binary") && TryResolveCallbackImporter(sourcePath, callbackImporter))
             {
@@ -1081,6 +1215,15 @@ namespace
         }
         if (extension == TEXT("flax"))
             return false;
+        String authoredType;
+        String authoredProcessor;
+        if (TryGetTypedAuthoredDocumentMetadata(extension, authoredType, authoredProcessor))
+        {
+            if (ValidateTypedAuthoredDocumentType(sourcePath, authoredType, diagnostic))
+                return true;
+            ConfigureTypedAuthoredDocumentMetadata(metadata, authoredType, authoredProcessor);
+            return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
+        }
         if (IsAuthoredJsonExtension(extension))
         {
             metadata.ID = Guid::New();
@@ -3151,7 +3294,7 @@ bool AssetOperationService::PublishDefaultMetadataBatch(const Array<Guid>& asset
             failed = ModelPipelineService::RequestBuild(assetID, false, diagnostic);
         else
 #endif
-        if (ImportedSourceProcessor::Owns(record.ProcessorID) || record.ProcessorID == GraphDocumentProcessor::ProcessorID())
+        if (GraphPipelineService::OwnsProcessor(record.ProcessorID))
             failed = GraphPipelineService::RequestBuild(assetID, true, diagnostic);
         else
         {

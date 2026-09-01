@@ -457,6 +457,116 @@ TEST_CASE("Default canonical metadata supports text sources")
     CHECK(meta.Processor.ID == TEXT("Flax.Text"));
 }
 
+TEST_CASE("Default canonical metadata preserves typed authored document families")
+{
+    struct AuthoredCase
+    {
+        const Char* Extension;
+        const Char* TypeName;
+        const Char* ProcessorID;
+    };
+    const AuthoredCase cases[] =
+    {
+        { TEXT("material"), TEXT("FlaxEngine.Material"), TEXT("Flax.GraphDocument") },
+        { TEXT("materialfunction"), TEXT("FlaxEngine.MaterialFunction"), TEXT("Flax.GraphDocument") },
+        { TEXT("animgraph"), TEXT("FlaxEngine.AnimationGraph"), TEXT("Flax.GraphDocument") },
+        { TEXT("animgraphfunction"), TEXT("FlaxEngine.AnimationGraphFunction"), TEXT("Flax.GraphDocument") },
+        { TEXT("visualscript"), TEXT("FlaxEngine.VisualScript"), TEXT("Flax.GraphDocument") },
+        { TEXT("behaviortree"), TEXT("FlaxEngine.BehaviorTree"), TEXT("Flax.GraphDocument") },
+        { TEXT("particlefunction"), TEXT("FlaxEngine.ParticleEmitterFunction"), TEXT("Flax.GraphDocument") },
+        { TEXT("particleemitter"), TEXT("FlaxEngine.ParticleEmitter"), TEXT("Flax.GraphDocument") },
+        { TEXT("materialinstance"), TEXT("FlaxEngine.MaterialInstance"), TEXT("Flax.MaterialInstance") },
+        { TEXT("skeletonmask"), TEXT("FlaxEngine.SkeletonMask"), TEXT("Flax.SkeletonMask") },
+        { TEXT("sceneanimation"), TEXT("FlaxEngine.SceneAnimation"), TEXT("Flax.SceneAnimation") },
+        { TEXT("particlesystem"), TEXT("FlaxEngine.ParticleSystem"), TEXT("Flax.ParticleSystem") },
+        { TEXT("collisiondata"), TEXT("FlaxEngine.CollisionData"), TEXT("Flax.CollisionData") },
+    };
+    const String root = Globals::TemporaryFolder / (TEXT("AuthoredMetadataBatch-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    Array<String> sources;
+    Array<String> stagingPaths;
+    for (int32 i = 0; i < ARRAY_COUNT(cases); i++)
+    {
+        const String source = root / (String::Format(TEXT("Asset{0}."), i) + cases[i].Extension);
+        String sourceText = TEXT("{\"type\":\"");
+        sourceText += cases[i].TypeName;
+        sourceText += TEXT("\"}\n");
+        REQUIRE_FALSE(File::WriteAllText(source, sourceText, Encoding::ANSI));
+        sources.Add(source);
+        stagingPaths.Add(source + TEXT(".staged-meta"));
+    }
+
+    const Array<Guid> ids = AssetOperationService::StageDefaultMetadataBatch(sources, stagingPaths);
+    REQUIRE(ids.Count() == ARRAY_COUNT(cases));
+    for (int32 i = 0; i < ARRAY_COUNT(cases); i++)
+    {
+        REQUIRE(ids[i].IsValid());
+        AssetMeta meta;
+        AssetPipelineDiagnostic diagnostic;
+        REQUIRE_FALSE(AssetMeta::Load(stagingPaths[i], meta, diagnostic));
+        CHECK(meta.AssetType == cases[i].TypeName);
+        CHECK(meta.SourceKind == AssetSourceKind::TextDocument);
+        CHECK(meta.Processor.ID == cases[i].ProcessorID);
+        CHECK(meta.Processor.SettingsVersion == 1);
+        CHECK(meta.Processor.SettingsJson == StringAnsiView("{}\n"));
+    }
+
+    const String mismatch = root / TEXT("Mismatch.particlesystem");
+    REQUIRE_FALSE(File::WriteAllText(mismatch, TEXT("{\"type\":\"FlaxEngine.ParticleEmitter\"}\n"), Encoding::ANSI));
+    sources.Clear();
+    stagingPaths.Clear();
+    sources.Add(mismatch);
+    stagingPaths.Add(mismatch + TEXT(".staged-meta"));
+    const Array<Guid> mismatchIds = AssetOperationService::StageDefaultMetadataBatch(sources, stagingPaths);
+    REQUIRE(mismatchIds.Count() == 1);
+    CHECK_FALSE(mismatchIds[0].IsValid());
+    CHECK_FALSE(FileSystem::FileExists(stagingPaths[0]));
+    const Array<AssetPipelineDiagnostic> diagnostics = AssetDatabaseQueryService::GetDiagnostics();
+    REQUIRE(diagnostics.HasItems());
+    CHECK(diagnostics[0].Code == AssetPipelineDiagnosticCode::InvalidMeta);
+}
+
+TEST_CASE("Canonical refresh narrowly repairs regression-damaged authored metadata")
+{
+    const String folder = Globals::ProjectContentFolder / (TEXT("__AuthoredMetadataRepair_") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(folder));
+    Array<String> refresh;
+    refresh.Add(folder);
+    SCOPE_EXIT
+    {
+        FileSystem::DeleteDirectory(folder, true);
+        AssetPipelineService::RefreshSources(refresh);
+    };
+
+    const String source = folder / TEXT("System.particlesystem");
+    REQUIRE_FALSE(File::WriteAllText(source,
+        TEXT("{\"documentVersion\":1,\"type\":\"FlaxEngine.ParticleSystem\",\"framesPerSecond\":60.0,\"durationFrames\":0,\"tracks\":[],\"parameterOverrides\":[]}\n"),
+        Encoding::ANSI));
+    AssetMeta damaged;
+    damaged.ID = Guid::New();
+    damaged.AssetType = RawDataAsset::TypeName;
+    damaged.SourceKind = AssetSourceKind::ImportedSource;
+    damaged.Processor.ID = TEXT("Flax.Binary");
+    damaged.Processor.SettingsVersion = 1;
+    damaged.Processor.SettingsJson = "{}\n";
+    damaged.Labels.Add(TEXT("preserved"));
+    damaged.UserDataJson = "{\"owner\":\"test\"}";
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(source + TEXT(".meta"), damaged, diagnostic));
+
+    REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
+    AssetMeta repaired;
+    REQUIRE_FALSE(AssetMeta::Load(source + TEXT(".meta"), repaired, diagnostic));
+    CHECK(repaired.ID == damaged.ID);
+    CHECK(repaired.AssetType == TEXT("FlaxEngine.ParticleSystem"));
+    CHECK(repaired.SourceKind == AssetSourceKind::TextDocument);
+    CHECK(repaired.Processor.ID == TEXT("Flax.ParticleSystem"));
+    CHECK(repaired.Labels.Contains(TEXT("preserved")));
+    CHECK(repaired.UserDataJson == StringAnsiView("{\"owner\":\"test\"}"));
+}
+
 TEST_CASE("Asset database snapshot is disposable checksummed and project scoped")
 {
     const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseSnapshot-") + Guid::New().ToString(Guid::FormatType::N));
