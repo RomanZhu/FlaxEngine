@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "AssetOperations.h"
 #include "AssetDatabaseScanner.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Scripting/ScriptingType.h"
@@ -216,10 +217,15 @@ API_CLASS(Static) class FLAXENGINE_API AssetOperationService
     DECLARE_SCRIPTING_TYPE_NO_SPAWN(AssetOperationService);
 public:
     API_FUNCTION() static Array<String> DrainSelfWrites();
+    static bool RegisterSelfWrite(const StringView& path, const ContentHash& content);
     API_FUNCTION() static bool SetLabels(const Guid& sourceID, const Array<String>& labels);
     API_FUNCTION() static bool MoveAsset(const StringView& sourcePath, const StringView& destinationPath);
     API_FUNCTION() static bool CopyAsset(const StringView& sourcePath, const StringView& destinationPath, API_PARAM(Out) Guid& copiedGuid);
     API_FUNCTION() static bool DeleteAsset(const StringView& sourcePath);
+    API_FUNCTION() static bool TrashEntries(const Array<AssetTrashEntryRequest>& entries,
+        API_PARAM(Out) AssetTrashBatch& trash);
+    API_FUNCTION() static bool RestoreEntries(const AssetTrashBatch& trash);
+    API_FUNCTION() static bool DiscardTrash(const AssetTrashBatch& trash);
     API_FUNCTION() static bool GetImporterSettings(const Guid& sourceAssetID, API_PARAM(Out) AssetImporterSettingsSnapshot& result);
     API_FUNCTION() static bool SaveImporterSettingsAndReimport(const AssetImporterSettingsSnapshot& expected, const StringView& settingsJson,
         API_PARAM(Out) AssetImporterSettingsSnapshot& current);

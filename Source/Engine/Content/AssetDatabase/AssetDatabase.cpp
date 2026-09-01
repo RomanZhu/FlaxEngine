@@ -2,6 +2,7 @@
 
 #include "AssetDatabase.h"
 #include "Identity/AssetObjectId.h"
+#include "SourceHashCache.h"
 #include "Engine/Core/Collections/HashSet.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/StringUtils.h"
@@ -832,10 +833,31 @@ bool AssetDatabase::PublishCache(const Array<AssetRecord>& records, uint64 revis
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, AssetPipelineDiagnostic& diagnostic)
 {
     Array<AssetPipelineDiagnostic> diagnostics;
-    return PublishFullSnapshot(records, diagnostics, diagnostic);
+    return PublishFullSnapshotInternal(records, diagnostics, nullptr, diagnostic);
 }
 
 bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics, AssetPipelineDiagnostic& diagnostic)
+{
+    return PublishFullSnapshotInternal(records, diagnostics, nullptr, diagnostic);
+}
+
+bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records,
+    const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic)
+{
+    Array<AssetPipelineDiagnostic> diagnostics;
+    return PublishFullSnapshotInternal(records, diagnostics, &fileStates, diagnostic);
+}
+
+bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records,
+    const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>& fileStates,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    return PublishFullSnapshotInternal(records, diagnostics, &fileStates, diagnostic);
+}
+
+bool AssetDatabase::PublishFullSnapshotInternal(const Array<AssetRecord>& records,
+    const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>* fileStates,
+    AssetPipelineDiagnostic& diagnostic)
 {
     ScopeLock writeLock(_writeLocker);
     if (!_sourceDatabase.IsOpen())
@@ -899,6 +921,16 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
     for (const SourceAssetObjectRow& object : current.Objects)
         previousObjects.Add(AssetObjectId(AssetGuid(object.AssetGuid), object.LocalFileId), &object);
 
+    Dictionary<String, const SourceHashFileState*> fileStatesByPath;
+    if (fileStates)
+    {
+        for (const SourceHashFileState& state : *fileStates)
+        {
+            if (state.Path.HasChars())
+                fileStatesByPath[NormalizeIndexKey(state.Path)] = &state;
+        }
+    }
+
     for (auto sourceIt = incomingSources.Begin(); sourceIt.IsNotEnd(); ++sourceIt)
     {
         const Guid& sourceId = sourceIt->Item;
@@ -924,6 +956,14 @@ bool AssetDatabase::PublishFullSnapshot(const Array<AssetRecord>& records, const
         source.PortabilityKey = sourceRecord->PortabilityKey;
         source.SourceKind = sourceRecord->SourceKind;
         source.Status = sourceRecord->Status;
+        if (fileStates)
+        {
+            const SourceHashFileState* const* state = fileStatesByPath.TryGet(
+                NormalizeIndexKey(sourceRecord->SourcePath.Get()));
+            source.SourceHash = state ? (*state)->CachedContentHash : ContentHash();
+            source.SourceSize = state ? (*state)->Size : 0;
+            source.SourceMtimeHint = state ? (*state)->LastWriteTicks : 0;
+        }
         next.Sources.Add(MoveTemp(source));
         for (const String& label : sourceRecord->Labels)
             next.Labels.Add({ sourceId, label });

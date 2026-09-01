@@ -253,6 +253,7 @@ namespace
             for (const AssetOperationCommit& commit : commits)
             {
                 if ((commit.Kind == AssetOperationKind::Trash || commit.Kind == AssetOperationKind::Delete ||
+                    commit.Kind == AssetOperationKind::Restore ||
                     commit.Kind == AssetOperationKind::ImporterSettings) ||
                     !commit.AssetGuid.IsValid())
                     continue;
@@ -1421,6 +1422,21 @@ Array<String> AssetOperationService::DrainSelfWrites()
     return result;
 }
 
+bool AssetOperationService::RegisterSelfWrite(const StringView& path, const ContentHash& content)
+{
+#if USE_EDITOR
+    if (path.IsEmpty() || content.IsZero() || AssetPipelineService::Initialize() || !Operations)
+        return true;
+    const String resolved = ResolveFacadeAssetPath(path);
+    if (!IsFacadeAssetPath(resolved))
+        return true;
+    Operations->RegisterSelfWrite(resolved, content);
+    return false;
+#else
+    return true;
+#endif
+}
+
 #if USE_EDITOR
 bool AssetOperationService::ImportAsset(const StringView& externalSource, const StringView& destination)
 {
@@ -1798,7 +1814,8 @@ bool AssetPipelineService::Scan(bool strictMetadata)
     if (!failed)
     {
         AssetPipelineDiagnostic publishDiagnostic;
-        failed = AssetDatabase::Get().PublishFullSnapshot(records, result.Diagnostics, publishDiagnostic);
+        failed = AssetDatabase::Get().PublishFullSnapshot(records, result.Diagnostics, result.FileStates,
+            publishDiagnostic);
         if (failed)
             result.Diagnostics.Add(MoveTemp(publishDiagnostic));
         else
@@ -1952,16 +1969,10 @@ bool AssetPipelineService::RefreshSources(const Array<String>& paths)
     diagnostics.Add(metadataDiagnostics);
     MergeScopedDiagnostics(affectedKeys, diagnostics);
     diagnostics = AssetDatabaseQueryService::GetDiagnostics();
-    AssetPipelineDiagnostic publishDiagnostic;
-    if (AssetDatabase::Get().PublishFullSnapshot(merged, diagnostics, publishDiagnostic))
-    {
-        diagnostics.Add(MoveTemp(publishDiagnostic));
-        SetDiagnostics(diagnostics);
-        return true;
-    }
 
     Array<AssetDatabaseFileState> nextStates;
     nextStates.EnsureCapacity(LastFileStates.Count() + result.FileStates.Count());
+    HashSet<String> nextStateKeys;
     for (const AssetDatabaseFileState& state : LastFileStates)
     {
         const String key = PathKey(state.Path);
@@ -1973,8 +1984,35 @@ bool AssetPipelineService::RefreshSources(const Array<String>& paths)
         if (IsKeyUnderAnyRoot(key, refreshedRootKeys) && !FileSystem::FileExists(state.Path))
             continue;
         nextStates.Add(state);
+        nextStateKeys.Add(key);
+    }
+    const AssetDatabaseReadSnapshot durable = AssetDatabase::Get().GetDurableSnapshot();
+    if (durable.IsValid())
+    {
+        for (const SourceAssetRow& source : durable.GetState().Sources)
+        {
+            const String key = PathKey(source.Path);
+            if (source.SourceHash.IsZero() || affectedKeys.Contains(key) || nextStateKeys.Contains(key))
+                continue;
+            AssetDatabaseFileState state;
+            state.Path = source.Path;
+            state.Size = source.SourceSize;
+            state.LastWriteTicks = source.SourceMtimeHint;
+            state.CachedContentHash = source.SourceHash;
+            nextStates.Add(MoveTemp(state));
+            nextStateKeys.Add(key);
+        }
     }
     nextStates.Add(result.FileStates);
+
+    AssetPipelineDiagnostic publishDiagnostic;
+    if (AssetDatabase::Get().PublishFullSnapshot(merged, diagnostics, nextStates, publishDiagnostic))
+    {
+        diagnostics.Add(MoveTemp(publishDiagnostic));
+        SetDiagnostics(diagnostics);
+        return true;
+    }
+
     LastFileStates = MoveTemp(nextStates);
 #if COMPILE_WITH_ASSETS_IMPORTER
     if (AssetRefreshCoordinator* coordinator = AssetImportService::GetRefreshCoordinator())
@@ -2281,6 +2319,52 @@ bool AssetOperationService::DeleteAsset(const StringView& sourcePath)
     }
     AssetTrashRecord trash;
     const bool failed = Operations->DeleteAsset(target, trash, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetOperationService::TrashEntries(const Array<AssetTrashEntryRequest>& entries, AssetTrashBatch& trash)
+{
+    trash = AssetTrashBatch();
+#if USE_EDITOR
+    if (AssetPipelineService::Initialize() || !Operations)
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = Operations->TrashEntries(entries, trash, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetOperationService::RestoreEntries(const AssetTrashBatch& trash)
+{
+#if USE_EDITOR
+    if (AssetPipelineService::Initialize() || !Operations)
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = Operations->RestoreEntries(trash, diagnostic);
+    if (failed)
+        SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
+    return failed;
+#else
+    return true;
+#endif
+}
+
+bool AssetOperationService::DiscardTrash(const AssetTrashBatch& trash)
+{
+#if USE_EDITOR
+    if (AssetPipelineService::Initialize() || !Operations)
+        return true;
+    AssetPipelineDiagnostic diagnostic;
+    const bool failed = Operations->DiscardTrash(trash, diagnostic);
     if (failed)
         SetDiagnostics(Array<AssetPipelineDiagnostic>({ diagnostic }));
     return failed;
@@ -3173,7 +3257,7 @@ bool AuthoredAssetDocumentService::Save(BinaryAsset* asset, const Guid& canonica
     if (CanonicalJsonWriter::Write(sourceJson, sourceText, jsonError, &sourceOrder) ||
         GraphDocumentCodec::SaveJsonAtomic(record.SourcePath.Get(), sourceText, diagnostic))
         return fail();
-    if (RefreshPath(record.SourcePath.Get()) || GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
+    if (GraphPipelineService::RequestBuild(canonicalAssetID, false, diagnostic))
         return fail();
     return false;
 #else
@@ -3311,7 +3395,7 @@ bool AuthoredAssetDocumentService::SaveCollisionData(const StringView& path, Col
     order.Add("materialSlotsMask");
     order.Add("convexFlags");
     order.Add("convexVertexLimit");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic))
         return fail();
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.CollisionData"))
@@ -3354,7 +3438,7 @@ bool AuthoredAssetDocumentService::SaveParticleSystemTimeline(const StringView& 
     order.Add("durationFrames");
     order.Add("tracks");
     order.Add("parameterOverrides");
-    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
+    if (CanonicalJsonWriter::Write(json, text, jsonError, &order) || GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic))
         return fail();
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.ParticleSystem"))
@@ -3424,7 +3508,7 @@ bool AuthoredAssetDocumentService::SaveSceneAnimationTimeline(const StringView& 
     order.Add("durationFrames");
     order.Add("tracks");
     if (CanonicalJsonWriter::Write(json, text, jsonError, &order) ||
-        GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic) || RefreshPath(path))
+        GraphDocumentCodec::SaveJsonAtomic(path, text, diagnostic))
         return fail();
     AssetMeta meta;
     if (AssetMeta::Load(String(path) + TEXT(".meta"), meta, diagnostic) || meta.Processor.ID != TEXT("Flax.SceneAnimation"))

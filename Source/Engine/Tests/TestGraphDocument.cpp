@@ -213,21 +213,31 @@ TEST_CASE("Graph preview paths are excluded from current resolution")
     CHECK_FALSE(GraphDocumentPreview::IsPreviewPath(TEXT("C:/Project/Content/Graphs/Test.materialfunction")));
 }
 
-TEST_CASE("Authored JSON atomic saves do not require graph fields")
+TEST_CASE("Local JSON atomic saves canonicalize without graph fields")
 {
     const String path = Globals::TemporaryFolder / (Guid::New().ToString(Guid::FormatType::N) + TEXT(".json"));
     const StringAnsi json("{\n  \"documentVersion\": 1,\n  \"type\": \"FlaxEngine.CollisionData\"\n}\n");
+    const StringAnsi nonCanonical("{\"type\":\"FlaxEngine.CollisionData\",\"documentVersion\":1}");
     AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(GraphDocumentCodec::SaveJsonAtomic(path, json, diagnostic));
+    REQUIRE_FALSE(GraphDocumentCodec::SaveLocalJsonAtomic(path, nonCanonical, diagnostic));
 
     Array<byte> saved;
     REQUIRE_FALSE(File::ReadAllBytes(path, saved));
     CHECK(StringAnsiView(reinterpret_cast<const char*>(saved.Get()), saved.Count()) == json);
-    CHECK(GraphDocumentCodec::SaveJsonAtomic(path, StringAnsiView("{"), diagnostic));
+    CHECK(GraphDocumentCodec::SaveLocalJsonAtomic(path, StringAnsiView("{"), diagnostic));
 
     saved.Clear();
     REQUIRE_FALSE(File::ReadAllBytes(path, saved));
     CHECK(StringAnsiView(reinterpret_cast<const char*>(saved.Get()), saved.Count()) == json);
+
+    ContentHash expected = ContentHash::Compute(saved.Get(), saved.Count());
+    const StringAnsi external("{\n  \"documentVersion\": 2,\n  \"type\": \"FlaxEngine.CollisionData\"\n}\n");
+    REQUIRE_FALSE(File::WriteAllBytes(path, external.Get(), external.Length()));
+    CHECK(GraphDocumentCodec::SaveLocalJsonAtomic(path, json, diagnostic, &expected));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::SourceBusy);
+    saved.Clear();
+    REQUIRE_FALSE(File::ReadAllBytes(path, saved));
+    CHECK(StringAnsiView(reinterpret_cast<const char*>(saved.Get()), saved.Count()) == external);
     FileSystem::DeleteFile(path);
 }
 

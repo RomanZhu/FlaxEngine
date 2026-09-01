@@ -5,7 +5,7 @@
 #include "Engine/Content/Config.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
-#include "Engine/Content/AssetDatabase/DurableAssetFileSystem.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
 #include "Engine/Content/Assets/AnimationGraph.h"
 #include "Engine/Content/Assets/AnimationGraphFunction.h"
@@ -45,7 +45,6 @@
 #include "Engine/Core/Math/Vector2.h"
 #include "Engine/Core/Math/Vector3.h"
 #include "Engine/Core/Math/Vector4.h"
-#include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
@@ -2466,41 +2465,89 @@ bool GraphDocumentCodec::Decode(const StringAnsiView& source, AssetDocumentSnaps
     return false;
 }
 
-bool GraphDocumentCodec::SaveAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
+namespace
+{
+    bool SaveCanonicalSource(const StringView& path, const StringAnsiView& canonicalText,
+        SourceSaveRegistrationMode captureMode, SourceSaveConflictPolicy conflictPolicy,
+        AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
+    {
+        SourceSaveTransaction transaction;
+        SourceSaveRevision expected;
+        if (transaction.Capture(path, captureMode, expected, diagnostic, conflictPolicy))
+            return true;
+        if (captureMode == SourceSaveRegistrationMode::AllowUnregistered &&
+            !expected.IsTracked && expected.Exists)
+        {
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
+                TEXT("Existing authored source is not registered in the durable database."));
+        }
+        if (previousHash && !previousHash->IsZero())
+            expected.SourceHash = *previousHash;
+        SourceSaveRequest request;
+        request.RegistrationMode = captureMode == SourceSaveRegistrationMode::UntrackedLocal
+            ? SourceSaveRegistrationMode::UntrackedLocal
+            : expected.IsTracked
+                ? SourceSaveRegistrationMode::RequireTracked
+                : SourceSaveRegistrationMode::AllowUnregistered;
+        request.Expected = MoveTemp(expected);
+        request.ConflictPolicy = conflictPolicy;
+        request.CanonicalBytes = StringAnsi(canonicalText);
+        SourceSaveResult result;
+        const bool commitFailed = transaction.Commit(request, result, diagnostic);
+        const bool adoptedUnchanged = result.Outcome == SourceSaveOutcome::Unchanged &&
+            conflictPolicy == SourceSaveConflictPolicy::AdoptCurrent && result.Current.IsTracked &&
+            result.Current.SourceHash != result.Current.DurableSourceHash;
+        const bool activatedTracked = result.Current.IsTracked &&
+            (result.Outcome == SourceSaveOutcome::Committed ||
+                result.Outcome == SourceSaveOutcome::ActivatedDurabilityUncertain);
+        if (activatedTracked || adoptedUnchanged)
+        {
+            const String& refreshPath = activatedTracked
+                ? result.SelfWrite.Path
+                : result.Current.SourcePath;
+            const ContentHash& refreshContent = activatedTracked
+                ? result.SelfWrite.Content
+                : result.Current.SourceHash;
+            Array<String> refreshPaths;
+            refreshPaths.Add(refreshPath);
+            if (!AssetPipelineService::RefreshSources(refreshPaths))
+                AssetOperationService::RegisterSelfWrite(refreshPath, refreshContent);
+        }
+        return commitFailed;
+    }
+}
+
+bool GraphDocumentCodec::SaveAtomic(const StringView& path, const StringAnsiView& canonicalText,
+    AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash, SourceSaveConflictPolicy conflictPolicy)
 {
     GraphDocumentCodec codec;
     GraphDocumentSnapshot reparsed;
     if (codec.DecodeGraph(canonicalText, reparsed, diagnostic))
         return true;
-    return SaveJsonAtomic(path, canonicalText, diagnostic, previousHash);
+    return SaveCanonicalSource(path, reparsed.CanonicalText, SourceSaveRegistrationMode::AllowUnregistered, conflictPolicy,
+        diagnostic, previousHash);
 }
 
-bool GraphDocumentCodec::SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
+bool GraphDocumentCodec::SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
+    AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash, SourceSaveConflictPolicy conflictPolicy)
 {
     StringAnsi reparsed;
     CanonicalJsonError jsonError;
     if (CanonicalJsonWriter::Canonicalize(canonicalText, reparsed, jsonError))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Authored document is not valid JSON."));
-    if (previousHash && !previousHash->IsZero() && FileSystem::FileExists(path))
-    {
-        Array<byte> existing;
-        if (!File::ReadAllBytes(path, existing))
-        {
-            const ContentHash current = ContentHash::Compute(existing.Get(), existing.Count());
-            if (current != *previousHash)
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceBusy, AssetPipelineDiagnosticStage::DatabaseScan, TEXT("Graph document changed externally and will not be overwritten."));
-        }
-    }
-    const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
-    SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
-    if (File::WriteAllBytes(staging, canonicalText.Get(), canonicalText.Length()) || DurableAssetFileSystem::FlushFile(staging))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot write or flush authored document staging file."));
-    if (FileSystem::FileExists(path) && FileSystem::IsReadOnly(path))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Authored document is read-only."));
-    if (DurableAssetFileSystem::Replace(path, staging))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Cannot atomically replace authored document."));
-    diagnostic = AssetPipelineDiagnostic();
-    return false;
+    return SaveCanonicalSource(path, reparsed, SourceSaveRegistrationMode::AllowUnregistered, conflictPolicy,
+        diagnostic, previousHash);
+}
+
+bool GraphDocumentCodec::SaveLocalJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
+    AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash)
+{
+    StringAnsi reparsed;
+    CanonicalJsonError jsonError;
+    if (CanonicalJsonWriter::Canonicalize(canonicalText, reparsed, jsonError))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, AssetPipelineDiagnosticStage::Prepare, TEXT("Local document is not valid JSON."));
+    return SaveCanonicalSource(path, reparsed, SourceSaveRegistrationMode::UntrackedLocal, SourceSaveConflictPolicy::Strict,
+        diagnostic, previousHash);
 }
 
 bool GraphDocumentValidator::Validate(const AssetDocumentSnapshot& snapshot, AssetPipelineDiagnostic& diagnostic) const
@@ -2592,7 +2639,8 @@ bool AssetDocumentService::SaveGraphSource(const StringView& path, const BytesCo
     }
     StringAnsi json;
     if (GraphDocumentCodec::ToCanonicalJson(document, json, diagnostic) ||
-        GraphDocumentCodec::SaveAtomic(path, json, diagnostic, expectedSourceHash.HasChars() ? &expected : nullptr))
+        GraphDocumentCodec::SaveAtomic(path, json, diagnostic, expectedSourceHash.HasChars() ? &expected : nullptr,
+            expectedSourceHash.HasChars() ? SourceSaveConflictPolicy::Strict : SourceSaveConflictPolicy::AdoptCurrent))
     {
         LOG(Error, "Cannot save graph source '{0}': {1}", path, diagnostic.Message);
         return true;
@@ -2675,7 +2723,8 @@ bool GraphDocumentSession::Save(bool allowOverwriteConflict, AssetPipelineDiagno
     if (GraphDocumentCodec::ToCanonicalJson(Document, json, diagnostic))
         return true;
     ContentHash* expected = allowOverwriteConflict ? nullptr : &LoadedHash;
-    if (GraphDocumentCodec::SaveAtomic(Path, json, diagnostic, expected))
+    if (GraphDocumentCodec::SaveAtomic(Path, json, diagnostic, expected,
+        allowOverwriteConflict ? SourceSaveConflictPolicy::AdoptCurrent : SourceSaveConflictPolicy::Strict))
         return true;
     LoadedHash = HashText(json);
     Dirty = false;

@@ -2,6 +2,7 @@
 
 #include "AssetOperations.h"
 #include "DurableAssetFileSystem.h"
+#include "Engine/Content/Content.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
@@ -11,11 +12,19 @@
 #include "Engine/Platform/StringUtils.h"
 #include "Engine/Utilities/Crc.h"
 #include <algorithm>
+#if PLATFORM_WINDOWS
+#include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
+#elif PLATFORM_LINUX || PLATFORM_MAC
+#include <sys/stat.h>
+#endif
 
 namespace
 {
     constexpr uint32 JournalMagic = 0x4A504F41; // AOPJ
     constexpr uint32 JournalVersion = 2;
+    constexpr uint32 BatchJournalMagic = 0x42504F41; // AOPB
+    constexpr uint32 BatchJournalVersion = 1;
+    constexpr int32 MaximumTrashEntries = 4096;
 
     enum class JournalPhase : byte
     {
@@ -38,6 +47,23 @@ namespace
         String SourceFragmentsPath;
         String DestinationFragmentsPath;
         String StageFragmentsPath;
+    };
+
+    enum class BatchJournalKind : byte
+    {
+        Trash,
+        Restore,
+        Discard,
+    };
+
+    struct BatchOperationJournal
+    {
+        Guid TransactionId;
+        BatchJournalKind Kind = BatchJournalKind::Trash;
+        JournalPhase Phase = JournalPhase::Prepared;
+        AssetTrashBatch Trash;
+        String TrashRoot;
+        String DiscardStageRoot;
     };
 
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const StringView& path,
@@ -86,6 +112,11 @@ namespace
     bool DurableDeleteDirectory(const StringView& path)
     {
         return DurableAssetFileSystem::DeleteDirectory(path, true);
+    }
+
+    bool DurableDeleteEmptyDirectory(const StringView& path)
+    {
+        return DurableAssetFileSystem::DeleteDirectory(path, false);
     }
 
     class JournalWriter
@@ -244,6 +275,111 @@ namespace
         return false;
     }
 
+    String BatchJournalPath(const StringView& directory)
+    {
+        return String(directory) / TEXT("batch-journal.bin");
+    }
+
+    bool SaveBatchJournal(const StringView& directory, const BatchOperationJournal& journal,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        if (!journal.TransactionId.IsValid() || journal.Trash.Entries.IsEmpty() ||
+            journal.Trash.Entries.Count() > MaximumTrashEntries || EnsureDirectory(directory))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
+                TEXT("Cannot create the batch asset operation transaction directory."));
+        JournalWriter writer;
+        writer.UInt32(BatchJournalMagic);
+        writer.UInt32(BatchJournalVersion);
+        writer.Byte(static_cast<byte>(journal.Kind));
+        writer.Byte(static_cast<byte>(journal.Phase));
+        writer.GuidValue(journal.TransactionId);
+        writer.GuidValue(journal.Trash.TransactionId);
+        writer.StringValue(journal.TrashRoot);
+        writer.StringValue(journal.DiscardStageRoot);
+        writer.UInt32(journal.Trash.Entries.Count());
+        for (const AssetTrashEntry& entry : journal.Trash.Entries)
+        {
+            if (entry.Fragments.Count() > MaximumTrashEntries)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, directory,
+                    TEXT("Batch asset operation fragment paths are inconsistent."));
+            writer.GuidValue(entry.AssetGuid);
+            writer.Byte(entry.IsFolder ? 1 : 0);
+            writer.StringValue(entry.OriginalPath);
+            writer.StringValue(entry.TrashPath);
+            writer.StringValue(entry.OriginalMetaPath);
+            writer.StringValue(entry.TrashMetaPath);
+            writer.UInt32(entry.Fragments.Count());
+            for (const AssetTrashFragment& fragment : entry.Fragments)
+            {
+                writer.StringValue(fragment.OriginalPath);
+                writer.StringValue(fragment.TrashPath);
+            }
+        }
+        const String destination = BatchJournalPath(directory);
+        const String staging = destination + TEXT(".tmp");
+        if (File::WriteAllBytes(staging, writer.Data.Get(), writer.Data.Count()) || FlushFile(staging) ||
+            DurableMove(destination, staging, true))
+        {
+            DurableDeleteFile(staging);
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destination,
+                TEXT("Cannot durably persist the batch asset operation journal."));
+        }
+        return false;
+    }
+
+    bool LoadBatchJournal(const StringView& directory, BatchOperationJournal& journal,
+        AssetPipelineDiagnostic& diagnostic)
+    {
+        const String path = BatchJournalPath(directory);
+        BytesContainer bytes;
+        if (File::ReadAllBytes(path, bytes) || bytes.Length() > 64 * 1024 * 1024)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Batch asset operation journal is missing, unreadable, or oversized."));
+        JournalReader reader(bytes.Get(), static_cast<uint32>(bytes.Length()));
+        uint32 magic;
+        uint32 version;
+        uint32 entryCount;
+        byte kind;
+        byte phase;
+        if (reader.UInt32(magic) || reader.UInt32(version) || reader.Byte(kind) || reader.Byte(phase) ||
+            reader.GuidValue(journal.TransactionId) || reader.GuidValue(journal.Trash.TransactionId) ||
+            reader.StringValue(journal.TrashRoot) ||
+            reader.StringValue(journal.DiscardStageRoot) || reader.UInt32(entryCount) ||
+            magic != BatchJournalMagic || version != BatchJournalVersion || !journal.TransactionId.IsValid() ||
+            !journal.Trash.TransactionId.IsValid() ||
+            kind > static_cast<byte>(BatchJournalKind::Discard) ||
+            phase > static_cast<byte>(JournalPhase::Committed) || entryCount == 0 || entryCount > MaximumTrashEntries)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Batch asset operation journal is malformed or unsupported."));
+        journal.Kind = static_cast<BatchJournalKind>(kind);
+        journal.Phase = static_cast<JournalPhase>(phase);
+        journal.Trash.Entries.Resize(entryCount);
+        for (AssetTrashEntry& entry : journal.Trash.Entries)
+        {
+            uint32 fragmentCount;
+            byte isFolder;
+            if (reader.GuidValue(entry.AssetGuid) || reader.Byte(isFolder) || isFolder > 1 ||
+                reader.StringValue(entry.OriginalPath) || reader.StringValue(entry.TrashPath) ||
+                reader.StringValue(entry.OriginalMetaPath) || reader.StringValue(entry.TrashMetaPath) ||
+                reader.UInt32(fragmentCount) || fragmentCount > MaximumTrashEntries)
+                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                    TEXT("Batch asset operation journal entry is malformed."));
+            entry.IsFolder = isFolder != 0;
+            entry.Fragments.Resize(fragmentCount);
+            for (uint32 i = 0; i < fragmentCount; i++)
+            {
+                if (reader.StringValue(entry.Fragments[i].OriginalPath) ||
+                    reader.StringValue(entry.Fragments[i].TrashPath))
+                    return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                        TEXT("Batch asset operation fragment entry is malformed."));
+            }
+        }
+        if (!reader.AtEnd())
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
+                TEXT("Batch asset operation journal contains trailing data."));
+        return false;
+    }
+
     bool HashFile(const StringView& path, ContentHash& hash)
     {
         BytesContainer bytes;
@@ -251,6 +387,171 @@ namespace
             return true;
         hash = ContentHash::Compute(bytes.Get(), bytes.Length());
         return false;
+    }
+
+    bool PathExists(const StringView& path)
+    {
+        return FileSystem::FileExists(path) || FileSystem::DirectoryExists(path);
+    }
+
+    bool IsFileSystemLink(const StringView& path)
+    {
+#if PLATFORM_WINDOWS
+        const String value(path);
+        const DWORD attributes = GetFileAttributesW(*value);
+        return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#elif PLATFORM_LINUX || PLATFORM_MAC
+        const StringAnsi value(path);
+        struct stat status;
+        return lstat(value.Get(), &status) == 0 && S_ISLNK(status.st_mode);
+#else
+        return false;
+#endif
+    }
+
+    bool ContainsFileSystemLink(const StringView& path, bool isFolder)
+    {
+        if (IsFileSystemLink(path))
+            return true;
+        if (!isFolder)
+            return false;
+        Array<String> pending;
+        pending.Add(String(path));
+        while (pending.HasItems())
+        {
+            const String directory = pending.Last();
+            pending.RemoveLast();
+            Array<String> files;
+            Array<String> directories;
+            if (FileSystem::DirectoryGetFiles(files, directory, TEXT("*"), DirectorySearchOption::TopDirectoryOnly) ||
+                FileSystem::GetChildDirectories(directories, directory))
+                return true;
+            for (const String& file : files)
+            {
+                if (IsFileSystemLink(file))
+                    return true;
+            }
+            for (const String& child : directories)
+            {
+                if (IsFileSystemLink(child))
+                    return true;
+                pending.Add(child);
+            }
+        }
+        return false;
+    }
+
+    bool MovePrimaryPath(const AssetTrashEntry& entry, const StringView& destination, const StringView& source)
+    {
+#if USE_EDITOR
+        const bool failed = entry.IsFolder
+            ? Content::RenameAssetFolder(source, destination)
+            : (entry.AssetGuid.IsValid() ? Content::RenameAsset(source, destination) :
+                DurableMove(destination, source, false));
+        if (failed)
+            return true;
+        return DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(source)) ||
+            DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(destination));
+#else
+        return DurableMove(destination, source, false);
+#endif
+    }
+
+    bool MoveEntry(const AssetTrashEntry& entry, bool toTrash)
+    {
+        const StringView source = toTrash ? StringView(entry.OriginalPath) : StringView(entry.TrashPath);
+        const StringView destination = toTrash ? StringView(entry.TrashPath) : StringView(entry.OriginalPath);
+        if (EnsureParent(destination) || MovePrimaryPath(entry, destination, source))
+            return true;
+        if (entry.OriginalMetaPath.HasChars())
+        {
+            const StringView metaSource = toTrash ? StringView(entry.OriginalMetaPath) : StringView(entry.TrashMetaPath);
+            const StringView metaDestination = toTrash ? StringView(entry.TrashMetaPath) : StringView(entry.OriginalMetaPath);
+            if (EnsureParent(metaDestination) || DurableMove(metaDestination, metaSource, false))
+                return true;
+        }
+        for (const AssetTrashFragment& fragment : entry.Fragments)
+        {
+            const StringView fragmentSource = toTrash ? StringView(fragment.OriginalPath) : StringView(fragment.TrashPath);
+            const StringView fragmentDestination = toTrash ? StringView(fragment.TrashPath) : StringView(fragment.OriginalPath);
+            if (EnsureParent(fragmentDestination) || DurableMove(fragmentDestination, fragmentSource, false))
+                return true;
+        }
+        return false;
+    }
+
+    bool RollbackMovedEntry(const AssetTrashEntry& entry, bool wasTrash)
+    {
+        bool failed = false;
+        for (int32 i = entry.Fragments.Count() - 1; i >= 0; i--)
+        {
+            const StringView source = wasTrash ? StringView(entry.Fragments[i].TrashPath) : StringView(entry.Fragments[i].OriginalPath);
+            const StringView destination = wasTrash ? StringView(entry.Fragments[i].OriginalPath) : StringView(entry.Fragments[i].TrashPath);
+            if (!PathExists(destination) && FileSystem::DirectoryExists(source))
+                failed |= EnsureParent(destination) || DurableMove(destination, source, false);
+            else if (PathExists(source))
+                failed = true;
+        }
+        if (entry.OriginalMetaPath.HasChars())
+        {
+            const StringView source = wasTrash ? StringView(entry.TrashMetaPath) : StringView(entry.OriginalMetaPath);
+            const StringView destination = wasTrash ? StringView(entry.OriginalMetaPath) : StringView(entry.TrashMetaPath);
+            if (!PathExists(destination) && FileSystem::FileExists(source))
+                failed |= EnsureParent(destination) || DurableMove(destination, source, false);
+            else if (PathExists(source))
+                failed = true;
+        }
+        const StringView source = wasTrash ? StringView(entry.TrashPath) : StringView(entry.OriginalPath);
+        const StringView destination = wasTrash ? StringView(entry.OriginalPath) : StringView(entry.TrashPath);
+        const bool sourceExists = entry.IsFolder ? FileSystem::DirectoryExists(source) : FileSystem::FileExists(source);
+        if (!PathExists(destination) && sourceExists)
+            failed |= EnsureParent(destination) || MovePrimaryPath(entry, destination, source);
+        else if (PathExists(source))
+            failed = true;
+        return failed;
+    }
+
+    bool RollbackBatchJournal(const BatchOperationJournal& journal)
+    {
+        if (journal.Kind == BatchJournalKind::Discard)
+        {
+            if (!PathExists(journal.TrashRoot) && FileSystem::DirectoryExists(journal.DiscardStageRoot))
+                return EnsureParent(journal.TrashRoot) || DurableMove(journal.TrashRoot, journal.DiscardStageRoot, false);
+            return FileSystem::DirectoryExists(journal.DiscardStageRoot);
+        }
+        bool failed = false;
+        for (int32 i = journal.Trash.Entries.Count() - 1; i >= 0; i--)
+            failed |= RollbackMovedEntry(journal.Trash.Entries[i], journal.Kind == BatchJournalKind::Trash);
+        return failed;
+    }
+
+    void CleanupEmptyTrashRoot(const BatchOperationJournal& journal)
+    {
+        for (const AssetTrashEntry& entry : journal.Trash.Entries)
+        {
+            DurableDeleteEmptyDirectory(StringUtils::GetDirectoryName(entry.TrashPath));
+            for (const AssetTrashFragment& fragment : entry.Fragments)
+                DurableDeleteEmptyDirectory(StringUtils::GetDirectoryName(fragment.TrashPath));
+        }
+        DurableDeleteEmptyDirectory(journal.TrashRoot);
+    }
+
+    bool EqualTrashEntry(const AssetTrashEntry& left, const AssetTrashEntry& right)
+    {
+        return left.AssetGuid == right.AssetGuid && left.IsFolder == right.IsFolder &&
+            FileSystem::AreFilePathsEquivalent(left.OriginalPath, right.OriginalPath) &&
+            FileSystem::AreFilePathsEquivalent(left.TrashPath, right.TrashPath) &&
+            left.OriginalMetaPath == right.OriginalMetaPath && left.TrashMetaPath == right.TrashMetaPath &&
+            left.Fragments.Count() == right.Fragments.Count() && [&left, &right]()
+            {
+                for (int32 i = 0; i < left.Fragments.Count(); i++)
+                {
+                    if (!FileSystem::AreFilePathsEquivalent(left.Fragments[i].OriginalPath, right.Fragments[i].OriginalPath) ||
+                        !FileSystem::AreFilePathsEquivalent(left.Fragments[i].TrashPath, right.Fragments[i].TrashPath))
+                        return false;
+                }
+                return true;
+            }();
     }
 
     bool GetMetaSemanticHash(const AssetMeta& meta, uint64& hash, AssetPipelineDiagnostic& diagnostic)
@@ -415,6 +716,29 @@ void AssetOperations::ReleasePaths(const Array<String>& acquired)
     _stateLocker.Lock();
     for (const String& key : acquired)
         _lockedPaths.Remove(key);
+    _locksChanged.NotifyAll();
+    _stateLocker.Unlock();
+}
+
+bool AssetOperations::BeginImmediateTransaction(const StringView& path, AssetPipelineDiagnostic& diagnostic)
+{
+    _stateLocker.Lock();
+    if (_editingDepth > 0 || _pendingCommits.HasItems())
+    {
+        _stateLocker.Unlock();
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, path,
+            TEXT("A recoverable Content transaction cannot start while an asset editing batch is pending."));
+    }
+    _immediateTransactions++;
+    _stateLocker.Unlock();
+    return false;
+}
+
+void AssetOperations::EndImmediateTransaction()
+{
+    _stateLocker.Lock();
+    ASSERT(_immediateTransactions > 0);
+    _immediateTransactions--;
     _locksChanged.NotifyAll();
     _stateLocker.Unlock();
 }
@@ -1070,6 +1394,646 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
     return PublishCommit(commit, diagnostic);
 }
 
+bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests, AssetTrashBatch& trash,
+    AssetPipelineDiagnostic& diagnostic)
+{
+    trash = AssetTrashBatch();
+    if (requests.IsEmpty() || requests.Count() > MaximumTrashEntries)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, StringView::Empty,
+            TEXT("A recoverable Content trash batch must contain a bounded non-empty entry set."));
+
+    const Guid transactionId = Guid::New();
+    const String trashRoot = _trashRoot / transactionId.ToString(Guid::FormatType::N);
+    const auto prepare = [this, &requests, &transactionId, &trashRoot](AssetTrashBatch& output,
+        AssetPipelineDiagnostic& prepareDiagnostic)
+    {
+        output = AssetTrashBatch();
+        output.TransactionId = transactionId;
+        for (int32 i = 0; i < requests.Count(); i++)
+        {
+            const AssetTrashEntryRequest& request = requests[i];
+            AssetPathPolicy::ProjectPath source;
+            if (NormalizeSource(request.SourcePath, source, prepareDiagnostic))
+                return true;
+            if (FileSystem::AreFilePathsEquivalent(source.AbsolutePath, _contentRoot))
+                return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, source.AbsolutePath,
+                    TEXT("The canonical Content root cannot be staged for deletion."));
+            const bool isFile = FileSystem::FileExists(source.AbsolutePath);
+            const bool isFolder = FileSystem::DirectoryExists(source.AbsolutePath);
+            if (request.IsFolder ? (!isFolder || isFile) : (!isFile || isFolder))
+                return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::SourceMissing, source.AbsolutePath,
+                    TEXT("The recoverable Content entry type no longer matches the selected source."));
+            if (ContainsFileSystemLink(source.AbsolutePath, request.IsFolder))
+                return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, source.AbsolutePath,
+                    TEXT("Recoverable Content trash rejects filesystem links and reparse points."));
+            for (const AssetTrashEntry& previous : output.Entries)
+            {
+                if (AssetPathPolicy::IsSameOrChild(source.AbsolutePath, previous.OriginalPath) ||
+                    AssetPathPolicy::IsSameOrChild(previous.OriginalPath, source.AbsolutePath))
+                    return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::PathCollision, source.AbsolutePath,
+                        TEXT("Recoverable Content trash entries must be distinct top-level paths."));
+            }
+
+            AssetTrashEntry entry;
+            entry.IsFolder = request.IsFolder;
+            entry.OriginalPath = source.AbsolutePath;
+            const String entryRoot = trashRoot / String::Format(TEXT("{0}"), i);
+            entry.TrashPath = entryRoot / StringUtils::GetFileName(source.AbsolutePath);
+            const String metaPath = MetaPath(source.AbsolutePath);
+            if (FileSystem::FileExists(metaPath))
+            {
+                if (ContainsFileSystemLink(metaPath, false))
+                    return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, metaPath,
+                        TEXT("Recoverable Content trash rejects linked metadata sidecars."));
+                AssetMeta meta;
+                if (AssetMeta::Load(metaPath, meta, prepareDiagnostic))
+                    return true;
+                if (meta.FolderAsset != request.IsFolder ||
+                    (request.ExpectedAssetGuid.IsValid() && meta.ID != request.ExpectedAssetGuid))
+                    return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, metaPath,
+                        TEXT("The selected Content entry metadata identity or folder kind changed."));
+                entry.AssetGuid = meta.ID;
+                entry.OriginalMetaPath = metaPath;
+                entry.TrashMetaPath = entry.TrashPath + TEXT(".meta");
+            }
+            else if (request.ExpectedAssetGuid.IsValid())
+            {
+                return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::SourceMissing, metaPath,
+                    TEXT("The selected asset metadata sidecar is missing."));
+            }
+
+            Array<String> sceneMetaPaths;
+            if (request.IsFolder)
+            {
+                if (FileSystem::DirectoryGetFiles(sceneMetaPaths, source.AbsolutePath, TEXT("*.scene.meta"),
+                    DirectorySearchOption::AllDirectories))
+                    return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::SourceBusy, source.AbsolutePath,
+                        TEXT("Cannot enumerate scene metadata below the selected Content folder."));
+            }
+            else if (source.AbsolutePath.EndsWith(TEXT(".scene"), StringSearchCase::IgnoreCase) &&
+                entry.OriginalMetaPath.HasChars())
+            {
+                sceneMetaPaths.Add(entry.OriginalMetaPath);
+            }
+            for (const String& sceneMetaPath : sceneMetaPaths)
+            {
+                if (!sceneMetaPath.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase))
+                    continue;
+                const String scenePath = sceneMetaPath.Substring(0, sceneMetaPath.Length() - 5);
+                if (!scenePath.EndsWith(TEXT(".scene"), StringSearchCase::IgnoreCase) ||
+                    !FileSystem::FileExists(scenePath))
+                    continue;
+                AssetMeta sceneMeta;
+                if (AssetMeta::Load(sceneMetaPath, sceneMeta, prepareDiagnostic))
+                    return true;
+                const String fragments = SceneFragmentStore::GetScenePath(_projectRoot, sceneMeta.ID);
+                if (!FileSystem::DirectoryExists(fragments))
+                    continue;
+                if (ContainsFileSystemLink(fragments, true))
+                    return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, fragments,
+                        TEXT("Recoverable Content trash rejects linked private scene fragments."));
+                const String trashFragments = trashRoot / TEXT("ExternalActors") /
+                    sceneMeta.ID.ToString(Guid::FormatType::N);
+                bool alreadyAdded = false;
+                for (const AssetTrashFragment& fragment : entry.Fragments)
+                    alreadyAdded |= FileSystem::AreFilePathsEquivalent(fragment.TrashPath, trashFragments);
+                if (alreadyAdded)
+                    continue;
+                for (const AssetTrashEntry& previous : output.Entries)
+                {
+                    for (const AssetTrashFragment& fragment : previous.Fragments)
+                    {
+                        if (FileSystem::AreFilePathsEquivalent(fragment.TrashPath, trashFragments))
+                            return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::PathCollision, fragments,
+                                TEXT("Selected scenes repeat a private fragment owner identity."));
+                    }
+                }
+                AssetTrashFragment fragment;
+                fragment.OriginalPath = fragments;
+                fragment.TrashPath = trashFragments;
+                entry.Fragments.Add(MoveTemp(fragment));
+            }
+            if (PathExists(entry.TrashPath) || PathExists(entry.TrashMetaPath))
+                return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::PathCollision, entry.TrashPath,
+                    TEXT("The native recovery path already exists."));
+            for (const AssetTrashFragment& fragment : entry.Fragments)
+            {
+                if (PathExists(fragment.TrashPath))
+                    return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::PathCollision, fragment.TrashPath,
+                        TEXT("A private scene fragment recovery path already exists."));
+            }
+            output.Entries.Add(MoveTemp(entry));
+        }
+        return false;
+    };
+
+    AssetTrashBatch prepared;
+    if (prepare(prepared, diagnostic))
+        return true;
+    for (const AssetTrashEntry& entry : prepared.Entries)
+    {
+        AssetOperationTarget target;
+        target.SourcePath = entry.OriginalPath;
+        target.ExpectedGuid = entry.AssetGuid;
+        if (_modificationProcessor.ValidateOperation(AssetOperationKind::Trash, target, StringView::Empty, diagnostic))
+            return true;
+    }
+    if (BeginImmediateTransaction(prepared.Entries[0].OriginalPath, diagnostic))
+        return true;
+    SCOPE_EXIT { EndImmediateTransaction(); };
+
+    Array<String> lockPaths;
+    lockPaths.Add(trashRoot);
+    for (const AssetTrashEntry& entry : prepared.Entries)
+    {
+        lockPaths.Add(entry.OriginalPath);
+        lockPaths.Add(entry.TrashPath);
+        if (entry.OriginalMetaPath.HasChars())
+        {
+            lockPaths.Add(entry.OriginalMetaPath);
+            lockPaths.Add(entry.TrashMetaPath);
+        }
+        for (const AssetTrashFragment& fragment : entry.Fragments)
+        {
+            lockPaths.Add(fragment.OriginalPath);
+            lockPaths.Add(fragment.TrashPath);
+        }
+    }
+    Array<String> acquired;
+    AcquirePaths(lockPaths, acquired, diagnostic);
+    SCOPE_EXIT { ReleasePaths(acquired); };
+    AssetTrashBatch current;
+    if (prepare(current, diagnostic) || current.Entries.Count() != prepared.Entries.Count())
+        return true;
+    for (int32 i = 0; i < prepared.Entries.Count(); i++)
+    {
+        if (!EqualTrashEntry(prepared.Entries[i], current.Entries[i]))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, prepared.Entries[i].OriginalPath,
+                TEXT("The recoverable Content entry set changed during transaction preparation."));
+    }
+
+    BatchOperationJournal journal;
+    journal.TransactionId = transactionId;
+    journal.Kind = BatchJournalKind::Trash;
+    journal.Trash = prepared;
+    journal.TrashRoot = trashRoot;
+    const String transactionDirectory = _transactionsRoot / transactionId.ToString(Guid::FormatType::N);
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+        return true;
+    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    {
+        if (MoveEntry(entry, true))
+        {
+            const bool rollbackFailed = RollbackBatchJournal(journal);
+            if (!rollbackFailed)
+            {
+                CleanupEmptyTrashRoot(journal);
+                DurableDeleteDirectory(transactionDirectory);
+            }
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                Fail(diagnostic, rollbackFailed ? AssetPipelineDiagnosticCode::MigrationFailed :
+                    AssetPipelineDiagnosticCode::LibraryCreationFailed, entry.OriginalPath,
+                    rollbackFailed ? TEXT("Content trash rollback failed; native recovery data was preserved.") :
+                        TEXT("Content trash staging failed and was rolled back."));
+            if (rollbackFailed)
+                diagnostic.Related.Add(transactionDirectory);
+            return true;
+        }
+    }
+    journal.Phase = JournalPhase::Applied;
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+        {
+            CleanupEmptyTrashRoot(journal);
+            DurableDeleteDirectory(transactionDirectory);
+        }
+        else
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+
+    Array<AssetOperationCommit> commits;
+    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    {
+        AssetOperationCommit commit;
+        commit.TransactionId = transactionId;
+        commit.Kind = AssetOperationKind::Trash;
+        commit.AssetGuid = entry.AssetGuid;
+        commit.SourcePath = entry.OriginalPath;
+        commit.DestinationPath = entry.TrashPath;
+        commits.Add(MoveTemp(commit));
+    }
+    if (_databaseCallbacks.RefreshCommitted(commits, diagnostic))
+    {
+        const AssetPipelineDiagnostic publicationDiagnostic = diagnostic;
+        const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+        {
+            Array<AssetOperationCommit> rollbackCommits;
+            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            {
+                AssetOperationCommit rollbackCommit;
+                rollbackCommit.TransactionId = transactionId;
+                rollbackCommit.Kind = AssetOperationKind::Restore;
+                rollbackCommit.AssetGuid = entry.AssetGuid;
+                rollbackCommit.SourcePath = entry.TrashPath;
+                rollbackCommit.DestinationPath = entry.OriginalPath;
+                rollbackCommits.Add(MoveTemp(rollbackCommit));
+            }
+            AssetPipelineDiagnostic ignored;
+            _databaseCallbacks.RefreshCommitted(rollbackCommits, ignored);
+            CleanupEmptyTrashRoot(journal);
+            DurableDeleteDirectory(transactionDirectory);
+        }
+        diagnostic = publicationDiagnostic;
+        if (rollbackFailed)
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    journal.Phase = JournalPhase::Committed;
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
+        bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+        {
+            Array<AssetOperationCommit> rollbackCommits;
+            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            {
+                AssetOperationCommit rollbackCommit;
+                rollbackCommit.TransactionId = transactionId;
+                rollbackCommit.Kind = AssetOperationKind::Restore;
+                rollbackCommit.AssetGuid = entry.AssetGuid;
+                rollbackCommit.SourcePath = entry.TrashPath;
+                rollbackCommit.DestinationPath = entry.OriginalPath;
+                rollbackCommits.Add(MoveTemp(rollbackCommit));
+            }
+            AssetPipelineDiagnostic rollbackDiagnostic;
+            rollbackFailed = _databaseCallbacks.RefreshCommitted(rollbackCommits, rollbackDiagnostic);
+        }
+        if (!rollbackFailed)
+        {
+            CleanupEmptyTrashRoot(journal);
+            DurableDeleteDirectory(transactionDirectory);
+        }
+        diagnostic = commitDiagnostic;
+        if (rollbackFailed)
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    // A committed journal makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
+    DurableDeleteDirectory(transactionDirectory);
+    trash = MoveTemp(prepared);
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic)
+{
+    if (!trash.TransactionId.IsValid() || trash.Entries.IsEmpty() || trash.Entries.Count() > MaximumTrashEntries)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, StringView::Empty,
+            TEXT("The recoverable Content trash record is invalid."));
+    const String trashRoot = _trashRoot / trash.TransactionId.ToString(Guid::FormatType::N);
+    const String fragmentsRoot = SceneFragmentStore::GetRootPath(_projectRoot);
+    const auto validate = [this, &trash, &trashRoot, &fragmentsRoot](AssetPipelineDiagnostic& validateDiagnostic)
+    {
+        if (!FileSystem::DirectoryExists(trashRoot))
+            return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::SourceMissing, trashRoot,
+                TEXT("The native Content trash directory is missing."));
+        for (int32 i = 0; i < trash.Entries.Count(); i++)
+        {
+            const AssetTrashEntry& entry = trash.Entries[i];
+            AssetPathPolicy::ProjectPath original;
+            if (NormalizeSource(entry.OriginalPath, original, validateDiagnostic))
+                return true;
+            if (!FileSystem::AreFilePathsEquivalent(original.AbsolutePath, entry.OriginalPath) ||
+                FileSystem::AreFilePathsEquivalent(original.AbsolutePath, _contentRoot) ||
+                !AssetPathPolicy::IsSameOrChild(entry.TrashPath, trashRoot) ||
+                FileSystem::AreFilePathsEquivalent(entry.TrashPath, trashRoot) ||
+                PathExists(entry.OriginalPath) ||
+                (entry.IsFolder ? !FileSystem::DirectoryExists(entry.TrashPath) : !FileSystem::FileExists(entry.TrashPath)) ||
+                ContainsFileSystemLink(entry.TrashPath, entry.IsFolder))
+                return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, entry.OriginalPath,
+                    TEXT("The exact Content trash source or restore destination changed."));
+            for (int32 j = 0; j < i; j++)
+            {
+                if (AssetPathPolicy::IsSameOrChild(entry.OriginalPath, trash.Entries[j].OriginalPath) ||
+                    AssetPathPolicy::IsSameOrChild(trash.Entries[j].OriginalPath, entry.OriginalPath))
+                    return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PathCollision, entry.OriginalPath,
+                        TEXT("Content trash records must contain distinct top-level paths."));
+            }
+            if (entry.OriginalMetaPath.HasChars())
+            {
+                if (!FileSystem::AreFilePathsEquivalent(entry.OriginalMetaPath, MetaPath(entry.OriginalPath)) ||
+                    !FileSystem::AreFilePathsEquivalent(entry.TrashMetaPath, entry.TrashPath + TEXT(".meta")) ||
+                    PathExists(entry.OriginalMetaPath) || !FileSystem::FileExists(entry.TrashMetaPath) ||
+                    ContainsFileSystemLink(entry.TrashMetaPath, false))
+                    return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, entry.OriginalMetaPath,
+                        TEXT("The exact Content metadata trash record changed."));
+                AssetMeta meta;
+                if (AssetMeta::Load(entry.TrashMetaPath, meta, validateDiagnostic))
+                    return true;
+                if (meta.ID != entry.AssetGuid || meta.FolderAsset != entry.IsFolder)
+                    return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, entry.TrashMetaPath,
+                        TEXT("Content trash metadata no longer matches its captured identity."));
+            }
+            else if (entry.TrashMetaPath.HasChars() || entry.AssetGuid.IsValid())
+            {
+                return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, entry.TrashPath,
+                    TEXT("The Content trash record has an incomplete metadata identity."));
+            }
+            for (const AssetTrashFragment& fragment : entry.Fragments)
+            {
+                const String& originalFragments = fragment.OriginalPath;
+                const String& trashFragments = fragment.TrashPath;
+                if (!AssetPathPolicy::IsSameOrChild(originalFragments, fragmentsRoot) ||
+                    FileSystem::AreFilePathsEquivalent(originalFragments, fragmentsRoot) ||
+                    !AssetPathPolicy::IsSameOrChild(trashFragments, trashRoot) ||
+                    PathExists(originalFragments) || !FileSystem::DirectoryExists(trashFragments) ||
+                    ContainsFileSystemLink(trashFragments, true))
+                    return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, originalFragments,
+                        TEXT("The exact private scene fragment trash record changed."));
+            }
+        }
+        return false;
+    };
+    if (validate(diagnostic))
+        return true;
+    for (const AssetTrashEntry& entry : trash.Entries)
+    {
+        AssetOperationTarget target;
+        target.SourcePath = entry.OriginalPath;
+        target.ExpectedGuid = entry.AssetGuid;
+        if (_modificationProcessor.ValidateOperation(AssetOperationKind::Restore, target,
+            entry.OriginalPath, diagnostic))
+            return true;
+    }
+    if (BeginImmediateTransaction(trash.Entries[0].OriginalPath, diagnostic))
+        return true;
+    SCOPE_EXIT { EndImmediateTransaction(); };
+    Array<String> lockPaths;
+    lockPaths.Add(trashRoot);
+    for (const AssetTrashEntry& entry : trash.Entries)
+    {
+        lockPaths.Add(entry.OriginalPath);
+        lockPaths.Add(entry.TrashPath);
+        if (entry.OriginalMetaPath.HasChars())
+        {
+            lockPaths.Add(entry.OriginalMetaPath);
+            lockPaths.Add(entry.TrashMetaPath);
+        }
+        for (const AssetTrashFragment& fragment : entry.Fragments)
+        {
+            lockPaths.Add(fragment.OriginalPath);
+            lockPaths.Add(fragment.TrashPath);
+        }
+    }
+    Array<String> acquired;
+    AcquirePaths(lockPaths, acquired, diagnostic);
+    SCOPE_EXIT { ReleasePaths(acquired); };
+    if (validate(diagnostic))
+        return true;
+
+    BatchOperationJournal journal;
+    journal.TransactionId = Guid::New();
+    journal.Kind = BatchJournalKind::Restore;
+    journal.Trash = trash;
+    journal.TrashRoot = trashRoot;
+    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+        return true;
+    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    {
+        if (MoveEntry(entry, false))
+        {
+            const bool rollbackFailed = RollbackBatchJournal(journal);
+            if (!rollbackFailed)
+                DurableDeleteDirectory(transactionDirectory);
+            if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+                Fail(diagnostic, rollbackFailed ? AssetPipelineDiagnosticCode::MigrationFailed :
+                    AssetPipelineDiagnosticCode::LibraryCreationFailed, entry.OriginalPath,
+                    rollbackFailed ? TEXT("Content restore rollback failed; native recovery data was preserved.") :
+                        TEXT("Content restore failed and was rolled back."));
+            if (rollbackFailed)
+                diagnostic.Related.Add(transactionDirectory);
+            return true;
+        }
+    }
+    journal.Phase = JournalPhase::Applied;
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        if (!RollbackBatchJournal(journal))
+            DurableDeleteDirectory(transactionDirectory);
+        else
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    Array<AssetOperationCommit> commits;
+    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    {
+        AssetOperationCommit commit;
+        commit.TransactionId = journal.TransactionId;
+        commit.Kind = AssetOperationKind::Restore;
+        commit.AssetGuid = entry.AssetGuid;
+        commit.SourcePath = entry.TrashPath;
+        commit.DestinationPath = entry.OriginalPath;
+        AddSelfWrite(commit, entry.OriginalPath);
+        if (entry.OriginalMetaPath.HasChars())
+            AddSelfWrite(commit, entry.OriginalMetaPath);
+        commits.Add(MoveTemp(commit));
+    }
+    if (_databaseCallbacks.RefreshCommitted(commits, diagnostic))
+    {
+        const AssetPipelineDiagnostic publicationDiagnostic = diagnostic;
+        const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+        {
+            Array<AssetOperationCommit> rollbackCommits;
+            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            {
+                AssetOperationCommit rollbackCommit;
+                rollbackCommit.TransactionId = journal.TransactionId;
+                rollbackCommit.Kind = AssetOperationKind::Trash;
+                rollbackCommit.AssetGuid = entry.AssetGuid;
+                rollbackCommit.SourcePath = entry.OriginalPath;
+                rollbackCommit.DestinationPath = entry.TrashPath;
+                rollbackCommits.Add(MoveTemp(rollbackCommit));
+            }
+            AssetPipelineDiagnostic ignored;
+            _databaseCallbacks.RefreshCommitted(rollbackCommits, ignored);
+            DurableDeleteDirectory(transactionDirectory);
+        }
+        diagnostic = publicationDiagnostic;
+        if (rollbackFailed)
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    journal.Phase = JournalPhase::Committed;
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
+        bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+        {
+            Array<AssetOperationCommit> rollbackCommits;
+            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            {
+                AssetOperationCommit rollbackCommit;
+                rollbackCommit.TransactionId = journal.TransactionId;
+                rollbackCommit.Kind = AssetOperationKind::Trash;
+                rollbackCommit.AssetGuid = entry.AssetGuid;
+                rollbackCommit.SourcePath = entry.OriginalPath;
+                rollbackCommit.DestinationPath = entry.TrashPath;
+                rollbackCommits.Add(MoveTemp(rollbackCommit));
+            }
+            AssetPipelineDiagnostic rollbackDiagnostic;
+            rollbackFailed = _databaseCallbacks.RefreshCommitted(rollbackCommits, rollbackDiagnostic);
+        }
+        if (!rollbackFailed)
+            DurableDeleteDirectory(transactionDirectory);
+        diagnostic = commitDiagnostic;
+        if (rollbackFailed)
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    // A committed journal makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
+    DurableDeleteDirectory(transactionDirectory);
+    CleanupEmptyTrashRoot(journal);
+    _stateLocker.Lock();
+    for (const AssetOperationCommit& commit : commits)
+        _selfWrites.Add(commit.SelfWrites);
+    _stateLocker.Unlock();
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
+bool AssetOperations::DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic)
+{
+    if (!trash.TransactionId.IsValid() || trash.Entries.IsEmpty() || trash.Entries.Count() > MaximumTrashEntries)
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, StringView::Empty,
+            TEXT("The Content trash record cannot be discarded because it is invalid."));
+    const String trashRoot = _trashRoot / trash.TransactionId.ToString(Guid::FormatType::N);
+    const String fragmentsRoot = SceneFragmentStore::GetRootPath(_projectRoot);
+    const auto validate = [this, &trash, &trashRoot, &fragmentsRoot](AssetPipelineDiagnostic& validateDiagnostic)
+    {
+        if (!FileSystem::DirectoryExists(trashRoot) || ContainsFileSystemLink(trashRoot, true))
+            return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::SourceMissing, trashRoot,
+                TEXT("The native Content trash directory is missing or unsafe."));
+        for (const AssetTrashEntry& entry : trash.Entries)
+        {
+            AssetPathPolicy::ProjectPath original;
+            if (NormalizeSource(entry.OriginalPath, original, validateDiagnostic))
+                return true;
+            if (!FileSystem::AreFilePathsEquivalent(original.AbsolutePath, entry.OriginalPath) ||
+                FileSystem::AreFilePathsEquivalent(original.AbsolutePath, _contentRoot) ||
+                !AssetPathPolicy::IsSameOrChild(entry.TrashPath, trashRoot) ||
+                FileSystem::AreFilePathsEquivalent(entry.TrashPath, trashRoot) || PathExists(entry.OriginalPath) ||
+                (entry.IsFolder ? !FileSystem::DirectoryExists(entry.TrashPath) : !FileSystem::FileExists(entry.TrashPath)))
+                return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, entry.TrashPath,
+                    TEXT("Content trash cannot be discarded after its original or recovery paths changed."));
+            if (entry.OriginalMetaPath.HasChars())
+            {
+                if (!FileSystem::AreFilePathsEquivalent(entry.OriginalMetaPath, MetaPath(entry.OriginalPath)) ||
+                    !FileSystem::AreFilePathsEquivalent(entry.TrashMetaPath, entry.TrashPath + TEXT(".meta")) ||
+                    PathExists(entry.OriginalMetaPath) || !FileSystem::FileExists(entry.TrashMetaPath))
+                    return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, entry.TrashMetaPath,
+                        TEXT("Content metadata trash cannot be discarded after its recovery paths changed."));
+            }
+            else if (entry.TrashMetaPath.HasChars() || entry.AssetGuid.IsValid())
+            {
+                return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, entry.TrashPath,
+                    TEXT("The Content trash record has an incomplete metadata identity."));
+            }
+            for (const AssetTrashFragment& fragment : entry.Fragments)
+            {
+                if (!AssetPathPolicy::IsSameOrChild(fragment.OriginalPath, fragmentsRoot) ||
+                    FileSystem::AreFilePathsEquivalent(fragment.OriginalPath, fragmentsRoot) ||
+                    !AssetPathPolicy::IsSameOrChild(fragment.TrashPath, trashRoot) ||
+                    FileSystem::AreFilePathsEquivalent(fragment.TrashPath, trashRoot) ||
+                    PathExists(fragment.OriginalPath) || !FileSystem::DirectoryExists(fragment.TrashPath))
+                    return Fail(validateDiagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, fragment.TrashPath,
+                        TEXT("Private scene fragment trash cannot be discarded after its recovery paths changed."));
+            }
+        }
+        return false;
+    };
+    if (validate(diagnostic))
+        return true;
+    Array<String> lockPaths;
+    lockPaths.Add(trashRoot);
+    for (const AssetTrashEntry& entry : trash.Entries)
+    {
+        lockPaths.Add(entry.OriginalPath);
+        lockPaths.Add(entry.TrashPath);
+        if (entry.OriginalMetaPath.HasChars())
+        {
+            lockPaths.Add(entry.OriginalMetaPath);
+            lockPaths.Add(entry.TrashMetaPath);
+        }
+        for (const AssetTrashFragment& fragment : entry.Fragments)
+        {
+            lockPaths.Add(fragment.OriginalPath);
+            lockPaths.Add(fragment.TrashPath);
+        }
+    }
+    Array<String> acquired;
+    AcquirePaths(lockPaths, acquired, diagnostic);
+    SCOPE_EXIT { ReleasePaths(acquired); };
+    if (validate(diagnostic))
+        return true;
+
+    BatchOperationJournal journal;
+    journal.TransactionId = Guid::New();
+    journal.Kind = BatchJournalKind::Discard;
+    journal.Trash = trash;
+    journal.TrashRoot = trashRoot;
+    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
+    journal.DiscardStageRoot = transactionDirectory / TEXT("discard.stage");
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+        return true;
+    if (DurableMove(journal.DiscardStageRoot, trashRoot, false))
+    {
+        const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+            DurableDeleteDirectory(transactionDirectory);
+        Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, trashRoot,
+            TEXT("Content trash discard could not enter its recoverable staging boundary."));
+        if (rollbackFailed)
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    journal.Phase = JournalPhase::Applied;
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        const AssetPipelineDiagnostic appliedDiagnostic = diagnostic;
+        const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+            DurableDeleteDirectory(transactionDirectory);
+        diagnostic = appliedDiagnostic;
+        if (rollbackFailed)
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    journal.Phase = JournalPhase::Committed;
+    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    {
+        const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
+        const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (!rollbackFailed)
+            DurableDeleteDirectory(transactionDirectory);
+        diagnostic = commitDiagnostic;
+        if (rollbackFailed)
+            diagnostic.Related.Add(transactionDirectory);
+        return true;
+    }
+    // A committed discard owns the staged directory. Startup recovery retries cleanup if this delete is interrupted.
+    DurableDeleteDirectory(transactionDirectory);
+    diagnostic = AssetPipelineDiagnostic();
+    return false;
+}
+
 bool AssetOperations::IsAssetEditing() const
 {
     _stateLocker.Lock();
@@ -1081,6 +2045,8 @@ bool AssetOperations::IsAssetEditing() const
 void AssetOperations::StartAssetEditing()
 {
     _stateLocker.Lock();
+    while (_immediateTransactions > 0)
+        _locksChanged.Wait(_stateLocker);
     _editingDepth++;
     _stateLocker.Unlock();
 }
@@ -1129,6 +2095,17 @@ bool AssetOperations::StopAssetEditing(AssetPipelineDiagnostic& diagnostic)
     return true;
 }
 
+void AssetOperations::RegisterSelfWrite(const StringView& path, const ContentHash& content)
+{
+    AssetOperationSelfWrite write;
+    write.TransactionId = Guid::New();
+    write.Path = path;
+    write.Content = content;
+    _stateLocker.Lock();
+    _selfWrites.Add(MoveTemp(write));
+    _stateLocker.Unlock();
+}
+
 void AssetOperations::DrainSelfWrites(Array<AssetOperationSelfWrite>& result)
 {
     _stateLocker.Lock();
@@ -1153,6 +2130,74 @@ bool AssetOperations::RecoverIncompleteTransactions(Array<AssetPipelineDiagnosti
     }
     for (const String& directory : directories)
     {
+        if (FileSystem::FileExists(BatchJournalPath(directory)))
+        {
+            BatchOperationJournal batch;
+            AssetPipelineDiagnostic diagnostic;
+            if (LoadBatchJournal(directory, batch, diagnostic))
+            {
+                diagnostics.Add(MoveTemp(diagnostic));
+                continue;
+            }
+            const String expectedTransactionDirectory = _transactionsRoot /
+                batch.TransactionId.ToString(Guid::FormatType::N);
+            const String expectedTrashRoot = _trashRoot /
+                batch.Trash.TransactionId.ToString(Guid::FormatType::N);
+            const String fragmentsRoot = SceneFragmentStore::GetRootPath(_projectRoot);
+            bool unsafe = !FileSystem::AreFilePathsEquivalent(directory, expectedTransactionDirectory) ||
+                !FileSystem::AreFilePathsEquivalent(batch.TrashRoot, expectedTrashRoot) ||
+                (batch.Kind == BatchJournalKind::Trash && batch.TransactionId != batch.Trash.TransactionId) ||
+                (batch.Kind == BatchJournalKind::Discard &&
+                    !FileSystem::AreFilePathsEquivalent(batch.DiscardStageRoot,
+                        String(directory) / TEXT("discard.stage"))) ||
+                (batch.Kind != BatchJournalKind::Discard && batch.DiscardStageRoot.HasChars());
+            for (const AssetTrashEntry& entry : batch.Trash.Entries)
+            {
+                AssetPathPolicy::ProjectPath original;
+                unsafe |= NormalizeSource(entry.OriginalPath, original, diagnostic) ||
+                    !FileSystem::AreFilePathsEquivalent(original.AbsolutePath, entry.OriginalPath) ||
+                    FileSystem::AreFilePathsEquivalent(original.AbsolutePath, _contentRoot) ||
+                    !AssetPathPolicy::IsSameOrChild(entry.TrashPath, batch.TrashRoot) ||
+                    FileSystem::AreFilePathsEquivalent(entry.TrashPath, batch.TrashRoot) ||
+                    (entry.OriginalMetaPath.HasChars() &&
+                        (!FileSystem::AreFilePathsEquivalent(entry.OriginalMetaPath, MetaPath(entry.OriginalPath)) ||
+                         !FileSystem::AreFilePathsEquivalent(entry.TrashMetaPath, entry.TrashPath + TEXT(".meta")))) ||
+                    (!entry.OriginalMetaPath.HasChars() &&
+                        (entry.TrashMetaPath.HasChars() || entry.AssetGuid.IsValid()));
+                for (const AssetTrashFragment& fragment : entry.Fragments)
+                {
+                    unsafe |= !AssetPathPolicy::IsSameOrChild(fragment.OriginalPath, fragmentsRoot) ||
+                        FileSystem::AreFilePathsEquivalent(fragment.OriginalPath, fragmentsRoot) ||
+                        !AssetPathPolicy::IsSameOrChild(fragment.TrashPath, batch.TrashRoot) ||
+                        FileSystem::AreFilePathsEquivalent(fragment.TrashPath, batch.TrashRoot);
+                }
+            }
+            if (unsafe)
+            {
+                Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, directory,
+                    TEXT("Batch asset operation recovery paths failed canonical root validation."));
+                diagnostics.Add(MoveTemp(diagnostic));
+                continue;
+            }
+            if (batch.Phase != JournalPhase::Committed && RollbackBatchJournal(batch))
+            {
+                Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, batch.TrashRoot,
+                    TEXT("Incomplete batch asset operation could not be rolled back; recovery data was preserved."));
+                diagnostic.Related.Add(directory);
+                diagnostics.Add(MoveTemp(diagnostic));
+                continue;
+            }
+            if ((batch.Kind == BatchJournalKind::Trash && batch.Phase != JournalPhase::Committed) ||
+                (batch.Kind == BatchJournalKind::Restore && batch.Phase == JournalPhase::Committed))
+                CleanupEmptyTrashRoot(batch);
+            if (DurableDeleteDirectory(directory))
+            {
+                Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
+                    TEXT("Recovered batch asset operation directory could not be removed."));
+                diagnostics.Add(MoveTemp(diagnostic));
+            }
+            continue;
+        }
         OperationJournal journal;
         AssetPipelineDiagnostic diagnostic;
         if (LoadJournal(directory, journal, diagnostic))

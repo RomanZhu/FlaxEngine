@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Threading;
 using FlaxEditor.Content;
 using FlaxEngine;
 using FlaxEngine.Utilities;
@@ -31,13 +30,11 @@ namespace FlaxEditor.Actions
             public string TrashPath;
             public string MetadataOriginalPath;
             public string MetadataTrashPath;
-            public string SidecarOriginalPath;
-            public string SidecarTrashPath;
+            public string[] SidecarOriginalPaths;
+            public string[] SidecarTrashPaths;
             public bool IsFolder;
-            public bool HasMetadataSidecar;
-            public bool HasSidecarFolder;
             public Guid AssetId;
-            public string TypeName;
+            public Guid TrashAssetGuid;
             public long SizeInBytes;
             public bool IsStaged;
         }
@@ -47,8 +44,7 @@ namespace FlaxEditor.Actions
         private readonly Operation _operation;
         private bool _isDeleted;
         private bool _requiresRecovery;
-        private const int FilesystemRetryCount = 12;
-        private const int FilesystemRetryDelayMs = 50;
+        private Guid _trashTransactionId;
 
         /// <inheritdoc />
         public string ActionString { get; }
@@ -197,33 +193,12 @@ namespace FlaxEditor.Actions
         {
             if (_entries != null && _isDeleted && !_requiresRecovery)
             {
-                var cleanupFailures = new List<Entry>();
                 for (int i = 0; i < _entries.Length; i++)
-                {
                     UnloadStagedAssets(_entries[i].TrashPath, _entries[i].IsFolder);
-                    var cleanupSucceeded = DeletePath(_entries[i].TrashPath, _entries[i].IsFolder);
-                    if (_entries[i].HasMetadataSidecar)
-                        cleanupSucceeded &= DeletePath(_entries[i].MetadataTrashPath, false);
-                    if (_entries[i].HasSidecarFolder)
-                        cleanupSucceeded &= DeletePath(_entries[i].SidecarTrashPath, true);
-                    if (!cleanupSucceeded)
-                        cleanupFailures.Add(_entries[i]);
-                }
-                if (cleanupFailures.Count != 0)
+                if (!TryCreateNativeTrashBatch(out var trash) || AssetOperationService.DiscardTrash(trash))
                 {
-                    var plan = new ContentMutationPlan(ContentMutationOperationKind.Cleanup);
-                    for (int i = 0; i < cleanupFailures.Count; i++)
-                    {
-                        var entry = cleanupFailures[i];
-                        if (ContentMutationPathUtils.Exists(entry.TrashPath))
-                            plan.Entries.Add(new ContentMutationEntry(entry.TrashPath, entry.OriginalPath, ContentMutationPathRole.UndoTrash, entry.IsFolder));
-                        if (entry.HasMetadataSidecar && File.Exists(entry.MetadataTrashPath))
-                            plan.Entries.Add(new ContentMutationEntry(entry.MetadataTrashPath, entry.MetadataOriginalPath, ContentMutationPathRole.MetadataSidecar, false));
-                        if (entry.HasSidecarFolder && ContentMutationPathUtils.Exists(entry.SidecarTrashPath))
-                            plan.Entries.Add(new ContentMutationEntry(entry.SidecarTrashPath, entry.SidecarOriginalPath, ContentMutationPathRole.SceneFragments, true));
-                    }
-                    if (plan.Entries.Count != 0)
-                        ContentMutationTransaction.PreserveRecoveryRecord(plan, "Undo-history cleanup could not remove staged Content data.");
+                    _requiresRecovery = true;
+                    Editor.LogError("Native Content trash cleanup failed; recovery data was preserved.");
                 }
             }
             else if (_entries != null && _requiresRecovery)
@@ -295,7 +270,6 @@ namespace FlaxEditor.Actions
 
         private static Entry CreateEntry(ContentItem item)
         {
-            var trashRoot = StringUtils.CombinePaths(Globals.ProjectCacheFolder, "EditorTrash", Guid.NewGuid().ToString("N"));
             var originalPath = StringUtils.NormalizePath(item.Path);
             var metadataOriginalPath = GetMetadataSidecarPath(originalPath, item.IsFolder);
             var sceneId = !item.IsFolder && IsSceneFilePath(originalPath) && item is AssetItem sceneItem ? sceneItem.ID : Guid.Empty;
@@ -318,16 +292,9 @@ namespace FlaxEditor.Actions
             return new Entry
             {
                 OriginalPath = originalPath,
-                TrashPath = StringUtils.CombinePaths(trashRoot, item.FileName),
                 MetadataOriginalPath = metadataOriginalPath,
-                MetadataTrashPath = metadataOriginalPath == null ? null : StringUtils.CombinePaths(trashRoot, item.FileName + ".meta"),
-                SidecarOriginalPath = sidecarOriginalPath,
-                SidecarTrashPath = StringUtils.CombinePaths(trashRoot, "ExternalActors", sceneId.ToString("N").ToLowerInvariant()),
                 IsFolder = item.IsFolder,
-                HasMetadataSidecar = hasMetadataSidecar,
-                HasSidecarFolder = hasSidecarFolder,
                 AssetId = item is AssetItem assetItem ? assetItem.ID : Guid.Empty,
-                TypeName = item is AssetItem typedAssetItem ? typedAssetItem.TypeName : null,
                 SizeInBytes = sizeInBytes,
             };
         }
@@ -344,9 +311,7 @@ namespace FlaxEditor.Actions
             if (_isDeleted)
                 return true;
 
-            if (!PreflightStage())
-                return false;
-            return ExecuteStage(items, "live-items");
+            return ExecuteNativeStage(items);
         }
 
         private bool StageByPath()
@@ -354,9 +319,7 @@ namespace FlaxEditor.Actions
             if (_isDeleted)
                 return true;
 
-            if (!PreflightStage())
-                return false;
-            return ExecuteStage(null, "paths");
+            return ExecuteNativeStage(null);
         }
 
         private bool Restore()
@@ -364,225 +327,126 @@ namespace FlaxEditor.Actions
             if (!AnyEntryStaged())
                 return true;
 
-            if (!PreflightRestore())
+            if (!TryCreateNativeTrashBatch(out var trash) || AssetOperationService.RestoreEntries(trash))
+            {
+                _requiresRecovery = true;
                 return false;
-            return ExecuteRestore();
-        }
-
-        private bool ExecuteStage(IReadOnlyList<ContentItem> items, string source)
-        {
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
-            var steps = new List<ContentMutationStep>(_entries.Length);
-            for (int i = 0; i < _entries.Length; i++)
-            {
-                if (_entries[i].IsStaged)
-                    continue;
-                var entryIndex = i;
-                var firstPlanEntry = plan.Entries.Count;
-                plan.Entries.Add(new ContentMutationEntry(_entries[i].OriginalPath, _entries[i].TrashPath, ContentMutationPathRole.UndoTrash, _entries[i].IsFolder)
-                {
-                    DestinationParentProducedByTransaction = true,
-                });
-                if (_entries[i].HasMetadataSidecar)
-                {
-                    plan.Entries.Add(new ContentMutationEntry(_entries[i].MetadataOriginalPath, _entries[i].MetadataTrashPath, ContentMutationPathRole.MetadataSidecar, false)
-                    {
-                        DestinationParentProducedByTransaction = true,
-                    });
-                }
-                if (_entries[i].HasSidecarFolder)
-                {
-                    plan.Entries.Add(new ContentMutationEntry(_entries[i].SidecarOriginalPath, _entries[i].SidecarTrashPath, ContentMutationPathRole.SceneFragments, true)
-                    {
-                        DestinationParentProducedByTransaction = true,
-                    });
-                }
-                var planIndices = Enumerable.Range(firstPlanEntry, plan.Entries.Count - firstPlanEntry).ToArray();
-                steps.Add(new ContentMutationStep(
-                    "delete-stage-" + i,
-                    planIndices,
-                    () => CommitStageEntry(entryIndex, items != null ? items[entryIndex] : _editor.ContentDatabase.Find(_entries[entryIndex].OriginalPath)),
-                    () => RollbackStageEntry(entryIndex),
-                    () => _entries[entryIndex].IsStaged &&
-                          PathExists(_entries[entryIndex].TrashPath, _entries[entryIndex].IsFolder) &&
-                          !PathExists(_entries[entryIndex].OriginalPath, _entries[entryIndex].IsFolder) &&
-                          (!_entries[entryIndex].HasMetadataSidecar || (File.Exists(_entries[entryIndex].MetadataTrashPath) && !File.Exists(_entries[entryIndex].MetadataOriginalPath)))));
             }
-
-            ContentMutationDiagnostics.Log("mutation.stage.begin", $"transaction={plan.Id:N}; action='{ActionString}'; entries={_entries.Length}; source={source}");
-            var result = new ContentMutationTransaction(plan).Execute(steps);
-            _requiresRecovery |= result.RequiresRecovery;
-            _isDeleted = AreAllEntriesStaged();
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.stage.committed" : "mutation.stage.failed", $"transaction={plan.Id:N}; action='{ActionString}'; entries={_entries.Length}; recovery={_requiresRecovery}; failure={result.Failure}");
-            return result.Succeeded && _isDeleted;
-        }
-
-        private bool ExecuteRestore()
-        {
-            var plan = new ContentMutationPlan(ContentMutationOperationKind.Restore);
-            var steps = new List<ContentMutationStep>(_entries.Length);
-            for (int i = 0; i < _entries.Length; i++)
-            {
-                if (!_entries[i].IsStaged)
-                    continue;
-                var entryIndex = i;
-                var firstPlanEntry = plan.Entries.Count;
-                plan.Entries.Add(new ContentMutationEntry(_entries[i].TrashPath, _entries[i].OriginalPath, ContentMutationPathRole.Main, _entries[i].IsFolder));
-                if (_entries[i].HasMetadataSidecar)
-                    plan.Entries.Add(new ContentMutationEntry(_entries[i].MetadataTrashPath, _entries[i].MetadataOriginalPath, ContentMutationPathRole.MetadataSidecar, false));
-                if (_entries[i].HasSidecarFolder)
-                    plan.Entries.Add(new ContentMutationEntry(_entries[i].SidecarTrashPath, _entries[i].SidecarOriginalPath, ContentMutationPathRole.SceneFragments, true)
-                    {
-                        DestinationParentProducedByTransaction = true,
-                    });
-                var planIndices = Enumerable.Range(firstPlanEntry, plan.Entries.Count - firstPlanEntry).ToArray();
-                steps.Add(new ContentMutationStep(
-                    "restore-" + i,
-                    planIndices,
-                    () => CommitRestoreEntry(entryIndex),
-                    () => RollbackRestoreEntry(entryIndex),
-                    () => !_entries[entryIndex].IsStaged &&
-                          PathExists(_entries[entryIndex].OriginalPath, _entries[entryIndex].IsFolder) &&
-                          !PathExists(_entries[entryIndex].TrashPath, _entries[entryIndex].IsFolder) &&
-                          (!_entries[entryIndex].HasMetadataSidecar || (File.Exists(_entries[entryIndex].MetadataOriginalPath) && !File.Exists(_entries[entryIndex].MetadataTrashPath)))));
-            }
-
-            ContentMutationDiagnostics.Log("mutation.restore.begin", $"transaction={plan.Id:N}; action='{ActionString}'; entries={_entries.Length}");
-            var result = new ContentMutationTransaction(plan).Execute(steps);
-            _requiresRecovery |= result.RequiresRecovery;
-            _isDeleted = AnyEntryStaged();
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.restore.committed" : "mutation.restore.failed", $"transaction={plan.Id:N}; action='{ActionString}'; entries={_entries.Length}; recovery={_requiresRecovery}; failure={result.Failure}");
-            return result.Succeeded && !_isDeleted;
-        }
-
-        private ContentMutationResult CommitStageEntry(int index, ContentItem item)
-        {
-            return StageEntry(item, ref _entries[index])
-                ? ContentMutationResult.Success(_entries[index].OriginalPath, _entries[index].TrashPath)
-                : ContentMutationResult.Fail(ContentMutationFailure.DeleteFailed, _entries[index].OriginalPath, _entries[index].TrashPath, "Failed to stage the Content item for deletion.", _requiresRecovery);
-        }
-
-        private bool RollbackStageEntry(int index)
-        {
-            if (!_entries[index].IsStaged)
-                return PathExists(_entries[index].OriginalPath, _entries[index].IsFolder) && !PathExists(_entries[index].TrashPath, _entries[index].IsFolder);
-            return RestoreEntry(ref _entries[index]);
-        }
-
-        private ContentMutationResult CommitRestoreEntry(int index)
-        {
-            return RestoreEntry(ref _entries[index])
-                ? ContentMutationResult.Success(_entries[index].TrashPath, _entries[index].OriginalPath)
-                : ContentMutationResult.Fail(ContentMutationFailure.VerificationFailure, _entries[index].TrashPath, _entries[index].OriginalPath, "Failed to restore the staged Content item.", _requiresRecovery);
-        }
-
-        private bool RollbackRestoreEntry(int index)
-        {
-            if (_entries[index].IsStaged)
-                return PathExists(_entries[index].TrashPath, _entries[index].IsFolder) && !PathExists(_entries[index].OriginalPath, _entries[index].IsFolder);
-            var item = _editor.ContentDatabase.Find(_entries[index].OriginalPath);
-            return StageEntry(item, ref _entries[index]);
-        }
-
-        private bool PreflightStage()
-        {
             for (int i = 0; i < _entries.Length; i++)
             {
                 var entry = _entries[i];
-                if (entry.IsStaged)
-                    continue;
-                if (!PathExists(entry.OriginalPath, entry.IsFolder))
-                {
-                    Editor.LogWarning("Cannot stage content item because the source is missing: " + entry.OriginalPath);
-                    return false;
-                }
-                if (ContainsReparsePoint(entry.OriginalPath, entry.IsFolder))
-                {
-                    Editor.LogWarning("Cannot stage content item containing a filesystem link or reparse point: " + entry.OriginalPath);
-                    return false;
-                }
-                if (File.Exists(entry.TrashPath) || Directory.Exists(entry.TrashPath))
-                {
-                    Editor.LogWarning("Cannot stage content item because the recovery path already exists: " + entry.TrashPath);
-                    return false;
-                }
+                entry.IsStaged = false;
+                _entries[i] = entry;
+                RefreshParent(entry.OriginalPath, true);
+            }
+            _isDeleted = false;
+            _requiresRecovery = false;
+            return true;
+        }
 
-                entry.HasMetadataSidecar = entry.MetadataOriginalPath != null && File.Exists(entry.MetadataOriginalPath);
-                if (entry.HasMetadataSidecar && (ContainsReparsePoint(entry.MetadataOriginalPath, false) || File.Exists(entry.MetadataTrashPath) || Directory.Exists(entry.MetadataTrashPath)))
+        private bool ExecuteNativeStage(IReadOnlyList<ContentItem> items)
+        {
+            var requests = new AssetTrashEntryRequest[_entries.Length];
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                requests[i] = new AssetTrashEntryRequest
                 {
-                    Editor.LogWarning("Cannot stage asset metadata because its recovery path is unsafe or already exists: " + entry.MetadataOriginalPath);
-                    return false;
-                }
-                entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
-                if (entry.HasSidecarFolder && (ContainsReparsePoint(entry.SidecarOriginalPath, true) || File.Exists(entry.SidecarTrashPath) || Directory.Exists(entry.SidecarTrashPath)))
-                {
-                    Editor.LogWarning("Cannot stage scene fragments because the recovery path is unsafe or already exists: " + entry.SidecarOriginalPath);
-                    return false;
-                }
+                    SourcePath = _entries[i].OriginalPath,
+                    ExpectedAssetGuid = _entries[i].AssetId,
+                    IsFolder = _entries[i].IsFolder,
+                };
+            }
+            if (AssetOperationService.TrashEntries(requests, out var trash) ||
+                trash.Entries == null || trash.Entries.Length != _entries.Length)
+                return false;
+
+            _trashTransactionId = trash.TransactionId;
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                var native = trash.Entries[i];
+                var entry = _entries[i];
+                entry.TrashPath = native.TrashPath;
+                entry.TrashAssetGuid = native.AssetGuid;
+                entry.MetadataOriginalPath = native.OriginalMetaPath;
+                entry.MetadataTrashPath = native.TrashMetaPath;
+                entry.SidecarOriginalPaths = native.Fragments?.Select(x => x.OriginalPath).ToArray();
+                entry.SidecarTrashPaths = native.Fragments?.Select(x => x.TrashPath).ToArray();
+                entry.IsStaged = true;
                 _entries[i] = entry;
             }
+            _isDeleted = true;
+
+            try
+            {
+                for (int i = 0; i < _entries.Length; i++)
+                {
+                    var item = items != null ? items[i] : _editor.ContentDatabase.Find(_entries[i].OriginalPath);
+                    if (item != null)
+                        _editor.ContentDatabase.RemoveFromDatabasePreservingAssets(item);
+                    RefreshParent(_entries[i].OriginalPath, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Editor.LogWarning(ex);
+                if (!TryCreateNativeTrashBatch(out var rollbackTrash) || AssetOperationService.RestoreEntries(rollbackTrash))
+                {
+                    _requiresRecovery = true;
+                }
+                else
+                {
+                    for (int i = 0; i < _entries.Length; i++)
+                    {
+                        var entry = _entries[i];
+                        entry.IsStaged = false;
+                        _entries[i] = entry;
+                        RefreshParent(entry.OriginalPath, true);
+                    }
+                    _isDeleted = false;
+                    _requiresRecovery = false;
+                }
+                return false;
+            }
             return true;
         }
 
-        private bool PreflightRestore()
+        private bool TryCreateNativeTrashBatch(out AssetTrashBatch trash)
         {
+            trash = default;
+            if (_trashTransactionId == Guid.Empty || _entries == null || _entries.Length == 0)
+                return false;
+            var entries = new AssetTrashEntry[_entries.Length];
             for (int i = 0; i < _entries.Length; i++)
             {
                 var entry = _entries[i];
-                if (!entry.IsStaged)
-                    continue;
-                if (!PathExists(entry.TrashPath, entry.IsFolder))
-                {
-                    Editor.LogWarning("Cannot restore staged content item because recovery data is missing: " + entry.TrashPath);
-                    _requiresRecovery = true;
+                var fragmentCount = entry.SidecarOriginalPaths?.Length ?? 0;
+                if ((entry.SidecarTrashPaths?.Length ?? 0) != fragmentCount)
                     return false;
-                }
-                if (PathExists(entry.OriginalPath, entry.IsFolder) || File.Exists(entry.OriginalPath) || Directory.Exists(entry.OriginalPath))
+                var fragments = new AssetTrashFragment[fragmentCount];
+                for (int fragmentIndex = 0; fragmentIndex < fragments.Length; fragmentIndex++)
                 {
-                    Editor.LogWarning("Cannot restore staged content item because the original path already exists: " + entry.OriginalPath);
-                    return false;
+                    fragments[fragmentIndex] = new AssetTrashFragment
+                    {
+                        OriginalPath = entry.SidecarOriginalPaths[fragmentIndex],
+                        TrashPath = entry.SidecarTrashPaths[fragmentIndex],
+                    };
                 }
-                if (entry.HasMetadataSidecar && (!File.Exists(entry.MetadataTrashPath) || File.Exists(entry.MetadataOriginalPath) || Directory.Exists(entry.MetadataOriginalPath)))
+                entries[i] = new AssetTrashEntry
                 {
-                    Editor.LogWarning("Cannot restore staged asset metadata because recovery data is missing or the original path exists: " + entry.MetadataOriginalPath);
-                    return false;
-                }
-                if (entry.HasSidecarFolder && (!Directory.Exists(entry.SidecarTrashPath) || File.Exists(entry.SidecarOriginalPath) || Directory.Exists(entry.SidecarOriginalPath)))
-                {
-                    Editor.LogWarning("Cannot restore staged scene fragments because recovery data is missing or the original path exists: " + entry.SidecarOriginalPath);
-                    return false;
-                }
+                    AssetGuid = entry.TrashAssetGuid,
+                    OriginalPath = entry.OriginalPath,
+                    TrashPath = entry.TrashPath,
+                    OriginalMetaPath = entry.MetadataOriginalPath,
+                    TrashMetaPath = entry.MetadataTrashPath,
+                    Fragments = fragments,
+                    IsFolder = entry.IsFolder,
+                };
             }
-            return true;
-        }
-
-        private bool RestoreEntry(ref Entry entry)
-        {
-            if (!MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath))
-                return false;
-            if (entry.HasMetadataSidecar && !MovePath(entry.MetadataTrashPath, entry.MetadataOriginalPath, false))
+            trash = new AssetTrashBatch
             {
-                if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
-                {
-                    _requiresRecovery = true;
-                    Editor.LogError("Failed to roll back a partial content restore. Recovery data: " + entry.TrashPath);
-                }
-                return false;
-            }
-            if (entry.HasSidecarFolder && !MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true))
-            {
-                if (entry.HasMetadataSidecar && !MovePath(entry.MetadataOriginalPath, entry.MetadataTrashPath, false))
-                    _requiresRecovery = true;
-                if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
-                {
-                    _requiresRecovery = true;
-                    Editor.LogError("Failed to roll back a partial content restore. Recovery data: " + entry.TrashPath);
-                }
-                return false;
-            }
-
-            entry.IsStaged = false;
-            RefreshParent(entry.OriginalPath, true);
+                TransactionId = _trashTransactionId,
+                Entries = entries,
+            };
             return true;
         }
 
@@ -594,16 +458,6 @@ namespace FlaxEditor.Actions
                     return true;
             }
             return false;
-        }
-
-        private bool AreAllEntriesStaged()
-        {
-            for (int i = 0; i < _entries.Length; i++)
-            {
-                if (!_entries[i].IsStaged)
-                    return false;
-            }
-            return true;
         }
 
         private void RefreshParent(string path, bool checkSubDirs = false)
@@ -619,197 +473,6 @@ namespace FlaxEditor.Actions
                 _editor.ContentDatabase.RefreshFolder(parent, checkSubDirs);
             else
                 _editor.ContentDatabase.Rebuild(true);
-        }
-
-        private bool StageEntry(ContentItem item, ref Entry entry)
-        {
-            entry.HasMetadataSidecar = entry.MetadataOriginalPath != null && File.Exists(entry.MetadataOriginalPath);
-            entry.HasSidecarFolder = entry.SidecarOriginalPath != null && Directory.Exists(entry.SidecarOriginalPath);
-            if (!MoveContentPath(ref entry, entry.OriginalPath, entry.TrashPath))
-                return false;
-            if (entry.HasMetadataSidecar && !MovePath(entry.MetadataOriginalPath, entry.MetadataTrashPath, false))
-            {
-                RollbackFailedStage(ref entry);
-                return false;
-            }
-            if (entry.HasSidecarFolder && !MovePath(entry.SidecarOriginalPath, entry.SidecarTrashPath, true))
-            {
-                RollbackFailedStage(ref entry);
-                return false;
-            }
-
-            if (item != null)
-            {
-                try
-                {
-                    _editor.ContentDatabase.RemoveFromDatabasePreservingAssets(item);
-                }
-                catch (Exception ex)
-                {
-                    Editor.LogWarning(ex);
-                    Editor.LogWarning("Cannot remove staged Content item from the database: " + entry.OriginalPath);
-                    RollbackFailedStage(ref entry);
-                    return false;
-                }
-            }
-
-            entry.IsStaged = true;
-            RefreshParent(entry.OriginalPath, true);
-            return true;
-        }
-
-        private void RollbackFailedStage(ref Entry entry)
-        {
-            var rollbackSucceeded = true;
-            if (!PathExists(entry.OriginalPath, entry.IsFolder))
-                rollbackSucceeded &= MoveContentPath(ref entry, entry.TrashPath, entry.OriginalPath);
-            else
-                DeletePath(entry.TrashPath, entry.IsFolder);
-
-            if (entry.HasMetadataSidecar)
-            {
-                if (!File.Exists(entry.MetadataOriginalPath))
-                    rollbackSucceeded &= MovePath(entry.MetadataTrashPath, entry.MetadataOriginalPath, false);
-                else
-                    DeletePath(entry.MetadataTrashPath, false);
-            }
-            if (entry.HasSidecarFolder)
-            {
-                if (!Directory.Exists(entry.SidecarOriginalPath))
-                    rollbackSucceeded &= MovePath(entry.SidecarTrashPath, entry.SidecarOriginalPath, true);
-                else
-                    DeletePath(entry.SidecarTrashPath, true);
-            }
-
-            if (!rollbackSucceeded)
-            {
-                _requiresRecovery = true;
-                Editor.LogError("Failed to roll back content staging. Recovery data was preserved at: " + entry.TrashPath);
-            }
-            entry.IsStaged = !PathExists(entry.OriginalPath, entry.IsFolder) && PathExists(entry.TrashPath, entry.IsFolder);
-            RefreshParent(entry.OriginalPath, true);
-        }
-
-        private static bool CopyPath(string sourcePath, string targetPath, bool isFolder)
-        {
-            for (int retry = 0; retry < FilesystemRetryCount; retry++)
-            {
-                try
-                {
-                    var targetDir = Path.GetDirectoryName(targetPath);
-                    if (!string.IsNullOrEmpty(targetDir))
-                        Directory.CreateDirectory(targetDir);
-
-                    if (isFolder)
-                    {
-                        if (!Directory.Exists(sourcePath))
-                        {
-                            Editor.LogWarning("Cannot stage folder. Source is missing: " + sourcePath);
-                            return false;
-                        }
-                        if (Directory.Exists(targetPath) || File.Exists(targetPath))
-                        {
-                            Editor.LogWarning("Cannot stage folder. Target already exists: " + targetPath);
-                            return false;
-                        }
-                        CopyDirectory(sourcePath, targetPath);
-                    }
-                    else
-                    {
-                        if (!File.Exists(sourcePath))
-                        {
-                            Editor.LogWarning("Cannot stage file. Source is missing: " + sourcePath);
-                            return false;
-                        }
-                        if (File.Exists(targetPath) || Directory.Exists(targetPath))
-                        {
-                            Editor.LogWarning("Cannot stage file. Target already exists: " + targetPath);
-                            return false;
-                        }
-                        File.Copy(sourcePath, targetPath);
-                    }
-                    return true;
-                }
-                catch (IOException ex)
-                {
-                    DeletePath(targetPath, isFolder);
-                    if (retry + 1 == FilesystemRetryCount)
-                    {
-                        Editor.LogWarning(ex);
-                        Editor.LogWarning(string.Format("Cannot stage content item from '{0}' to '{1}'", sourcePath, targetPath));
-                        return false;
-                    }
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    DeletePath(targetPath, isFolder);
-                    if (retry + 1 == FilesystemRetryCount)
-                    {
-                        Editor.LogWarning(ex);
-                        Editor.LogWarning(string.Format("Cannot stage content item from '{0}' to '{1}'", sourcePath, targetPath));
-                        return false;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    DeletePath(targetPath, isFolder);
-                    Editor.LogWarning(ex);
-                    Editor.LogWarning(string.Format("Cannot stage content item from '{0}' to '{1}'", sourcePath, targetPath));
-                    return false;
-                }
-
-                FlaxEngine.Scripting.FlushRemovedObjects();
-                Thread.Sleep(FilesystemRetryDelayMs);
-            }
-
-            return false;
-        }
-
-        private static void CopyDirectory(string sourcePath, string targetPath)
-        {
-            if ((File.GetAttributes(sourcePath) & FileAttributes.ReparsePoint) != 0)
-                throw new IOException("Cannot stage a folder through a filesystem link or reparse point: " + sourcePath);
-            Directory.CreateDirectory(targetPath);
-
-            var files = Directory.GetFiles(sourcePath);
-            for (int i = 0; i < files.Length; i++)
-            {
-                if ((File.GetAttributes(files[i]) & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException("Cannot stage a file through a filesystem link or reparse point: " + files[i]);
-                var targetFile = Path.Combine(targetPath, Path.GetFileName(files[i]));
-                File.Copy(files[i], targetFile);
-            }
-
-            var folders = Directory.GetDirectories(sourcePath);
-            for (int i = 0; i < folders.Length; i++)
-            {
-                if ((File.GetAttributes(folders[i]) & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException("Cannot stage a folder through a filesystem link or reparse point: " + folders[i]);
-                var targetFolder = Path.Combine(targetPath, Path.GetFileName(folders[i]));
-                CopyDirectory(folders[i], targetFolder);
-            }
-        }
-
-        private static bool MoveContentPath(ref Entry entry, string sourcePath, string targetPath)
-        {
-            try
-            {
-                var targetDirectory = Path.GetDirectoryName(targetPath);
-                if (!string.IsNullOrEmpty(targetDirectory))
-                    Directory.CreateDirectory(targetDirectory);
-
-                if (entry.IsFolder)
-                    return !FlaxEngine.Content.RenameAssetFolder(sourcePath, targetPath);
-                if (entry.AssetId != Guid.Empty)
-                    return !FlaxEngine.Content.RenameAsset(sourcePath, targetPath);
-                return MovePath(sourcePath, targetPath, false);
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning(ex);
-                Editor.LogWarning(string.Format("Cannot move staged Content data from '{0}' to '{1}'", sourcePath, targetPath));
-                return false;
-            }
         }
 
         private static void UnloadStagedAssets(string path, bool isFolder)
@@ -830,175 +493,6 @@ namespace FlaxEditor.Actions
             }
             if (unloaded)
                 FlaxEngine.Scripting.FlushRemovedObjects();
-        }
-
-        private static bool MovePath(string sourcePath, string targetPath, bool isFolder)
-        {
-            for (int retry = 0; retry < FilesystemRetryCount; retry++)
-            {
-                try
-                {
-                    var targetDir = Path.GetDirectoryName(targetPath);
-                    if (!string.IsNullOrEmpty(targetDir))
-                        Directory.CreateDirectory(targetDir);
-
-                    if (isFolder)
-                    {
-                        if (!Directory.Exists(sourcePath))
-                        {
-                            Editor.LogWarning("Cannot move folder. Source is missing: " + sourcePath);
-                            return false;
-                        }
-                        if (Directory.Exists(targetPath) || File.Exists(targetPath))
-                        {
-                            Editor.LogWarning("Cannot move folder. Target already exists: " + targetPath);
-                            return false;
-                        }
-                        Directory.Move(sourcePath, targetPath);
-                    }
-                    else
-                    {
-                        if (!File.Exists(sourcePath))
-                        {
-                            Editor.LogWarning("Cannot move file. Source is missing: " + sourcePath);
-                            return false;
-                        }
-                        if (File.Exists(targetPath) || Directory.Exists(targetPath))
-                        {
-                            Editor.LogWarning("Cannot move file. Target already exists: " + targetPath);
-                            return false;
-                        }
-                        File.Move(sourcePath, targetPath);
-                    }
-                    return true;
-                }
-                catch (IOException ex)
-                {
-                    if (retry + 1 == FilesystemRetryCount)
-                    {
-                        Editor.LogWarning(ex);
-                        Editor.LogWarning(string.Format("Cannot move content item from '{0}' to '{1}'", sourcePath, targetPath));
-                        return false;
-                    }
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    if (retry + 1 == FilesystemRetryCount)
-                    {
-                        Editor.LogWarning(ex);
-                        Editor.LogWarning(string.Format("Cannot move content item from '{0}' to '{1}'", sourcePath, targetPath));
-                        return false;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Editor.LogWarning(ex);
-                    Editor.LogWarning(string.Format("Cannot move content item from '{0}' to '{1}'", sourcePath, targetPath));
-                    return false;
-                }
-
-                FlaxEngine.Scripting.FlushRemovedObjects();
-                Thread.Sleep(FilesystemRetryDelayMs);
-            }
-
-            return false;
-        }
-
-        private static bool DeletePath(string path, bool isFolder)
-        {
-            return DeletePathWithRetries(path, isFolder, "staged content item");
-        }
-
-        private static bool DeletePathWithRetries(string path, bool isFolder, string description)
-        {
-            try
-            {
-                for (int retry = 0; retry < FilesystemRetryCount; retry++)
-                {
-                    try
-                    {
-                        if (isFolder)
-                        {
-                            if (!Directory.Exists(path))
-                                return true;
-                            Directory.Delete(path, true);
-                        }
-                        else
-                        {
-                            if (!File.Exists(path))
-                                return true;
-                            File.Delete(path);
-                        }
-                        return true;
-                    }
-                    catch (IOException ex)
-                    {
-                        if (retry + 1 == FilesystemRetryCount)
-                        {
-                            Editor.LogWarning(ex);
-                            Editor.LogWarning("Cannot remove " + description + ": " + path);
-                            return false;
-                        }
-                    }
-                    catch (UnauthorizedAccessException ex)
-                    {
-                        if (retry + 1 == FilesystemRetryCount)
-                        {
-                            Editor.LogWarning(ex);
-                            Editor.LogWarning("Cannot remove " + description + ": " + path);
-                            return false;
-                        }
-                    }
-
-                    FlaxEngine.Scripting.FlushRemovedObjects();
-                    Thread.Sleep(FilesystemRetryDelayMs);
-                }
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning(ex);
-                Editor.LogWarning("Cannot remove " + description + ": " + path);
-                return false;
-            }
-
-            return false;
-        }
-
-        private static bool PathExists(string path, bool isFolder)
-        {
-            return isFolder ? Directory.Exists(path) : File.Exists(path);
-        }
-
-        private static bool ContainsReparsePoint(string path, bool isFolder)
-        {
-            try
-            {
-                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                    return true;
-                if (!isFolder)
-                    return false;
-
-                var pending = new Stack<string>();
-                pending.Push(path);
-                while (pending.Count != 0)
-                {
-                    var folder = pending.Pop();
-                    foreach (var entry in Directory.EnumerateFileSystemEntries(folder))
-                    {
-                        var attributes = File.GetAttributes(entry);
-                        if ((attributes & FileAttributes.ReparsePoint) != 0)
-                            return true;
-                        if ((attributes & FileAttributes.Directory) != 0)
-                            pending.Push(entry);
-                    }
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Editor.LogWarning(ex);
-                return true;
-            }
         }
 
         private static long GetPathSize(string path, bool isFolder)

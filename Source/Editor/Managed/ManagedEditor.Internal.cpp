@@ -326,7 +326,7 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_SaveJsonAsset(MString* outputPathObj, 
     writer.EndObject();
     AssetPipelineDiagnostic diagnostic;
     const StringAnsi text(buffer.GetString(), static_cast<int32>(buffer.GetSize()));
-    if (GraphDocumentCodec::SaveJsonAtomic(outputPath, text, diagnostic))
+    if (GraphDocumentCodec::SaveLocalJsonAtomic(outputPath, text, diagnostic))
     {
         LOG(Error, "Cannot save local JSON configuration '{0}': {1}", outputPath, diagnostic.Message);
         return true;

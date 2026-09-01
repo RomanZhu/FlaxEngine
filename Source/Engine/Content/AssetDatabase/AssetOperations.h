@@ -62,6 +62,48 @@ struct FLAXENGINE_API AssetTrashRecord
     String TrashFragmentsPath;
 };
 
+/// <summary>One exact canonical Content entry selected for recoverable trash staging.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetTrashEntryRequest
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetTrashEntryRequest);
+
+    API_FIELD() String SourcePath;
+    API_FIELD() Guid ExpectedAssetGuid = Guid::Empty;
+    API_FIELD() bool IsFolder = false;
+};
+
+/// <summary>Exact native-owned recovery paths for one staged Content entry.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetTrashFragment
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetTrashFragment);
+
+    API_FIELD() String OriginalPath;
+    API_FIELD() String TrashPath;
+};
+
+/// <summary>Exact native-owned recovery paths for one staged Content entry.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetTrashEntry
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetTrashEntry);
+
+    API_FIELD() Guid AssetGuid = Guid::Empty;
+    API_FIELD() String OriginalPath;
+    API_FIELD() String TrashPath;
+    API_FIELD() String OriginalMetaPath;
+    API_FIELD() String TrashMetaPath;
+    API_FIELD() Array<AssetTrashFragment> Fragments;
+    API_FIELD() bool IsFolder = false;
+};
+
+/// <summary>One all-or-none native trash transaction retained by editor undo history.</summary>
+API_STRUCT() struct FLAXENGINE_API AssetTrashBatch
+{
+    DECLARE_SCRIPTING_TYPE_MINIMAL(AssetTrashBatch);
+
+    API_FIELD() Guid TransactionId = Guid::Empty;
+    API_FIELD() Array<AssetTrashEntry> Entries;
+};
+
 /// <summary>Committed filesystem mutation passed to the database refresh boundary.</summary>
 struct FLAXENGINE_API AssetOperationCommit
 {
@@ -121,6 +163,7 @@ private:
     ConditionVariable _locksChanged;
     HashSet<String> _lockedPaths;
     int32 _editingDepth = 0;
+    int32 _immediateTransactions = 0;
     Array<AssetOperationCommit> _pendingCommits;
     Array<AssetOperationSelfWrite> _selfWrites;
 
@@ -130,6 +173,8 @@ private:
         AssetMeta& meta, AssetPipelineDiagnostic& diagnostic) const;
     bool AcquirePaths(const Array<String>& paths, Array<String>& acquired, AssetPipelineDiagnostic& diagnostic);
     void ReleasePaths(const Array<String>& acquired);
+    bool BeginImmediateTransaction(const StringView& path, AssetPipelineDiagnostic& diagnostic);
+    void EndImmediateTransaction();
     bool PublishCommit(AssetOperationCommit& commit, AssetPipelineDiagnostic& diagnostic);
     bool CreateFromBytes(AssetOperationKind kind, const StringView& destination, const Span<byte>& sourceData,
         const AssetMeta& meta, AssetOperationCommit& commit, AssetPipelineDiagnostic& diagnostic);
@@ -161,9 +206,14 @@ public:
     bool DeleteAsset(const AssetOperationTarget& target, AssetTrashRecord& trash,
         AssetPipelineDiagnostic& diagnostic);
     bool RestoreAsset(const AssetTrashRecord& trash, AssetPipelineDiagnostic& diagnostic);
+    bool TrashEntries(const Array<AssetTrashEntryRequest>& requests, AssetTrashBatch& trash,
+        AssetPipelineDiagnostic& diagnostic);
+    bool RestoreEntries(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic);
+    bool DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic);
 
     bool IsAssetEditing() const;
     void StartAssetEditing();
     bool StopAssetEditing(AssetPipelineDiagnostic& diagnostic);
+    void RegisterSelfWrite(const StringView& path, const ContentHash& content);
     void DrainSelfWrites(Array<AssetOperationSelfWrite>& result);
 };

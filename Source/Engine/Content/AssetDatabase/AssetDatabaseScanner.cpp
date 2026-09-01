@@ -169,7 +169,7 @@ bool AssetDatabaseScanner::Scan(const StringView& projectRoot, const StringView&
     if (Collect(projectRoot, contentRoot, libraryRoot, options, database.GetSnapshot(), records, result))
         return true;
     AssetPipelineDiagnostic publishDiagnostic;
-    if (database.PublishFullSnapshot(records, result.Diagnostics, publishDiagnostic))
+    if (database.PublishFullSnapshot(records, result.Diagnostics, result.FileStates, publishDiagnostic))
     {
         result.Diagnostics.Add(publishDiagnostic);
         return true;

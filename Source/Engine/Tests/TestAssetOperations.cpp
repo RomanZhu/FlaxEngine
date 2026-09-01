@@ -4,6 +4,7 @@
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Utilities/Crc.h"
@@ -216,9 +217,117 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
         CHECK(write.TransactionId.IsValid());
         CHECK_FALSE(write.Content.IsZero());
     }
+    const ContentHash registeredHash = ContentHash::Compute("registered", 10);
+    operations.RegisterSelfWrite(moved, registeredHash);
+    operations.DrainSelfWrites(writes);
+    REQUIRE(writes.Count() == 1);
+    CHECK(FileSystem::AreFilePathsEquivalent(writes[0].Path, moved));
+    CHECK(writes[0].Content == registeredHash);
     Array<AssetPipelineDiagnostic> recoveryDiagnostics;
     CHECK_FALSE(operations.RecoverIncompleteTransactions(recoveryDiagnostics));
     CHECK(recoveryDiagnostics.IsEmpty());
+}
+
+TEST_CASE("Asset operations batch trash restores folders and private scene fragments atomically")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetTrashBatch-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    const String folder = content / TEXT("Maps");
+    const String scene = folder / TEXT("Level.scene");
+    const String note = content / TEXT("Notes.txt");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(folder));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    AssetMeta folderMeta;
+    folderMeta.ID = Guid::New();
+    folderMeta.FolderAsset = true;
+    folderMeta.AssetType = TEXT("FlaxEngine.Folder");
+    folderMeta.SourceKind = AssetSourceKind::Folder;
+    folderMeta.Processor.ID = TEXT("Flax.Folder");
+    folderMeta.Processor.SettingsVersion = 1;
+    folderMeta.Processor.SettingsJson = "{}";
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(folder + TEXT(".meta"), folderMeta, diagnostic));
+    const byte sceneBytes[] = { 1, 2, 3, 4 };
+    REQUIRE_FALSE(File::WriteAllBytes(scene, sceneBytes, ARRAY_COUNT(sceneBytes)));
+    AssetMeta sceneMeta = MakeOperationMeta();
+    sceneMeta.AssetType = TEXT("FlaxEngine.SceneAsset");
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(scene + TEXT(".meta"), sceneMeta, diagnostic));
+    const byte noteBytes[] = { 7, 8, 9 };
+    REQUIRE_FALSE(File::WriteAllBytes(note, noteBytes, ARRAY_COUNT(noteBytes)));
+    const String fragments = SceneFragmentStore::GetScenePath(root, sceneMeta.ID);
+    REQUIRE_FALSE(FileSystem::CreateDirectory(fragments));
+    REQUIRE_FALSE(File::WriteAllBytes(fragments / TEXT("fragment.bin"), sceneBytes, ARRAY_COUNT(sceneBytes)));
+
+    Array<AssetTrashEntryRequest> nested;
+    AssetTrashEntryRequest folderRequest;
+    folderRequest.SourcePath = folder;
+    folderRequest.IsFolder = true;
+    nested.Add(folderRequest);
+    AssetTrashEntryRequest sceneRequest;
+    sceneRequest.SourcePath = scene;
+    sceneRequest.ExpectedAssetGuid = sceneMeta.ID;
+    nested.Add(sceneRequest);
+    AssetTrashBatch rejected;
+    CHECK(operations.TrashEntries(nested, rejected, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::PathCollision);
+    CHECK(FileSystem::DirectoryExists(folder));
+    CHECK(FileSystem::DirectoryExists(fragments));
+
+    Array<AssetTrashEntryRequest> requests;
+    requests.Add(folderRequest);
+    AssetTrashEntryRequest noteRequest;
+    noteRequest.SourcePath = note;
+    requests.Add(noteRequest);
+    AssetTrashBatch trash;
+    REQUIRE_FALSE(operations.TrashEntries(requests, trash, diagnostic));
+    REQUIRE(trash.Entries.Count() == 2);
+    CHECK_FALSE(FileSystem::DirectoryExists(folder));
+    CHECK_FALSE(FileSystem::FileExists(folder + TEXT(".meta")));
+    CHECK_FALSE(FileSystem::FileExists(note));
+    CHECK_FALSE(FileSystem::DirectoryExists(fragments));
+    CHECK(FileSystem::DirectoryExists(trash.Entries[0].TrashPath));
+    REQUIRE(trash.Entries[0].Fragments.Count() == 1);
+    CHECK(FileSystem::DirectoryExists(trash.Entries[0].Fragments[0].TrashPath));
+    const String restoredTrashRoot = library / TEXT("AssetOperations/Trash") /
+        trash.TransactionId.ToString(Guid::FormatType::N);
+    REQUIRE(database.LastCommits.Count() == 2);
+    CHECK(database.LastCommits[0].Kind == AssetOperationKind::Trash);
+
+    REQUIRE_FALSE(operations.RestoreEntries(trash, diagnostic));
+    CHECK(FileSystem::DirectoryExists(folder));
+    CHECK(FileSystem::FileExists(folder + TEXT(".meta")));
+    CHECK(FileSystem::FileExists(note));
+    CHECK(FileSystem::DirectoryExists(fragments));
+    CHECK_FALSE(FileSystem::DirectoryExists(restoredTrashRoot));
+    REQUIRE(database.LastCommits.Count() == 2);
+    CHECK(database.LastCommits[0].Kind == AssetOperationKind::Restore);
+
+    database.FailRefresh = true;
+    AssetTrashBatch failedTrash;
+    CHECK(operations.TrashEntries(requests, failedTrash, diagnostic));
+    CHECK(FileSystem::DirectoryExists(folder));
+    CHECK(FileSystem::FileExists(note));
+    CHECK(FileSystem::DirectoryExists(fragments));
+    database.FailRefresh = false;
+
+    REQUIRE_FALSE(operations.TrashEntries(requests, trash, diagnostic));
+    const String nativeTrashRoot = library / TEXT("AssetOperations/Trash") /
+        trash.TransactionId.ToString(Guid::FormatType::N);
+    REQUIRE(FileSystem::DirectoryExists(nativeTrashRoot));
+    REQUIRE_FALSE(File::WriteAllBytes(note, noteBytes, ARRAY_COUNT(noteBytes)));
+    CHECK(operations.DiscardTrash(trash, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated);
+    CHECK(FileSystem::DirectoryExists(nativeTrashRoot));
+    REQUIRE_FALSE(FileSystem::DeleteFile(note));
+    REQUIRE_FALSE(operations.DiscardTrash(trash, diagnostic));
+    CHECK_FALSE(FileSystem::DirectoryExists(nativeTrashRoot));
 }
 
 TEST_CASE("Asset operations importer settings are revision-bound and atomic")

@@ -114,6 +114,53 @@ TEST_CASE("Asset database publishes coherent indexed immutable snapshots")
     CHECK(snapshot.Records[0].DatabaseRevision == rootRecordRevision);
 }
 
+TEST_CASE("Asset database publishes initial and targeted source file hashes durably")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseSourceHash-") +
+        Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const String sourcePath = content / TEXT("Payload.bin");
+    const byte initialBytes[] = { 1, 3, 5, 7 };
+    REQUIRE_FALSE(File::WriteAllBytes(sourcePath, initialBytes, ARRAY_COUNT(initialBytes)));
+    const Guid sourceId = Guid::New();
+    Array<AssetRecord> records;
+    records.Add(MakeDatabaseRecord(sourceId, sourceId, sourcePath));
+
+    AssetDatabase database;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(database.Open(library, Guid::New(), diagnostic));
+    SourceHashCache hashCache;
+    ContentHash initialHash;
+    SourceHashFileState state;
+    REQUIRE_FALSE(hashCache.HashFile(sourcePath, initialHash, state, diagnostic));
+    Array<SourceHashFileState> states;
+    states.Add(state);
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, states, diagnostic));
+
+    SourceAssetRow source;
+    REQUIRE(database.GetDurableSnapshot().TryGetSource(sourceId, source));
+    CHECK(source.SourceHash == initialHash);
+    CHECK(source.SourceSize == ARRAY_COUNT(initialBytes));
+    CHECK(source.SourceMtimeHint == state.LastWriteTicks);
+
+    const byte updatedBytes[] = { 2, 4, 6, 8, 10, 12 };
+    REQUIRE_FALSE(File::WriteAllBytes(sourcePath, updatedBytes, ARRAY_COUNT(updatedBytes)));
+    ContentHash updatedHash;
+    REQUIRE_FALSE(hashCache.HashFile(sourcePath, updatedHash, state, diagnostic));
+    states[0] = state;
+    REQUIRE_FALSE(database.PublishFullSnapshot(records, states, diagnostic));
+    REQUIRE(database.GetDurableSnapshot().TryGetSource(sourceId, source));
+    CHECK(source.SourceHash == updatedHash);
+    CHECK(source.SourceHash != initialHash);
+    CHECK(source.SourceSize == ARRAY_COUNT(updatedBytes));
+    CHECK(source.SourceMtimeHint == state.LastWriteTicks);
+}
+
 TEST_CASE("Asset database durable republish is a no-op and preserves publications")
 {
     const String root = Globals::TemporaryFolder / (TEXT("AssetDatabaseIncrementalPublish-") + Guid::New().ToString(Guid::FormatType::N));
@@ -442,6 +489,11 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK(FileSystem::AreFilePathsEquivalent(found.SourcePath.Get(), first));
     const uint64 firstRecordRevision = found.DatabaseRevision;
+    SourceAssetRow durableSource;
+    REQUIRE(AssetDatabase::Get().GetDurableSnapshot().TryGetSource(firstId, durableSource));
+    const ContentHash initialSourceHash = ContentHash::Compute("one", 3);
+    CHECK(durableSource.SourceHash == initialSourceHash);
+    CHECK(durableSource.SourceSize == 3);
     CHECK(AssetDatabaseQueryService::GetLastChange().Added.Contains(firstId));
     CHECK(AssetDatabaseQueryService::GetLastChange().Added.Count() == 1);
 
@@ -460,9 +512,14 @@ TEST_CASE("Asset database RefreshSources patches known writes without a full sca
     REQUIRE_FALSE(File::WriteAllText(first, TEXT("overwrite"), Encoding::ANSI));
     const uint64 revisionBeforeOverwrite = AssetDatabase::Get().GetRevision();
     REQUIRE_FALSE(AssetPipelineService::RefreshSources(refresh));
-    CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeOverwrite);
+    CHECK(AssetDatabase::Get().GetRevision() == revisionBeforeOverwrite + 1);
     REQUIRE(AssetDatabase::Get().TryGetRecord(firstId, found));
     CHECK(found.DatabaseRevision == firstRecordRevision);
+    REQUIRE(AssetDatabase::Get().GetDurableSnapshot().TryGetSource(firstId, durableSource));
+    CHECK(durableSource.SourceHash == ContentHash::Compute("overwrite", 9));
+    CHECK(durableSource.SourceHash != initialSourceHash);
+    CHECK(durableSource.SourceSize == 9);
+    CHECK(AssetDatabaseQueryService::GetLastChange().Changed.Contains(firstId));
 
     REQUIRE_FALSE(File::WriteAllText(second, TEXT("two"), Encoding::ANSI));
     REQUIRE_FALSE(AssetMeta::SaveAtomic(second + TEXT(".meta"), MakeDatabaseMeta(secondId), diagnostic));

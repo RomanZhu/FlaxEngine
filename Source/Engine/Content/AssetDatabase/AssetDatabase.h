@@ -7,6 +7,8 @@
 #include "Engine/Core/Delegate.h"
 #include "Engine/Platform/CriticalSection.h"
 
+struct SourceHashFileState;
+
 /// <summary>A coherent set of database changes published at one revision.</summary>
 struct FLAXENGINE_API AssetDatabaseChangeBatch
 {
@@ -61,6 +63,9 @@ private:
     SourceAssetDatabase _sourceDatabase;
 
     bool PublishCache(const Array<AssetRecord>& records, uint64 revision, AssetDatabaseChangeBatch& changes, AssetPipelineDiagnostic& diagnostic);
+    bool PublishFullSnapshotInternal(const Array<AssetRecord>& records,
+        const Array<AssetPipelineDiagnostic>& diagnostics, const Array<SourceHashFileState>* fileStates,
+        AssetPipelineDiagnostic& diagnostic);
     void RebuildCacheFromDurable(AssetDatabaseChangeBatch* changes = nullptr);
 
 public:
@@ -105,6 +110,14 @@ public:
 
     /// <summary>Atomically publishes records and their current diagnostics into durable authority.</summary>
     bool PublishFullSnapshot(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics, AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Atomically publishes records and their current source file hashes into durable authority.</summary>
+    bool PublishFullSnapshot(const Array<AssetRecord>& records, const Array<SourceHashFileState>& fileStates,
+        AssetPipelineDiagnostic& diagnostic);
+
+    /// <summary>Atomically publishes records, diagnostics, and current source file hashes into durable authority.</summary>
+    bool PublishFullSnapshot(const Array<AssetRecord>& records, const Array<AssetPipelineDiagnostic>& diagnostics,
+        const Array<SourceHashFileState>& fileStates, AssetPipelineDiagnostic& diagnostic);
 
     AssetDatabaseReadSnapshot GetDurableSnapshot() const;
     bool ReadChangesAfter(uint64 revision, Array<AssetChangeSet>& result, bool& requiresSnapshot, AssetPipelineDiagnostic& diagnostic) const;

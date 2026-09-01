@@ -3,6 +3,7 @@
 #pragma once
 
 #include "AssetDocument.h"
+#include "SourceSaveTransaction.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Core/Types/DataContainer.h"
 #include "Engine/Core/Types/Span.h"
@@ -101,10 +102,18 @@ public:
     static bool ToCanonicalJson(const GraphDocument& document, StringAnsi& output, AssetPipelineDiagnostic& diagnostic);
 
     /// <summary>Writes canonical JSON through sibling staging, reparse, and atomic replace.</summary>
-    static bool SaveAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr);
+    static bool SaveAtomic(const StringView& path, const StringAnsiView& canonicalText,
+        AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr,
+        SourceSaveConflictPolicy conflictPolicy = SourceSaveConflictPolicy::Strict);
 
     /// <summary>Writes a non-graph canonical JSON document through sibling staging and atomic replace.</summary>
-    static bool SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText, AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr);
+    static bool SaveJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
+        AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr,
+        SourceSaveConflictPolicy conflictPolicy = SourceSaveConflictPolicy::Strict);
+
+    /// <summary>Writes editor-local canonical JSON without consulting project asset registration.</summary>
+    static bool SaveLocalJsonAtomic(const StringView& path, const StringAnsiView& canonicalText,
+        AssetPipelineDiagnostic& diagnostic, ContentHash* previousHash = nullptr);
 
     /// <summary>Creates a deterministic starter document for a supported runtime type.</summary>
     static bool CreateStarter(const StringView& typeName, GraphDocument& document, AssetPipelineDiagnostic& diagnostic);
