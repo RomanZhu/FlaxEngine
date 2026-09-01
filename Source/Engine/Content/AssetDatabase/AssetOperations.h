@@ -101,7 +101,7 @@ API_ENUM() enum class AssetCopyEntryKind : byte
     MetadataSidecar,
 };
 
-/// <summary>One exact source copy in an all-or-none native batch. Directory entries must precede their descendants.</summary>
+/// <summary>One exact source copy in an all-or-none native batch. A selected directory is expanded recursively unless descendants are already flattened.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetCopyEntryRequest
 {
     DECLARE_SCRIPTING_TYPE_MINIMAL(AssetCopyEntryRequest);
@@ -110,6 +110,24 @@ API_STRUCT() struct FLAXENGINE_API AssetCopyEntryRequest
     API_FIELD() String DestinationPath;
     API_FIELD() Guid ExpectedAssetGuid = Guid::Empty;
     API_FIELD() AssetCopyEntryKind Kind = AssetCopyEntryKind::CanonicalAsset;
+};
+
+/// <summary>Bounded native batch controls. Cancellation is sampled during discovery and between entries.</summary>
+struct FLAXENGINE_API AssetOperationBatchOptions
+{
+    int32 MaximumEntries = 4096;
+    const bool* Cancel = nullptr;
+};
+
+/// <summary>Exact native batch progress when preparation or an applied entry fails.</summary>
+struct FLAXENGINE_API AssetOperationBatchResult
+{
+    int32 TotalEntries = 0;
+    int32 CompletedEntries = 0;
+    int32 RolledBackEntries = 0;
+    int32 FailureIndex = -1;
+    String FailurePath;
+    bool Cancelled = false;
 };
 
 /// <summary>Exact native-owned recovery paths for one staged Content entry.</summary>
@@ -242,7 +260,8 @@ public:
     bool CopyAsset(const AssetOperationTarget& target, const StringView& destination, Guid& copiedGuid,
         AssetPipelineDiagnostic& diagnostic);
     bool CopyAssets(const Array<AssetCopyEntryRequest>& requests, Array<Guid>& copiedGuids,
-        AssetPipelineDiagnostic& diagnostic);
+        AssetPipelineDiagnostic& diagnostic, const AssetOperationBatchOptions* options = nullptr,
+        AssetOperationBatchResult* result = nullptr);
     bool WriteImporterSettings(const AssetOperationTarget& target, const AssetImporterSettingsRevision& expected,
         int32 settingsVersion, const StringAnsiView& settingsJson, AssetPipelineDiagnostic& diagnostic,
         AssetMetaWriteFailurePoint failurePoint = AssetMetaWriteFailurePoint::None, bool* wasChanged = nullptr,
@@ -253,7 +272,8 @@ public:
         AssetPipelineDiagnostic& diagnostic);
     bool RestoreAsset(const AssetTrashRecord& trash, AssetPipelineDiagnostic& diagnostic);
     bool TrashEntries(const Array<AssetTrashEntryRequest>& requests, AssetTrashBatch& trash,
-        AssetPipelineDiagnostic& diagnostic);
+        AssetPipelineDiagnostic& diagnostic, const AssetOperationBatchOptions* options = nullptr,
+        AssetOperationBatchResult* result = nullptr);
     bool RestoreEntries(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic);
     bool DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic);
 

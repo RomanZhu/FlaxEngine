@@ -1632,12 +1632,143 @@ bool AssetOperations::CopyAssetInternal(const AssetOperationTarget& target, cons
 }
 
 bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, Array<Guid>& copiedGuids,
-    AssetPipelineDiagnostic& diagnostic)
+    AssetPipelineDiagnostic& diagnostic, const AssetOperationBatchOptions* options,
+    AssetOperationBatchResult* result)
 {
     copiedGuids.Clear();
-    if (requests.IsEmpty() || requests.Count() > MaximumTrashEntries)
+    if (result)
+        *result = AssetOperationBatchResult();
+    const int32 maximumEntries = options ? options->MaximumEntries : MaximumTrashEntries;
+    const auto isCancelled = [options]()
+    {
+        return options && options->Cancel && *options->Cancel;
+    };
+    if (requests.IsEmpty() || maximumEntries <= 0 || maximumEntries > MaximumTrashEntries ||
+        requests.Count() > maximumEntries)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, StringView::Empty,
             TEXT("A native copy batch must contain a bounded non-empty entry set."));
+
+    Array<AssetCopyEntryRequest> expandedRequests(requests);
+    const auto hasEntry = [&expandedRequests](const StringView& source, const StringView& destination)
+    {
+        for (const AssetCopyEntryRequest& entry : expandedRequests)
+        {
+            if (FileSystem::AreFilePathsEquivalent(entry.SourcePath, source) &&
+                FileSystem::AreFilePathsEquivalent(entry.DestinationPath, destination))
+                return true;
+        }
+        return false;
+    };
+    Array<AssetCopyEntryRequest> selectedDirectories;
+    for (int32 i = 0; i < requests.Count(); i++)
+    {
+        if (requests[i].Kind != AssetCopyEntryKind::Directory)
+            continue;
+        bool alreadyFlattened = false;
+        for (int32 j = 0; j < requests.Count(); j++)
+        {
+            if (i != j && AssetPathPolicy::IsSameOrChild(requests[j].SourcePath, requests[i].SourcePath))
+            {
+                alreadyFlattened = true;
+                break;
+            }
+        }
+        if (!alreadyFlattened)
+            selectedDirectories.Add(requests[i]);
+    }
+    for (int32 directoryIndex = 0; directoryIndex < selectedDirectories.Count(); directoryIndex++)
+    {
+        if (isCancelled())
+        {
+            if (result)
+            {
+                result->Cancelled = true;
+                result->TotalEntries = expandedRequests.Count();
+                result->FailureIndex = expandedRequests.Count();
+                result->FailurePath = selectedDirectories[directoryIndex].SourcePath;
+            }
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled,
+                selectedDirectories[directoryIndex].SourcePath, TEXT("Native copy discovery was cancelled."));
+        }
+        const AssetCopyEntryRequest directory = selectedDirectories[directoryIndex];
+        Array<String> files;
+        Array<String> directories;
+        if (FileSystem::DirectoryGetFiles(files, directory.SourcePath, TEXT("*"), DirectorySearchOption::TopDirectoryOnly) ||
+            FileSystem::GetChildDirectories(directories, directory.SourcePath))
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceBusy, directory.SourcePath,
+                TEXT("A selected Content folder could not be enumerated."));
+        if (files.Count() > 1)
+            std::sort(files.Get(), files.Get() + files.Count());
+        if (directories.Count() > 1)
+            std::sort(directories.Get(), directories.Get() + directories.Count());
+
+        const String directoryMeta = directory.SourcePath + TEXT(".meta");
+        const String destinationMeta = directory.DestinationPath + TEXT(".meta");
+        if (FileSystem::FileExists(directoryMeta) && !hasEntry(directoryMeta, destinationMeta))
+        {
+            AssetCopyEntryRequest& metadata = expandedRequests.AddOne();
+            metadata.SourcePath = directoryMeta;
+            metadata.DestinationPath = destinationMeta;
+            metadata.Kind = AssetCopyEntryKind::MetadataSidecar;
+        }
+        for (const String& childDirectory : directories)
+        {
+            AssetCopyEntryRequest child;
+            child.SourcePath = childDirectory;
+            child.DestinationPath = directory.DestinationPath / StringUtils::GetFileName(childDirectory);
+            child.Kind = AssetCopyEntryKind::Directory;
+            if (!hasEntry(child.SourcePath, child.DestinationPath))
+                expandedRequests.Add(child);
+            selectedDirectories.Add(MoveTemp(child));
+        }
+        for (const String& file : files)
+        {
+            if (file.EndsWith(TEXT(".meta"), StringSearchCase::IgnoreCase))
+            {
+                const String owner = file.Left(file.Length() - 5);
+                if (FileSystem::FileExists(owner) || FileSystem::DirectoryExists(owner))
+                    continue;
+            }
+            AssetCopyEntryRequest child;
+            child.SourcePath = file;
+            child.DestinationPath = directory.DestinationPath / StringUtils::GetFileName(file);
+            const String metaPath = file + TEXT(".meta");
+            if (FileSystem::FileExists(metaPath))
+            {
+                AssetMeta meta;
+                if (AssetMeta::Load(metaPath, meta, diagnostic))
+                {
+                    if (result)
+                    {
+                        result->FailureIndex = expandedRequests.Count();
+                        result->FailurePath = file;
+                    }
+                    return true;
+                }
+                child.ExpectedAssetGuid = meta.ID;
+                child.Kind = AssetCopyEntryKind::CanonicalAsset;
+            }
+            else
+            {
+                child.Kind = AssetCopyEntryKind::File;
+            }
+            if (!hasEntry(child.SourcePath, child.DestinationPath))
+                expandedRequests.Add(MoveTemp(child));
+        }
+        if (expandedRequests.Count() > maximumEntries)
+        {
+            if (result)
+            {
+                result->TotalEntries = expandedRequests.Count();
+                result->FailureIndex = maximumEntries;
+                result->FailurePath = directory.SourcePath;
+            }
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::ResourceLimitExceeded, directory.SourcePath,
+                TEXT("Recursive native copy discovery exceeded its bounded entry limit."));
+        }
+    }
+    if (result)
+        result->TotalEntries = expandedRequests.Count();
 
     Array<AssetOperationTarget> targets;
     Array<String> destinations;
@@ -1646,12 +1777,12 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
     Array<uint64> sourceSizes;
     Array<int64> sourceWriteTicks;
     Array<String> reservedDestinations;
-    targets.EnsureCapacity(requests.Count());
-    destinations.EnsureCapacity(requests.Count());
-    plannedGuids.EnsureCapacity(requests.Count());
-    metadataClones.EnsureCapacity(requests.Count());
-    sourceSizes.EnsureCapacity(requests.Count());
-    sourceWriteTicks.EnsureCapacity(requests.Count());
+    targets.EnsureCapacity(expandedRequests.Count());
+    destinations.EnsureCapacity(expandedRequests.Count());
+    plannedGuids.EnsureCapacity(expandedRequests.Count());
+    metadataClones.EnsureCapacity(expandedRequests.Count());
+    sourceSizes.EnsureCapacity(expandedRequests.Count());
+    sourceWriteTicks.EnsureCapacity(expandedRequests.Count());
     BatchOperationJournal journal;
     journal.TransactionId = Guid::New();
     journal.Kind = BatchJournalKind::Copy;
@@ -1667,9 +1798,21 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         reservedDestinations.Add(String(path));
         return false;
     };
-    for (int32 i = 0; i < requests.Count(); i++)
+    for (int32 i = 0; i < expandedRequests.Count(); i++)
     {
-        const AssetCopyEntryRequest& request = requests[i];
+        const AssetCopyEntryRequest& request = expandedRequests[i];
+        if (result)
+        {
+            result->FailureIndex = i;
+            result->FailurePath = request.SourcePath;
+        }
+        if (isCancelled())
+        {
+            if (result)
+                result->Cancelled = true;
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, request.SourcePath,
+                TEXT("Native copy preparation was cancelled."));
+        }
         AssetOperationTarget target;
         target.SourcePath = request.SourcePath;
         target.ExpectedGuid = request.ExpectedAssetGuid;
@@ -1749,7 +1892,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         bool destinationParentExists = FileSystem::DirectoryExists(destinationParent);
         for (int32 j = 0; !destinationParentExists && j < destinations.Count(); j++)
         {
-            destinationParentExists = requests[j].Kind == AssetCopyEntryKind::Directory &&
+            destinationParentExists = expandedRequests[j].Kind == AssetCopyEntryKind::Directory &&
                 FileSystem::AreFilePathsEquivalent(destinations[j], destinationParent);
         }
         if (!destinationParentExists)
@@ -1788,13 +1931,15 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         return true;
 
     Array<AssetOperationCommit> commits;
-    commits.EnsureCapacity(requests.Count());
+    commits.EnsureCapacity(expandedRequests.Count());
     bool publicationAttempted = false;
     const auto failAndRollback = [this, &journal, &transactionDirectory, &diagnostic, &commits,
-        &publicationAttempted](
+        &publicationAttempted, result](
         const AssetPipelineDiagnostic& failure)
     {
         const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (result && !rollbackFailed)
+            result->RolledBackEntries = result->CompletedEntries;
         if (!rollbackFailed)
         {
             if (publicationAttempted && commits.HasItems())
@@ -1820,11 +1965,25 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         return true;
     };
 
-    for (int32 i = 0; i < requests.Count(); i++)
+    for (int32 i = 0; i < expandedRequests.Count(); i++)
     {
+        if (result)
+        {
+            result->FailureIndex = i;
+            result->FailurePath = expandedRequests[i].SourcePath;
+        }
+        if (isCancelled())
+        {
+            if (result)
+                result->Cancelled = true;
+            Fail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, expandedRequests[i].SourcePath,
+                TEXT("Native copy commit was cancelled."));
+            const AssetPipelineDiagnostic failure = diagnostic;
+            return failAndRollback(failure);
+        }
         Guid copiedGuid = Guid::Empty;
         AssetOperationCommit commit;
-        if (requests[i].Kind == AssetCopyEntryKind::CanonicalAsset)
+        if (expandedRequests[i].Kind == AssetCopyEntryKind::CanonicalAsset)
         {
             if (CopyAssetInternal(targets[i], destinations[i], copiedGuid, diagnostic, &commit, plannedGuids[i]) ||
                 copiedGuid != plannedGuids[i])
@@ -1835,7 +1994,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         }
         else
         {
-            const bool isDirectory = requests[i].Kind == AssetCopyEntryKind::Directory;
+            const bool isDirectory = expandedRequests[i].Kind == AssetCopyEntryKind::Directory;
             const String& source = journal.Trash.Entries[i].OriginalPath;
             if ((isDirectory ? !FileSystem::DirectoryExists(source) : !FileSystem::FileExists(source)) ||
                 PathExists(destinations[i]) ||
@@ -1850,7 +2009,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
             bool copyFailed = false;
             if (isDirectory)
                 copyFailed = EnsureDirectory(destinations[i]);
-            else if (requests[i].Kind == AssetCopyEntryKind::MetadataSidecar)
+            else if (expandedRequests[i].Kind == AssetCopyEntryKind::MetadataSidecar)
                 copyFailed = AssetMeta::SaveAtomic(destinations[i], metadataClones[i], diagnostic);
             else
                 copyFailed = FileSystem::CopyFile(destinations[i], source) || FlushFile(destinations[i]) ||
@@ -1875,6 +2034,8 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         for (AssetOperationSelfWrite& write : commit.SelfWrites)
             write.TransactionId = journal.TransactionId;
         commits.Add(MoveTemp(commit));
+        if (result)
+            result->CompletedEntries = i + 1;
     }
 
     journal.Phase = JournalPhase::Applied;
@@ -1902,6 +2063,11 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
     _stateLocker.Unlock();
     copiedGuids = MoveTemp(plannedGuids);
     DurableDeleteDirectory(transactionDirectory);
+    if (result)
+    {
+        result->FailureIndex = -1;
+        result->FailurePath.Clear();
+    }
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -2177,16 +2343,27 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
 }
 
 bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests, AssetTrashBatch& trash,
-    AssetPipelineDiagnostic& diagnostic)
+    AssetPipelineDiagnostic& diagnostic, const AssetOperationBatchOptions* options,
+    AssetOperationBatchResult* result)
 {
     trash = AssetTrashBatch();
-    if (requests.IsEmpty() || requests.Count() > MaximumTrashEntries)
+    if (result)
+        *result = AssetOperationBatchResult();
+    const int32 maximumEntries = options ? options->MaximumEntries : MaximumTrashEntries;
+    const auto isCancelled = [options]()
+    {
+        return options && options->Cancel && *options->Cancel;
+    };
+    if (requests.IsEmpty() || maximumEntries <= 0 || maximumEntries > MaximumTrashEntries ||
+        requests.Count() > maximumEntries)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, StringView::Empty,
             TEXT("A recoverable Content trash batch must contain a bounded non-empty entry set."));
+    if (result)
+        result->TotalEntries = requests.Count();
 
     const Guid transactionId = Guid::New();
     const String trashRoot = _trashRoot / transactionId.ToString(Guid::FormatType::N);
-    const auto prepare = [this, &requests, &transactionId, &trashRoot](AssetTrashBatch& output,
+    const auto prepare = [this, &requests, &transactionId, &trashRoot, &isCancelled, result](AssetTrashBatch& output,
         AssetPipelineDiagnostic& prepareDiagnostic)
     {
         output = AssetTrashBatch();
@@ -2194,6 +2371,18 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
         for (int32 i = 0; i < requests.Count(); i++)
         {
             const AssetTrashEntryRequest& request = requests[i];
+            if (result)
+            {
+                result->FailureIndex = i;
+                result->FailurePath = request.SourcePath;
+            }
+            if (isCancelled())
+            {
+                if (result)
+                    result->Cancelled = true;
+                return Fail(prepareDiagnostic, AssetPipelineDiagnosticCode::BuildCancelled, request.SourcePath,
+                    TEXT("Native trash preparation was cancelled."));
+            }
             AssetPathPolicy::ProjectPath source;
             if (NormalizeSource(request.SourcePath, source, prepareDiagnostic))
                 return true;
@@ -2312,8 +2501,14 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
     AssetTrashBatch prepared;
     if (prepare(prepared, diagnostic))
         return true;
-    for (const AssetTrashEntry& entry : prepared.Entries)
+    for (int32 i = 0; i < prepared.Entries.Count(); i++)
     {
+        const AssetTrashEntry& entry = prepared.Entries[i];
+        if (result)
+        {
+            result->FailureIndex = i;
+            result->FailurePath = entry.OriginalPath;
+        }
         AssetOperationTarget target;
         target.SourcePath = entry.OriginalPath;
         target.ExpectedGuid = entry.AssetGuid;
@@ -2362,11 +2557,38 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
     const String transactionDirectory = _transactionsRoot / transactionId.ToString(Guid::FormatType::N);
     if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
         return true;
-    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    for (int32 i = 0; i < journal.Trash.Entries.Count(); i++)
     {
+        const AssetTrashEntry& entry = journal.Trash.Entries[i];
+        if (result)
+        {
+            result->FailureIndex = i;
+            result->FailurePath = entry.OriginalPath;
+        }
+        if (isCancelled())
+        {
+            const bool rollbackFailed = RollbackBatchJournal(journal);
+            if (!rollbackFailed)
+            {
+                CleanupEmptyTrashRoot(journal);
+                DurableDeleteDirectory(transactionDirectory);
+            }
+            if (result)
+            {
+                result->Cancelled = true;
+                result->RolledBackEntries = rollbackFailed ? 0 : result->CompletedEntries;
+            }
+            Fail(diagnostic, AssetPipelineDiagnosticCode::BuildCancelled, entry.OriginalPath,
+                TEXT("Native trash commit was cancelled."));
+            if (rollbackFailed)
+                diagnostic.Related.Add(transactionDirectory);
+            return true;
+        }
         if (MoveEntry(entry, true))
         {
             const bool rollbackFailed = RollbackBatchJournal(journal);
+            if (result && !rollbackFailed)
+                result->RolledBackEntries = result->CompletedEntries;
             if (!rollbackFailed)
             {
                 CleanupEmptyTrashRoot(journal);
@@ -2381,6 +2603,8 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
                 diagnostic.Related.Add(transactionDirectory);
             return true;
         }
+        if (result)
+            result->CompletedEntries = i + 1;
     }
     journal.Phase = JournalPhase::Applied;
     if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
@@ -2411,6 +2635,8 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
     {
         const AssetPipelineDiagnostic publicationDiagnostic = diagnostic;
         const bool rollbackFailed = RollbackBatchJournal(journal);
+        if (result && !rollbackFailed)
+            result->RolledBackEntries = result->CompletedEntries;
         if (!rollbackFailed)
         {
             Array<AssetOperationCommit> rollbackCommits;
@@ -2439,6 +2665,8 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
     {
         const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
         bool rollbackFailed = RollbackBatchJournal(journal);
+        if (result && !rollbackFailed)
+            result->RolledBackEntries = result->CompletedEntries;
         if (!rollbackFailed)
         {
             Array<AssetOperationCommit> rollbackCommits;
@@ -2468,6 +2696,11 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
     // A committed journal makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
     DurableDeleteDirectory(transactionDirectory);
     trash = MoveTemp(prepared);
+    if (result)
+    {
+        result->FailureIndex = -1;
+        result->FailurePath.Clear();
+    }
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

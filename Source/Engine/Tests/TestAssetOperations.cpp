@@ -528,6 +528,120 @@ TEST_CASE("Asset operations atomically copy mixed flattened Content batches")
     CHECK(database.LastCommits[3].SelfWrites.Count() == 1);
 }
 
+TEST_CASE("Asset operations recursively expand bounded mixed Content selections")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetRecursiveCopyBatch-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    const String sourceFolder = content / TEXT("Selected");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(sourceFolder));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    AssetMeta folderMeta = MakeOperationMeta();
+    folderMeta.FolderAsset = true;
+    folderMeta.SourceKind = AssetSourceKind::Folder;
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(sourceFolder + TEXT(".meta"), folderMeta, diagnostic));
+    const byte bytes[] = { 3, 1, 4 };
+    const String nestedAsset = sourceFolder / TEXT("Nested.bin");
+    const AssetMeta nestedMeta = MakeOperationMeta();
+    REQUIRE_FALSE(File::WriteAllBytes(nestedAsset, bytes, ARRAY_COUNT(bytes)));
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(nestedAsset + TEXT(".meta"), nestedMeta, diagnostic));
+    const String note = sourceFolder / TEXT("Note.txt");
+    REQUIRE_FALSE(File::WriteAllBytes(note, bytes, ARRAY_COUNT(bytes)));
+    const String standalone = content / TEXT("Standalone.bin");
+    const AssetMeta standaloneMeta = MakeOperationMeta();
+    REQUIRE_FALSE(File::WriteAllBytes(standalone, bytes, ARRAY_COUNT(bytes)));
+    REQUIRE_FALSE(AssetMeta::SaveAtomic(standalone + TEXT(".meta"), standaloneMeta, diagnostic));
+
+    const String destinationFolder = content / TEXT("Selected Copy");
+    Array<AssetCopyEntryRequest> requests;
+    AssetCopyEntryRequest& folder = requests.AddOne();
+    folder.SourcePath = sourceFolder;
+    folder.DestinationPath = destinationFolder;
+    folder.Kind = AssetCopyEntryKind::Directory;
+    AssetCopyEntryRequest& asset = requests.AddOne();
+    asset.SourcePath = standalone;
+    asset.DestinationPath = content / TEXT("Standalone Copy.bin");
+    asset.ExpectedAssetGuid = standaloneMeta.ID;
+    AssetOperationBatchOptions options;
+    options.MaximumEntries = 16;
+    AssetOperationBatchResult result;
+    Array<Guid> copiedGuids;
+
+    REQUIRE_FALSE(operations.CopyAssets(requests, copiedGuids, diagnostic, &options, &result));
+    CHECK(result.TotalEntries == 5);
+    CHECK(result.CompletedEntries == 5);
+    CHECK(result.RolledBackEntries == 0);
+    CHECK(result.FailureIndex == -1);
+    CHECK_FALSE(result.Cancelled);
+    CHECK(FileSystem::DirectoryExists(destinationFolder));
+    CHECK(FileSystem::FileExists(destinationFolder + TEXT(".meta")));
+    CHECK(FileSystem::FileExists(destinationFolder / TEXT("Nested.bin")));
+    CHECK(FileSystem::FileExists(destinationFolder / TEXT("Nested.bin.meta")));
+    CHECK(FileSystem::FileExists(destinationFolder / TEXT("Note.txt")));
+    CHECK(FileSystem::FileExists(asset.DestinationPath));
+    AssetMeta copiedFolderMeta;
+    REQUIRE_FALSE(AssetMeta::Load(destinationFolder + TEXT(".meta"), copiedFolderMeta, diagnostic));
+    CHECK(copiedFolderMeta.ID != folderMeta.ID);
+    AssetMeta copiedNestedMeta;
+    REQUIRE_FALSE(AssetMeta::Load(destinationFolder / TEXT("Nested.bin.meta"), copiedNestedMeta, diagnostic));
+    CHECK(copiedNestedMeta.ID != nestedMeta.ID);
+}
+
+TEST_CASE("Asset operations report recursive selection limits and cancellation")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("AssetRecursiveCopyLimits-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    const String sourceFolder = content / TEXT("Selected");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(sourceFolder));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    const byte bytes[] = { 2, 7 };
+    REQUIRE_FALSE(File::WriteAllBytes(sourceFolder / TEXT("First.txt"), bytes, ARRAY_COUNT(bytes)));
+    REQUIRE_FALSE(File::WriteAllBytes(sourceFolder / TEXT("Second.txt"), bytes, ARRAY_COUNT(bytes)));
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    Array<AssetCopyEntryRequest> requests;
+    AssetCopyEntryRequest& folder = requests.AddOne();
+    folder.SourcePath = sourceFolder;
+    folder.DestinationPath = content / TEXT("Selected Copy");
+    folder.Kind = AssetCopyEntryKind::Directory;
+    Array<Guid> copiedGuids;
+    AssetOperationBatchOptions options;
+    options.MaximumEntries = 2;
+    AssetOperationBatchResult result;
+    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic, &options, &result));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ResourceLimitExceeded);
+    CHECK(result.CompletedEntries == 0);
+    CHECK_FALSE(FileSystem::DirectoryExists(folder.DestinationPath));
+
+    bool cancel = true;
+    options.MaximumEntries = 16;
+    options.Cancel = &cancel;
+    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic, &options, &result));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::BuildCancelled);
+    CHECK(result.Cancelled);
+    CHECK(result.CompletedEntries == 0);
+    CHECK_FALSE(FileSystem::DirectoryExists(folder.DestinationPath));
+
+    cancel = false;
+    REQUIRE_FALSE(FileSystem::CreateDirectory(folder.DestinationPath));
+    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic, &options, &result));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::PathCollision);
+    CHECK(result.FailureIndex == 0);
+    CHECK(FileSystem::AreFilePathsEquivalent(result.FailurePath, sourceFolder));
+    CHECK(result.CompletedEntries == 0);
+}
+
 TEST_CASE("Asset operations roll back mixed flattened copy failures")
 {
     const String root = Globals::TemporaryFolder / (TEXT("AssetMixedCopyRollback-") + Guid::New().ToString(Guid::FormatType::N));
@@ -568,9 +682,15 @@ TEST_CASE("Asset operations roll back mixed flattened copy failures")
     asset.DestinationPath = content / TEXT("Asset Copy.bin");
     asset.ExpectedAssetGuid = assetMeta.ID;
     Array<Guid> copiedGuids;
+    AssetOperationBatchResult result;
 
-    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic));
+    CHECK(operations.CopyAssets(requests, copiedGuids, diagnostic, nullptr, &result));
     CHECK(copiedGuids.IsEmpty());
+    CHECK(result.TotalEntries == 3);
+    CHECK(result.CompletedEntries == 2);
+    CHECK(result.RolledBackEntries == 2);
+    CHECK(result.FailureIndex == 2);
+    CHECK(FileSystem::AreFilePathsEquivalent(result.FailurePath, assetSource));
     CHECK_FALSE(FileSystem::DirectoryExists(destinationFolder));
     CHECK_FALSE(FileSystem::FileExists(note.DestinationPath));
     CHECK_FALSE(FileSystem::FileExists(asset.DestinationPath));
@@ -1068,7 +1188,21 @@ TEST_CASE("Asset operations batch trash restores folders and private scene fragm
     noteRequest.SourcePath = note;
     requests.Add(noteRequest);
     AssetTrashBatch trash;
-    REQUIRE_FALSE(operations.TrashEntries(requests, trash, diagnostic));
+    bool cancelTrash = true;
+    AssetOperationBatchOptions trashOptions;
+    trashOptions.Cancel = &cancelTrash;
+    AssetOperationBatchResult trashResult;
+    CHECK(operations.TrashEntries(requests, trash, diagnostic, &trashOptions, &trashResult));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::BuildCancelled);
+    CHECK(trashResult.Cancelled);
+    CHECK(trashResult.CompletedEntries == 0);
+    CHECK(FileSystem::DirectoryExists(folder));
+    CHECK(FileSystem::FileExists(note));
+    cancelTrash = false;
+    REQUIRE_FALSE(operations.TrashEntries(requests, trash, diagnostic, &trashOptions, &trashResult));
+    CHECK(trashResult.TotalEntries == 2);
+    CHECK(trashResult.CompletedEntries == 2);
+    CHECK(trashResult.FailureIndex == -1);
     REQUIRE(trash.Entries.Count() == 2);
     CHECK_FALSE(FileSystem::DirectoryExists(folder));
     CHECK_FALSE(FileSystem::FileExists(folder + TEXT(".meta")));
