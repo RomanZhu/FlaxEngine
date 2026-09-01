@@ -339,7 +339,7 @@ namespace FlaxEditor
                 }
                 if (status != "ReadyExact")
                     return;
-                var material = FlaxEngine.Content.LoadRuntimeObjectAsync<Material>(_sourceId);
+                var material = FlaxEngine.Content.LoadAssetAsync<Material>(_sourceId);
                 if (material == null || material.WaitForLoaded())
                 {
                     _result = CliCommandResult.Failure("FLX-ASSET-MODEL-EXTRACT-0004", "The exact model-owned material could not be loaded.");
@@ -374,7 +374,7 @@ namespace FlaxEditor
                 var directItem = Editor.Instance.ContentDatabase.FindAsset(requestedId);
                 if (directItem == null || directItem.ID != requestedId)
                 {
-                    var direct = FlaxEngine.Content.LoadRuntimeObjectAsync<Asset>(requestedId);
+                    var direct = FlaxEngine.Content.LoadAssetAsync<Asset>(requestedId);
                     if (direct == null || direct.WaitForLoaded())
                         throw new InvalidOperationException($"Asset '{requestedId}' failed to load.");
                     return DescribeLoaded(requestedId, requestedInfo.Path, direct, false);

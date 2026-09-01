@@ -664,7 +664,7 @@ DEFINE_INTERNAL_CALL(void) EditorInternal_DeserializeSceneObject(SceneObject* sc
 
 DEFINE_INTERNAL_CALL(void) EditorInternal_LoadAsset(Guid* id)
 {
-    Content::LoadRuntimeObjectAsync<Asset>(*id);
+    Content::LoadAssetAsync<Asset>(*id);
 }
 
 DEFINE_INTERNAL_CALL(bool) EditorInternal_CanSetToRoot(Prefab* prefab, Actor* targetActor)
@@ -684,7 +684,7 @@ DEFINE_INTERNAL_CALL(bool) EditorInternal_CanSetToRoot(Prefab* prefab, Actor* ta
             prefabObjectFileId != newRootData.MemberEnd() && prefabObjectFileId->value.IsInt64())
         {
             const Guid prefabObjectID = SceneObject::MakeRuntimeObjectId(prefabId, prefabObjectFileId->value.GetInt64(), GlobalObjectKind::PrefabObject);
-            const auto nestedPrefab = Content::LoadRuntimeObject<Prefab>(prefabId);
+            const auto nestedPrefab = Content::LoadAsset<Prefab>(prefabId);
             if (nestedPrefab && nestedPrefab->GetRootObjectId() != prefabObjectID)
                 return false;
         }
@@ -816,7 +816,7 @@ bool ManagedEditor::CreateAsset(const String& tag, String outputPath)
 Array<Guid> ManagedEditor::GetAssetReferences(const Guid& assetId)
 {
     Array<Guid> result;
-    if (auto* asset = Content::LoadRuntimeObject<Asset>(assetId))
+    if (auto* asset = Content::LoadAsset<Asset>(assetId))
     {
         Array<String> files;
         asset->GetReferences(result, files);

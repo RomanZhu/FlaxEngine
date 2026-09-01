@@ -74,7 +74,7 @@ namespace FlaxEditor.GUI.Timeline.Tracks
         {
             var e = (PostProcessMaterialTrack)track;
             Guid id = stream.ReadGuid();
-            e.Asset = FlaxEngine.Content.LoadRuntimeObjectAsync<MaterialBase>(id);
+            e.Asset = FlaxEngine.Content.LoadAssetAsync<MaterialBase>(id);
             if (version <= 3)
             {
                 // [Deprecated on 03.09.2021 expires on 03.09.2023]

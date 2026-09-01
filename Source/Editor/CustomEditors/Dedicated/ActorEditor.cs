@@ -39,7 +39,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
             {
                 // TODO: consider editing more than one instance of the same prefab asset at once
 
-                var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(actor.PrefabID);
+                var prefab = FlaxEngine.Content.LoadAsset<Prefab>(actor.PrefabID);
                 if (prefab)
                 {
                     var prefabObjectId = actor.PrefabObjectID;
@@ -54,7 +54,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     if (inspectedPrefab)
                     {
                         inspectedPrefab.GetNestedObject(ref prefabObjectId, out var sourcePrefabId, out referenceObjectId);
-                        sourcePrefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(sourcePrefabId);
+                        sourcePrefab = FlaxEngine.Content.LoadAsset<Prefab>(sourcePrefabId);
                         prefabInstance = sourcePrefab ? sourcePrefab.GetDefaultInstance(ref referenceObjectId) as Actor : null;
                     }
                     else
@@ -62,7 +62,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                         referenceObjectId = prefabObjectId;
                         prefabInstance = prefab.GetDefaultInstance(ref referenceObjectId) as Actor;
                         prefab.GetNestedObject(ref prefabObjectId, out var nestedPrefabId, out var nestedPrefabObjectId);
-                        var nestedPrefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(nestedPrefabId);
+                        var nestedPrefab = FlaxEngine.Content.LoadAsset<Prefab>(nestedPrefabId);
                         sourcePrefab = nestedPrefab ? nestedPrefab : prefab;
                     }
 
@@ -674,7 +674,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
 
                 if (prefabId == Guid.Empty || !visited.Add(prefabId))
                     break;
-                var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId);
+                var prefab = FlaxEngine.Content.LoadAsset<Prefab>(prefabId);
                 var currentObjectId = prefabObjectId;
                 if (!prefab || prefab.WaitForLoaded() || !prefab.GetNestedObject(ref currentObjectId, out prefabId, out prefabObjectId))
                     break;

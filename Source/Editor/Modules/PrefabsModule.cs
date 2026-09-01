@@ -242,7 +242,7 @@ namespace FlaxEditor.Modules
                 return;
 
             var prefabId = ((ActorNode)selection[0]).Actor.PrefabID;
-            var prefab = FlaxEngine.Content.LoadRuntimeObjectAsync<Prefab>(prefabId);
+            var prefab = FlaxEngine.Content.LoadAssetAsync<Prefab>(prefabId);
             Editor.Windows.ContentWin.ClearItemsSearch();
             Editor.Windows.ContentWin.Select(prefab);
         }
@@ -262,7 +262,7 @@ namespace FlaxEditor.Modules
             if (!instance.HasPrefabLink || instance.PrefabID == Guid.Empty)
                 throw new ArgumentException("The modified actor instance has missing prefab link.");
 
-            var prefab = FlaxEngine.Content.LoadRuntimeObjectAsync<Prefab>(instance.PrefabID);
+            var prefab = FlaxEngine.Content.LoadAssetAsync<Prefab>(instance.PrefabID);
             if (prefab == null)
                 throw new ArgumentException("Missing prefab to apply.");
             PrefabApplying?.Invoke(prefab, instance);
@@ -324,7 +324,7 @@ namespace FlaxEditor.Modules
             if (addedObject.HasPrefabLink)
                 throw new ArgumentException("The prefab object is already linked to a prefab.");
 
-            var prefab = FlaxEngine.Content.LoadRuntimeObjectAsync<Prefab>(instanceRoot.PrefabID);
+            var prefab = FlaxEngine.Content.LoadAssetAsync<Prefab>(instanceRoot.PrefabID);
             if (prefab == null)
                 throw new ArgumentException("Missing prefab to apply.");
             PrefabApplying?.Invoke(prefab, instanceRoot);

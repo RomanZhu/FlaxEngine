@@ -162,7 +162,7 @@ namespace FlaxEditor.Surface
                         {
                             if (node.Values != null && node.Values.Length > 0 && node.Values[0] is Guid layerId)
                             {
-                                var layer = FlaxEngine.Content.LoadRuntimeObject<MaterialBase>(layerId);
+                                var layer = FlaxEngine.Content.LoadAsset<MaterialBase>(layerId);
                                 if (layer)
                                 {
                                     FindGraphParameters(layer, surfaceParameters);

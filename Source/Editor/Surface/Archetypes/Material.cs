@@ -255,7 +255,7 @@ namespace FlaxEditor.Surface.Archetypes
             {
                 types = null;
                 names = null;
-                var function = FlaxEngine.Content.LoadRuntimeObject<MaterialFunction>(id);
+                var function = FlaxEngine.Content.LoadAsset<MaterialFunction>(id);
                 if (function)
                     function.GetSignature(out types, out names);
                 return function;

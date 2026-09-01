@@ -161,8 +161,8 @@ namespace FlaxEditor.Windows
                 {
                     result[i] = new RetargetSetupProperties
                     {
-                        SourceAsset = FlaxEngine.Content.LoadRuntimeObjectAsync(source[i].SourceAsset),
-                        Skeleton = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(source[i].SkeletonAsset),
+                        SourceAsset = FlaxEngine.Content.LoadAssetAsync(source[i].SourceAsset),
+                        Skeleton = FlaxEngine.Content.LoadAssetAsync<SkinnedModel>(source[i].SkeletonAsset),
                         NodesMapping = source[i].NodesMapping != null
                             ? new Dictionary<string, string>(source[i].NodesMapping)
                             : new Dictionary<string, string>(),

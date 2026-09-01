@@ -243,12 +243,12 @@ namespace FlaxEditor.Windows.Assets
                         var retargetSetups = proxy.Asset.SkeletonRetargets;
                         foreach (var retargetSetup in retargetSetups)
                         {
-                            var sourceAsset = FlaxEngine.Content.LoadRuntimeObjectAsync(retargetSetup.SourceAsset);
+                            var sourceAsset = FlaxEngine.Content.LoadAssetAsync(retargetSetup.SourceAsset);
                             if (sourceAsset)
                             {
                                 proxy.Setups.Add(sourceAsset, new SetupProxy
                                 {
-                                    Skeleton = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(retargetSetup.SkeletonAsset),
+                                    Skeleton = FlaxEngine.Content.LoadAssetAsync<SkinnedModel>(retargetSetup.SkeletonAsset),
                                     NodesMapping = retargetSetup.NodesMapping,
                                 });
                             }

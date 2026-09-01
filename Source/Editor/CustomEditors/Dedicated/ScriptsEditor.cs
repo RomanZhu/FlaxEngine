@@ -810,7 +810,7 @@ namespace FlaxEditor.CustomEditors.Dedicated
                     var visited = new HashSet<Guid>();
                     while (prefabId != Guid.Empty && prefabObjectId != Guid.Empty && visited.Add(prefabId))
                     {
-                        var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId);
+                        var prefab = FlaxEngine.Content.LoadAsset<Prefab>(prefabId);
                         var currentObjectId = prefabObjectId;
                         if (!prefab || prefab.WaitForLoaded() || !prefab.GetNestedObject(ref currentObjectId, out var parentPrefabId, out var parentObjectId))
                             break;

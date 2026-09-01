@@ -169,7 +169,7 @@ namespace FlaxEditor.GUI.Timeline.Tracks
         {
             var e = (AudioTrack)track;
             Guid id = stream.ReadGuid();
-            e.Asset = FlaxEngine.Content.LoadRuntimeObjectAsync<AudioClip>(id);
+            e.Asset = FlaxEngine.Content.LoadAssetAsync<AudioClip>(id);
             if (version <= 3)
             {
                 // [Deprecated on 03.09.2021 expires on 03.09.2023]

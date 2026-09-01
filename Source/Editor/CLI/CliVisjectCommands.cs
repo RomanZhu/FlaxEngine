@@ -56,7 +56,7 @@ namespace FlaxEditor
         [CliCommand("visject.animation.base-model.set", Description = "Set the base model reference stored by an animation graph.", Access = CliCommandAccess.MutatesProject)]
         public static object SetAnimationBaseModel([CliOption("asset", Required = true)] string asset, [CliOption("model", Required = true)] Guid model)
         {
-            var baseModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(model);
+            var baseModel = FlaxEngine.Content.LoadAssetAsync<SkinnedModel>(model);
             if (baseModel == null || baseModel.WaitForLoaded())
                 throw new InvalidOperationException($"Skinned model '{model}' failed to load.");
             using var state = Open(asset, "animation", writable: true);

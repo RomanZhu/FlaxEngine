@@ -36,7 +36,7 @@ public class ModelPrefabEditor : GenericEditor
                 break;
             }
 
-            var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(_prefabId);
+            var prefab = FlaxEngine.Content.LoadAsset<Prefab>(_prefabId);
             if (prefab)
             {
                 var prefabObjectId = modelPrefab.PrefabObjectID;
@@ -64,7 +64,7 @@ public class ModelPrefabEditor : GenericEditor
 
     private void OnReimport()
     {
-        var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(_prefabId);
+        var prefab = FlaxEngine.Content.LoadAsset<Prefab>(_prefabId);
         var modelPrefab = (ModelPrefab)Values[0];
         var importPath = modelPrefab.ImportPath;
         var editor = Editor.Instance;

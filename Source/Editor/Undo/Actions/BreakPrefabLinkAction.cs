@@ -35,7 +35,7 @@ namespace FlaxEditor.Actions
                     // Check if this object comes from another nested prefab (to break link only from the top-level prefab)
                     Item nested;
                     nested.ID = ID;
-                    var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(PrefabID);
+                    var prefab = FlaxEngine.Content.LoadAsset<Prefab>(PrefabID);
                     if (prefab != null && 
                         prefab.GetNestedObject(ref PrefabObjectID, out nested.PrefabID, out nested.PrefabObjectID) && 
                         nested.PrefabID != Guid.Empty && 

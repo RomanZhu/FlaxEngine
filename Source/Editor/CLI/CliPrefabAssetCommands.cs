@@ -288,7 +288,7 @@ namespace FlaxEditor
             object verification = null;
             if (verifyReload)
             {
-                var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId) ?? throw new InvalidOperationException("The saved Prefab could not be reloaded.");
+                var asset = FlaxEngine.Content.LoadAsset<Prefab>(prefabId) ?? throw new InvalidOperationException("The saved Prefab could not be reloaded.");
                 asset.Reload();
                 if (asset.WaitForLoaded())
                     throw new InvalidOperationException("The saved Prefab failed reload verification.");
@@ -575,7 +575,7 @@ namespace FlaxEditor
                 else
                     id = info.ID;
             }
-            var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(id) ?? throw new KeyNotFoundException($"Prefab asset '{reference}' was not found.");
+            var asset = FlaxEngine.Content.LoadAsset<Prefab>(id) ?? throw new KeyNotFoundException($"Prefab asset '{reference}' was not found.");
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Prefab asset '{reference}' failed to load.");
             return asset;
@@ -719,7 +719,7 @@ namespace FlaxEditor
                 JsonAsset asset;
                 if (Guid.TryParse(reference, out var id))
                 {
-                    asset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(id);
+                    asset = FlaxEngine.Content.LoadAssetAsync<JsonAsset>(id);
                 }
                 else
                 {
@@ -727,7 +727,7 @@ namespace FlaxEditor
                     if (Editor.Instance.ContentDatabase.Find(path) is AssetItem item) id = item.ID;
                     else if (FlaxEngine.Content.GetAssetInfo(path, out var info) && info.ID != Guid.Empty) id = info.ID;
                     else throw new KeyNotFoundException($"Asset reference '{reference}' was not found in the Content database.");
-                    asset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(id);
+                    asset = FlaxEngine.Content.LoadAssetAsync<JsonAsset>(id);
                 }
                 if (!asset || asset.WaitForLoaded()) throw new InvalidOperationException($"Json asset reference '{reference}' failed to load.");
                 var result = Activator.CreateInstance(type);
@@ -741,7 +741,7 @@ namespace FlaxEditor
                 var reference = value.Value<string>();
                 if (Guid.TryParse(reference, out var id))
                 {
-                    var result = typeof(Asset).IsAssignableFrom(type) ? FlaxEngine.Content.LoadRuntimeObjectAsync(id, type) : Object.Find(ref id, type, true);
+                    var result = typeof(Asset).IsAssignableFrom(type) ? FlaxEngine.Content.LoadAssetAsync(id, type) : Object.Find(ref id, type, true);
                     if (result != null) return result;
                 }
                 if (typeof(Asset).IsAssignableFrom(type)) return ResolveAssetObject(reference, type);
@@ -775,7 +775,7 @@ namespace FlaxEditor
                     throw new KeyNotFoundException($"Asset reference '{reference}' was not found.");
                 else id = info.ID;
             }
-            var result = FlaxEngine.Content.LoadRuntimeObjectAsync(id, type);
+            var result = FlaxEngine.Content.LoadAssetAsync(id, type);
             if (result is not Asset asset || asset.WaitForLoaded())
                 throw new InvalidOperationException($"Asset reference '{reference}' failed to load as '{type.FullName}'.");
             return result;

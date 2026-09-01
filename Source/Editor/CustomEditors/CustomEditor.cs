@@ -672,7 +672,7 @@ namespace FlaxEditor.CustomEditors
             var visited = new HashSet<Guid>();
             while (prefabId != Guid.Empty && objectId != Guid.Empty && visited.Add(prefabId))
             {
-                var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId);
+                var prefab = FlaxEngine.Content.LoadAsset<Prefab>(prefabId);
                 if (!prefab || prefab.WaitForLoaded())
                     break;
 
@@ -958,7 +958,7 @@ namespace FlaxEditor.CustomEditors
             var visited = new HashSet<Guid>();
             while (prefabId != targetPrefabId && prefabId != Guid.Empty && objectId != Guid.Empty && visited.Add(prefabId))
             {
-                var prefab = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId);
+                var prefab = FlaxEngine.Content.LoadAsset<Prefab>(prefabId);
                 if (!prefab || prefab.WaitForLoaded())
                     break;
                 var currentObjectId = objectId;

@@ -44,7 +44,7 @@ namespace FlaxEditor.Windows
                     Parent = this,
                 };
                 // TODO: display some asset info like disk size, memory usage, etc.
-                var asset = FlaxEngine.Content.LoadRuntimeObjectAsync<Asset>(AssetId);
+                var asset = FlaxEngine.Content.LoadAssetAsync<Asset>(AssetId);
                 if (asset != null)
                 {
                     var path = asset.Path;
@@ -261,7 +261,7 @@ namespace FlaxEditor.Windows
             }
             var asset = obj as Asset;
             if (!asset)
-                asset = FlaxEngine.Content.LoadRuntimeObjectAsync<Asset>(assetId);
+                asset = FlaxEngine.Content.LoadAssetAsync<Asset>(assetId);
             if (CheckSkipAsset(asset))
                 return;
             while (asset && !asset.IsLoaded && !asset.LastLoadFailed)
@@ -325,7 +325,7 @@ namespace FlaxEditor.Windows
                 var obj = FlaxEngine.Object.TryFind<FlaxEngine.Object>(ref assetRef);
                 if (!(obj is Asset) && !(obj is Scene))
                 {
-                    var asset = FlaxEngine.Content.LoadRuntimeObjectAsync<Asset>(assetRef);
+                    var asset = FlaxEngine.Content.LoadAssetAsync<Asset>(assetRef);
                     if (CheckSkipAsset(asset))
                         continue;
                 }

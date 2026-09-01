@@ -1442,7 +1442,7 @@ bool CookAssetsStep::Perform(CookingData& data)
         }
 
         // Load asset (and keep ref)
-        assetRef = isBuiltin ? Content::LoadRuntimeObjectAsync<Asset>(assetId) : Content::LoadAssetAsync<Asset>(assetId);
+        assetRef = Content::LoadAssetAsync<Asset>(assetId);
         if (assetRef == nullptr)
         {
             LOG(Error, "Failed to load asset {} included in build", assetId);

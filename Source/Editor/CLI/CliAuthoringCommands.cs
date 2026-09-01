@@ -1577,7 +1577,7 @@ namespace FlaxEditor
         public static object CreatePrefabVariant([CliOption("prefab", Required = true)] string prefab, [CliOption("path", Required = true)] string path)
         {
             var prefabId = ResolveAssetId(prefab, ".prefab");
-            var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
+            var asset = FlaxEngine.Content.LoadAsset<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Failed to load Prefab '{prefab}'.");
             var outputPath = ResolveAuthoringPath(path, ".prefab", true);
@@ -1602,7 +1602,7 @@ namespace FlaxEditor
         public static object InstantiatePrefab([CliOption("prefab", Required = true)] string prefab, [CliOption("parent")] Guid? parent = null, [CliOption("position")] Vector3? position = null)
         {
             var prefabId = ResolveAssetId(prefab, ".prefab");
-            var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
+            var asset = FlaxEngine.Content.LoadAsset<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefab}'.");
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Failed to load Prefab '{prefab}'.");
             var instance = PrefabManager.SpawnPrefab(asset, null) ?? throw new InvalidOperationException("Failed to instantiate the Prefab.");
@@ -1633,7 +1633,7 @@ namespace FlaxEditor
             if (!value.HasPrefabLink)
                 throw new InvalidOperationException("The Actor is not linked to a Prefab.");
             var prefabId = value.PrefabID;
-            var asset = FlaxEngine.Content.LoadRuntimeObject<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefabId}'.");
+            var asset = FlaxEngine.Content.LoadAsset<Prefab>(prefabId) ?? throw new InvalidOperationException($"Cannot load Prefab '{prefabId}'.");
             if (asset.WaitForLoaded())
                 throw new InvalidOperationException($"Failed to load Prefab '{prefabId}'.");
 
@@ -1898,7 +1898,7 @@ namespace FlaxEditor
                 JsonAsset asset;
                 if (Guid.TryParse(reference, out var id))
                 {
-                    asset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(id);
+                    asset = FlaxEngine.Content.LoadAssetAsync<JsonAsset>(id);
                 }
                 else
                 {
@@ -1909,7 +1909,7 @@ namespace FlaxEditor
                         id = info.ID;
                     else
                         throw new KeyNotFoundException($"Asset reference '{reference}' was not found in the Content database.");
-                    asset = FlaxEngine.Content.LoadRuntimeObjectAsync<JsonAsset>(id);
+                    asset = FlaxEngine.Content.LoadAssetAsync<JsonAsset>(id);
                 }
                 if (!asset || asset.WaitForLoaded())
                     throw new InvalidOperationException($"Json asset reference '{reference}' failed to load.");
@@ -1928,7 +1928,7 @@ namespace FlaxEditor
                 if (Guid.TryParse(reference, out var id))
                 {
                     result = typeof(Asset).IsAssignableFrom(type)
-                        ? FlaxEngine.Content.LoadRuntimeObjectAsync(id, type)
+                        ? FlaxEngine.Content.LoadAssetAsync(id, type)
                         : Object.Find(ref id, type, true);
                 }
                 else if (typeof(Asset).IsAssignableFrom(type))
@@ -1946,7 +1946,7 @@ namespace FlaxEditor
                     {
                         throw new KeyNotFoundException($"Asset reference '{reference}' was not found in the Content database.");
                     }
-                    result = FlaxEngine.Content.LoadRuntimeObjectAsync(id, type);
+                    result = FlaxEngine.Content.LoadAssetAsync(id, type);
                 }
                 else
                 {

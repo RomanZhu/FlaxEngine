@@ -33,7 +33,7 @@ namespace FlaxEditor.GUI.Timeline.Tracks
         /// </summary>
         public TAsset Asset
         {
-            get => FlaxEngine.Content.LoadRuntimeObjectAsync<TAsset>(AssetID);
+            get => FlaxEngine.Content.LoadAssetAsync<TAsset>(AssetID);
             set
             {
                 if (AssetID == value?.ID)

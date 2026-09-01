@@ -381,7 +381,7 @@ namespace FlaxEditor.Windows.Assets
                 Editor.ProjectCache.TryGetCustomData(GetPreviewModelCacheName(), out string str) && 
                 Guid.TryParse(str, out var id))
             {
-                _initialPreviewModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(id);
+                _initialPreviewModel = FlaxEngine.Content.LoadAssetAsync<SkinnedModel>(id);
             }
             if (_initialPreviewModel)
             {
@@ -517,9 +517,9 @@ namespace FlaxEditor.Windows.Assets
             if (bool.TryParse(node.GetAttribute("ShowPreviewValues"), out bool value3))
                 _timeline.ShowPreviewValues = value3;
             if (Guid.TryParse(node.GetAttribute("PreviewModel"), out Guid value4))
-                _initialPreviewModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(value4);
+                _initialPreviewModel = FlaxEngine.Content.LoadAssetAsync<SkinnedModel>(value4);
             if (Guid.TryParse(node.GetAttribute("BaseModel"), out value4))
-                _initialBaseModel = FlaxEngine.Content.LoadRuntimeObjectAsync<SkinnedModel>(value4);
+                _initialBaseModel = FlaxEngine.Content.LoadAssetAsync<SkinnedModel>(value4);
         }
 
         /// <inheritdoc />

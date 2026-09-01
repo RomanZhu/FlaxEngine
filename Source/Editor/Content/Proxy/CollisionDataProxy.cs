@@ -139,7 +139,7 @@ namespace FlaxEditor.Content
         private static ModelBase ResolveCollisionModel(BinaryAssetItem item, Guid modelId)
         {
             if (modelId != Guid.Empty)
-                return FlaxEngine.Content.LoadRuntimeObjectAsync<ModelBase>(modelId);
+                return FlaxEngine.Content.LoadAssetAsync<ModelBase>(modelId);
 
             const string suffix = " Collision.flax";
             if (!item.Path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
