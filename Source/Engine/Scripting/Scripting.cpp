@@ -172,6 +172,17 @@ namespace
 #endif
     }
 #endif
+
+    void DispatchUpdateActions()
+    {
+        Array<Function<void()>> actions;
+        {
+            ScopeLock lock(_objectsLocker);
+            UpdateActions.Swap(actions);
+        }
+        for (auto& action : actions)
+            action();
+    }
 }
 
 Delegate<BinaryModule*> Scripting::BinaryModuleLoaded;
@@ -268,26 +279,9 @@ void ScriptingService::Update()
     PROFILE_CPU_NAMED("Scripting::Update");
     INVOKE_EVENT(Update);
 
-    // Flush update actions
-    _objectsLocker.Lock();
-    int32 count = UpdateActions.Count();
-    for (int32 i = 0; i < count; i++)
-    {
-        UpdateActions[i]();
-    }
-    int32 newlyAdded = UpdateActions.Count() - count;
-    if (newlyAdded == 0)
-        UpdateActions.Clear();
-    else
-    {
-        // Someone added another action within current callback
-        Array<Function<void()>> tmp;
-        for (int32 i = newlyAdded; i < UpdateActions.Count(); i++)
-            tmp.Add(UpdateActions[i]);
-        UpdateActions.Clear();
-        UpdateActions.Add(tmp);
-    }
-    _objectsLocker.Unlock();
+    // Detach the current batch under the object lock, then invoke callbacks without it.
+    // Reentrant additions stay queued for the next update.
+    DispatchUpdateActions();
 
 #if defined(USE_NETCORE) && !USE_EDITOR
     // Force GC to run in background periodically to avoid large blocking collections causing hitches
@@ -361,6 +355,13 @@ void Scripting::InvokeOnUpdate(const Function<void()>& action)
     UpdateActions.Add(action);
     _objectsLocker.Unlock();
 }
+
+#if FLAX_TESTS
+void Scripting::DispatchUpdateActionsForTesting()
+{
+    DispatchUpdateActions();
+}
+#endif
 
 bool Scripting::LoadBinaryModules(const String& path, const String& projectFolderPath)
 {

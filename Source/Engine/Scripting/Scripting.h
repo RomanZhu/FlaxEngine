@@ -235,6 +235,11 @@ public:
     /// </summary>
     /// <param name="action">The action to invoke.</param>
     static void InvokeOnUpdate(const Function<void()>& action);
+
+#if FLAX_TESTS
+    /// <summary>Dispatches one detached update-action batch for focused native tests.</summary>
+    static void DispatchUpdateActionsForTesting();
+#endif
 private:
 
     static bool LoadBinaryModules(const String& path, const String& projectFolderPath);

@@ -28,6 +28,43 @@ TestClassNative::TestClassNative(const SpawnParams& params)
 {
 }
 
+TEST_CASE("Scripting update actions detach batches and defer reentrant additions")
+{
+    Array<int32> order;
+    Scripting::InvokeOnUpdate([&]
+    {
+        order.Add(1);
+        Scripting::InvokeOnUpdate([&]
+        {
+            order.Add(4);
+        });
+        Scripting::InvokeOnUpdate([&]
+        {
+            order.Add(5);
+        });
+        order.Add(2);
+    });
+    Scripting::InvokeOnUpdate([&]
+    {
+        order.Add(3);
+    });
+
+    Scripting::DispatchUpdateActionsForTesting();
+    const Array<int32> firstUpdate(order);
+    Scripting::DispatchUpdateActionsForTesting();
+    const Array<int32> secondUpdate(order);
+    Scripting::DispatchUpdateActionsForTesting();
+
+    REQUIRE(firstUpdate.Count() == 3);
+    CHECK(firstUpdate[0] == 1);
+    CHECK(firstUpdate[1] == 2);
+    CHECK(firstUpdate[2] == 3);
+    REQUIRE(secondUpdate.Count() == 5);
+    CHECK(secondUpdate[3] == 4);
+    CHECK(secondUpdate[4] == 5);
+    CHECK(order.Count() == secondUpdate.Count());
+}
+
 TEST_CASE("Scripting")
 {
     SECTION("Test Library Imports")
