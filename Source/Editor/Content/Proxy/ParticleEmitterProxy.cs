@@ -23,6 +23,8 @@ namespace FlaxEditor.Content
     {
         private ParticleEmitterPreview _preview;
         private ThumbnailRequest _warmupRequest;
+        internal int ThumbnailRenderCount { get; private set; }
+        internal int LastThumbnailParticleCount { get; private set; }
 
         /// <inheritdoc />
         public override string Name => "Particle Emitter";
@@ -174,6 +176,8 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
         {
+            ThumbnailRenderCount++;
+            LastThumbnailParticleCount = _preview.PreviewActor.ParticlesCount;
             _preview.Parent = guiRoot;
             _preview.SyncBackbufferSize();
 
