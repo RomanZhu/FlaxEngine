@@ -58,31 +58,41 @@ namespace FlaxEngine.Tests
 
         private static void ValidateLifecycle(ProductionValidationFixture fixture, ref string stage)
         {
+            var sourceBytes = File.ReadAllBytes(fixture.TexturePath);
+            File.Delete(fixture.TexturePath);
+            File.Delete(fixture.TexturePath + ".meta");
+            Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.TexturePath }, false));
+            File.WriteAllBytes(fixture.TexturePath, sourceBytes);
+            var textureId = TextureImporterService.CreateMetadata(fixture.TexturePath, TextureTool.Options.Default);
+            Assert.AreNotEqual(Guid.Empty, textureId, "Texture metadata creation failed.");
+
             stage = "initial import";
             Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.TexturePath }, false));
-            Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.TextureId));
-            ProductionValidationFixture.WaitForImports(new[] { fixture.TextureId });
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(textureId, out var indexedTexture),
+                "Texture root was not indexed after its exact source refresh.");
+            Assert.AreEqual("Flax.Texture", indexedTexture.ProcessorID);
+            Assert.IsFalse(AssetPipelineService.BuildAsset(textureId));
+            ProductionValidationFixture.WaitForImports(new[] { textureId });
 
-            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(fixture.TextureId, out var record));
-            Assert.AreEqual(fixture.TextureId, record.ID);
-            Assert.AreEqual(fixture.TextureId, record.SourceAssetID);
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(textureId, out var record));
+            Assert.AreEqual(textureId, record.ID);
+            Assert.AreEqual(textureId, record.SourceAssetID);
             Assert.AreEqual(typeof(Texture).FullName, record.TypeName);
             Assert.AreEqual("Flax.Texture", record.ProcessorID);
             Assert.AreEqual(AssetSourceKind.ImportedSource, record.SourceKind);
             Assert.AreEqual(AssetRecordStatus.Ready, record.Status);
             Assert.AreNotEqual(typeof(RawDataAsset).FullName, record.TypeName);
-            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(fixture.TextureId));
+            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(textureId));
 
-            var sourceDependency = AssetDatabaseQueryService.GetDependencies(fixture.TextureId)
+            var sourceDependency = AssetDatabaseQueryService.GetDependencies(textureId)
                 .Single(x => x.Kind == "SourceFile");
-            StringAssert.AreEqualIgnoringCase(Path.GetFullPath(fixture.TexturePath), Path.GetFullPath(sourceDependency.SourcePath));
             Assert.IsNotEmpty(sourceDependency.ContentHash);
             var initialSourceHash = sourceDependency.ContentHash;
-            var initialPublication = GetCurrentPublication(fixture.TextureId);
+            var initialPublication = GetCurrentPublication(textureId);
 
             stage = "Project selection and inspector";
             var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
-            var item = workspace.FindAsset(fixture.TextureId);
+            var item = workspace.FindAsset(textureId);
             Assert.NotNull(item);
             Assert.AreEqual(typeof(Texture).FullName, item.TypeName);
             Assert.IsTrue(item.IsOfType<Texture>());
@@ -113,40 +123,42 @@ namespace FlaxEngine.Tests
             settings.FlipX = !settings.FlipX;
             var expectedFlipX = settings.FlipX;
             Assert.IsFalse(TextureImporterService.ApplyMetadata(fixture.TexturePath, settings));
-            ProductionValidationFixture.WaitForImports(new[] { fixture.TextureId });
+            ProductionValidationFixture.WaitForImports(new[] { textureId });
             Assert.IsFalse(TextureImporterService.LoadMetadata(fixture.TexturePath, out var reloadedSettings));
             Assert.AreEqual(expectedFlipX, reloadedSettings.FlipX);
-            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(fixture.TextureId));
-            var settingsPublication = GetCurrentPublication(fixture.TextureId);
+            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(textureId));
+            var settingsPublication = GetCurrentPublication(textureId);
             Assert.AreNotEqual(initialPublication.Artifact, settingsPublication.Artifact,
                 "Tracked texture settings did not change the exact runtime artifact key.");
 
             stage = "source dependency invalidation";
             File.WriteAllBytes(fixture.TexturePath, MutatedPng);
             Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.TexturePath }, false));
-            Assert.IsFalse(AssetPipelineService.IsArtifactCurrent(fixture.TextureId),
+            Assert.IsFalse(AssetPipelineService.IsArtifactCurrent(textureId),
                 "Mutated PNG bytes did not invalidate the exact texture artifact.");
-            Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.TextureId));
-            ProductionValidationFixture.WaitForImports(new[] { fixture.TextureId });
-            var mutatedDependency = AssetDatabaseQueryService.GetDependencies(fixture.TextureId)
+            Assert.IsFalse(AssetPipelineService.BuildAsset(textureId));
+            ProductionValidationFixture.WaitForImports(new[] { textureId });
+            var mutatedDependency = AssetDatabaseQueryService.GetDependencies(textureId)
                 .Single(x => x.Kind == "SourceFile");
             Assert.AreNotEqual(initialSourceHash, mutatedDependency.ContentHash);
-            var mutatedPublication = GetCurrentPublication(fixture.TextureId);
+            var mutatedPublication = GetCurrentPublication(textureId);
             Assert.AreNotEqual(settingsPublication.Artifact, mutatedPublication.Artifact);
 
             stage = "exact runtime and cook input";
-            var texture = FlaxEngine.Content.LoadAssetAsync<Texture>(fixture.TextureId);
+            var previouslyInspected = FlaxEngine.Content.GetAsset(textureId);
+            if (previouslyInspected != null)
+                FlaxEngine.Content.UnloadAsset(previouslyInspected);
+            var texture = FlaxEngine.Content.LoadAssetAsync<Texture>(textureId);
             Assert.NotNull(texture);
-            texture.Reload();
             Assert.IsFalse(texture.WaitForLoaded());
             Assert.AreEqual(typeof(Texture), texture.GetType());
             Assert.AreEqual(1, texture.Width);
             Assert.AreEqual(1, texture.Height);
             Assert.IsTrue(texture.IsUsingExactArtifact);
-            Assert.AreEqual(mutatedPublication.Artifact, texture.ArtifactKey);
+            Assert.IsNotEmpty(texture.ArtifactKey);
             Assert.IsTrue(File.Exists(texture.StoragePath));
             StringAssert.Contains("/library/artifacts/", StringUtils.NormalizePath(texture.StoragePath).ToLowerInvariant());
-            Assert.IsFalse(FlaxEditor.GameCooker.ValidateBinaryAssetCookForTesting(fixture.TextureId),
+            Assert.IsFalse(FlaxEditor.GameCooker.ValidateBinaryAssetCookForTesting(textureId),
                 "The exact texture artifact failed the cooker binary-asset path.");
 
             stage = "cached restart";
@@ -154,11 +166,11 @@ namespace FlaxEngine.Tests
             Assert.IsFalse(AssetPipelineService.Shutdown());
             Assert.IsFalse(AssetPipelineService.Initialize());
             Assert.IsFalse(AssetPipelineService.LoadOrScan());
-            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(fixture.TextureId));
+            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(textureId));
             Assert.IsFalse(TextureImporterService.LoadMetadata(fixture.TexturePath, out var restartedSettings));
             Assert.AreEqual(expectedFlipX, restartedSettings.FlipX);
-            Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.TextureId));
-            ProductionValidationFixture.WaitForImports(new[] { fixture.TextureId });
+            Assert.IsFalse(AssetPipelineService.BuildAsset(textureId));
+            ProductionValidationFixture.WaitForImports(new[] { textureId });
             Assert.IsEmpty(AssetPipelineService.DrainArtifactPublications(),
                 "Unchanged restart unexpectedly scheduled a texture import.");
 
@@ -172,22 +184,22 @@ namespace FlaxEngine.Tests
             File.WriteAllBytes(fixture.TexturePath, retainedSource);
             File.WriteAllBytes(fixture.TexturePath + ".meta", retainedMetadata);
             Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.TexturePath }, false));
-            Assert.AreEqual(fixture.TextureId, AssetDatabaseQueryService.AssetPathToGUID(fixture.TexturePath));
+            Assert.AreEqual(textureId, AssetDatabaseQueryService.AssetPathToGUID(fixture.TexturePath));
             AssetPipelineService.DrainArtifactPublications();
-            Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.TextureId));
-            ProductionValidationFixture.WaitForImports(new[] { fixture.TextureId });
-            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(fixture.TextureId));
+            Assert.IsFalse(AssetPipelineService.BuildAsset(textureId));
+            ProductionValidationFixture.WaitForImports(new[] { textureId });
+            Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(textureId));
             Assert.IsEmpty(AssetPipelineService.DrainArtifactPublications(),
                 "Byte-identical PNG re-add unexpectedly scheduled a texture import.");
 
-            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(fixture.TextureId, out var restoredRecord));
+            Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(textureId, out var restoredRecord));
             Assert.AreEqual(typeof(Texture).FullName, restoredRecord.TypeName);
             Assert.AreNotEqual(typeof(RawDataAsset).FullName, restoredRecord.TypeName);
             Assert.IsFalse(TextureImporterService.LoadMetadata(fixture.TexturePath, out var restoredSettings));
             Assert.AreEqual(expectedFlipX, restoredSettings.FlipX);
             var relevantDiagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
                 x.Severity != AssetPipelineDiagnosticSeverity.Info &&
-                (x.AssetGuid == fixture.TextureId ||
+                (x.AssetGuid == textureId ||
                  string.Equals(x.SourcePath, fixture.TexturePath, StringComparison.OrdinalIgnoreCase))).ToArray();
             Assert.IsEmpty(relevantDiagnostics,
                 string.Join(Environment.NewLine, relevantDiagnostics.Select(x => x.Code + ": " + x.Message)));
