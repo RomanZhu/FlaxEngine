@@ -655,7 +655,7 @@ namespace FlaxEditor.Content.Thumbnails
         public override void OnUpdate()
         {
             // Wait some frames before start generating previews (late init feature)
-            if (Time.TimeSinceStartup < 1.0f || HasAllAtlasesLoaded() == false || _task == null)
+            if (_task == null || Time.TimeSinceStartup < 1.0f || HasAllAtlasesLoaded() == false)
                 return;
 
             lock (_requests)
