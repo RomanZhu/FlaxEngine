@@ -6,6 +6,8 @@ using System.IO;
 using FlaxEditor;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Thumbnails;
+using FlaxEditor.GUI.Tree;
+using FlaxEngine.GUI;
 using NUnit.Framework;
 
 namespace FlaxEngine.Tests
@@ -158,6 +160,53 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void RestoredVisibleTreeRowsRenewDemandWithoutDraw()
+        {
+            var panel = new Panel
+            {
+                Bounds = new Rectangle(0, 0, 200, 100),
+            };
+            var tree = new Tree(false)
+            {
+                AutoSize = false,
+                Bounds = new Rectangle(0, 0, 200, 200),
+                Parent = panel,
+            };
+            var restoredRoot = new TreeNode
+            {
+                Bounds = new Rectangle(0, 0, 200, 200),
+                Parent = tree,
+            };
+            restoredRoot.Expand(true);
+            var item = new FileItem(Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")));
+            var generated = Editor.Instance.Icons.Folder128;
+            item.Thumbnail = generated;
+            var node = new ContentItemTreeNode(item)
+            {
+                Bounds = new Rectangle(0, 10, 180, 18),
+                Parent = restoredRoot,
+            };
+
+            Assert.IsFalse(item.HasThumbnailReference);
+            node.Update(0.0f);
+            Assert.IsTrue(item.HasThumbnailReference, "An initially visible attached row must demand its thumbnail without waiting for Draw.");
+            Assert.AreEqual(generated, item.Thumbnail, "Renewal must preserve the stable cached thumbnail identity.");
+
+            Assert.IsFalse(item.ExpireThumbnailDemand(Engine.FrameCount + 2), "The visibility lease should expire when it is not renewed.");
+            item.Thumbnail = generated;
+            node.Update(0.0f);
+            Assert.IsTrue(item.HasThumbnailReference, "A stable visible row must renew expired startup demand without scroll or unfold input.");
+            Assert.AreEqual(generated, item.Thumbnail);
+
+            Assert.IsFalse(ContentItemTreeNode.IsHeaderInViewport(new Rectangle(0, 110, 180, 18), panel.GetClientArea(), Float2.Zero));
+            Assert.IsTrue(ContentItemTreeNode.IsHeaderInViewport(new Rectangle(0, 110, 180, 18), panel.GetClientArea(), new Float2(0, -40)),
+                "Scrolling the same row into view must use the same visibility-demand path.");
+
+            panel.Dispose();
+            item.Dispose();
+        }
+
+        [Test]
         public void TreeRowsDetachBeforeDeletedOrDisposedItemsCanDrawAgain()
         {
             var deletedItem = new FileItem(Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")));
@@ -198,6 +247,7 @@ namespace FlaxEngine.Tests
             tests.NewlyDuplicatedAssetRestartsWithItsPublishedExactVersion();
             tests.LoadedMaterialWaitsForRenderingShaderReadiness();
             tests.TreeRowsPreferGeneratedThumbnails();
+            tests.RestoredVisibleTreeRowsRenewDemandWithoutDraw();
             tests.TreeRowsDetachBeforeDeletedOrDisposedItemsCanDrawAgain();
             tests.InitialTreeDemandWaitsForThumbnailCacheReadiness();
             return 0;

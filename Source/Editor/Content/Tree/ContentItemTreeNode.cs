@@ -60,6 +60,24 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
 
     internal static SpriteHandle GetIconForTesting(ContentItem item) => GetIcon(item);
 
+    internal static bool IsHeaderInViewport(Rectangle headerBounds, Rectangle clientArea, Float2 viewOffset)
+    {
+        clientArea.Location -= viewOffset;
+        return clientArea.Intersects(ref headerBounds);
+    }
+
+    private bool IsHeaderInViewport()
+    {
+        var tree = ParentTree;
+        if (!VisibleInHierarchy || Parent is TreeNode { IsCollapsedInHierarchy: true } ||
+            tree?.Parent is not Panel panel || HeaderRect.Height <= 0.0f)
+            return false;
+
+        var headerBounds = HeaderRect;
+        headerBounds.Location = PointToParent(panel, headerBounds.Location);
+        return IsHeaderInViewport(headerBounds, panel.GetClientArea(), panel.ViewOffset);
+    }
+
     /// <summary>
     /// Updates the query search filter.
     /// </summary>
@@ -230,6 +248,11 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     public override void Update(float deltaTime)
     {
         base.Update(deltaTime);
+
+        // Draw can stop running for an unchanged editor window while Update continues. Renew the
+        // lease from actual viewport visibility so startup demand survives asynchronous cache loading.
+        if (IsHeaderInViewport())
+            Item.RequestThumbnail(this);
 
         if (_pendingRenameTime >= 0.0f && Time.UnscaledGameTime >= _pendingRenameTime)
         {
