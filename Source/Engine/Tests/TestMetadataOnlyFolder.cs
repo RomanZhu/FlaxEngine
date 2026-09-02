@@ -42,7 +42,7 @@ namespace FlaxEngine.Tests
                 Assert.AreEqual(AssetSourceKind.Folder, record.SourceKind);
 
                 var workspace = Editor.Instance.ContentDatabase;
-                workspace.RefreshFolder(workspace.Game.Content, false);
+                workspace.RefreshFolder(workspace.Game.Content.Folder, false);
                 var item = workspace.Find(folderPath);
                 Assert.IsInstanceOf<ContentFolder>(item);
 
@@ -66,7 +66,7 @@ namespace FlaxEngine.Tests
                 if (File.Exists(metadataPath))
                     File.Delete(metadataPath);
                 AssetPipelineService.RefreshSources(new[] { folderPath }, false);
-                Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Game.Content, false);
+                Editor.Instance.ContentDatabase.RefreshFolder(Editor.Instance.ContentDatabase.Game.Content.Folder, false);
             }
         }
 

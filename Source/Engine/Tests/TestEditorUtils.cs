@@ -2263,7 +2263,7 @@ namespace FlaxEngine.Tests
             Debug.LogMessageReceived += capture;
             try
             {
-                CliAuthoringCommands.CreateScene(scenePath);
+                FlaxEditor.CliAuthoringCommands.CreateScene(scenePath);
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(scenePath, out var sourceRecord));
                 Assert.IsFalse(AssetPipelineService.RebuildAsset(sourceRecord.ID, true));
                 Assert.IsFalse(Level.LoadScene(sourceRecord.ID));
@@ -2278,7 +2278,7 @@ namespace FlaxEngine.Tests
                 var modelItem = new ModelItem(model.Path, ref modelId, typeof(Model).FullName, typeof(Model));
                 Assert.IsTrue(SceneTreeWindow.PlaceAssetItems(new AssetItem[] { modelItem }, null, out var placedNodes));
                 Assert.AreEqual(1, placedNodes.Count);
-                var placed = placedNodes[0].Actor as StaticModel;
+                var placed = (placedNodes[0] as FlaxEditor.SceneGraph.ActorNode)?.Actor as StaticModel;
                 Assert.NotNull(placed);
                 var placedName = placed.Name;
                 Assert.AreSame(model, placed.Model);

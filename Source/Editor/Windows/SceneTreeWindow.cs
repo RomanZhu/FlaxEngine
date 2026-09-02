@@ -1266,7 +1266,7 @@ namespace FlaxEditor.Windows
                 var item = items[i];
                 if (item.IsOfType<SceneAsset>())
                 {
-                    Editor.Instance.Scene.OpenScene(item.ID, true);
+                    FlaxEditor.Editor.Instance.Scene.OpenScene(item.ID, true);
                     handled = true;
                     continue;
                 }
@@ -1274,15 +1274,15 @@ namespace FlaxEditor.Windows
                 if (actor == null)
                     continue;
                 actor.Name = item.ShortName;
-                Editor.SceneEditing.Spawn(actor);
+                FlaxEditor.Editor.Instance.SceneEditing.Spawn(actor);
                 handled = true;
-                var graphNode = Editor.Scene.GetActorNode(actor.ID);
+                var graphNode = FlaxEditor.Editor.Instance.Scene.GetActorNode(actor.ID);
                 if (graphNode != null)
                     graphNodes.Add(graphNode);
-                Editor.Scene.MarkSceneEdited(actor.Scene);
+                FlaxEditor.Editor.Instance.Scene.MarkSceneEdited(actor.Scene);
             }
             if (graphNodes.Count > 0)
-                Editor.SceneEditing.Select(graphNodes);
+                FlaxEditor.Editor.Instance.SceneEditing.Select(graphNodes);
             return handled;
         }
 
