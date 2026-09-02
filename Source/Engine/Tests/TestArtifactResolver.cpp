@@ -4,6 +4,7 @@
 
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
+#include "Engine/Content/Build/Processors/ModelPipelineService.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
@@ -109,6 +110,25 @@ namespace
         return AssetObjectId(AssetGuid(source), localId);
     }
 }
+
+#if COMPILE_WITH_MODEL_TOOL && COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+TEST_CASE("Model hot swap retains authored package object identity")
+{
+    AssetRecord main;
+    main.ID = Guid::New();
+    main.SourceAssetID = main.ID;
+    main.LocalId = 1;
+    CHECK(ModelPipelineService::GetHotSwapStorageObjectForTesting(main) == AssetObjectId::Main(AssetGuid(main.ID)));
+
+    AssetRecord child;
+    child.ID = Guid::New();
+    child.SourceAssetID = main.ID;
+    child.LocalId = 771;
+    const AssetObjectId storageObject = ModelPipelineService::GetHotSwapStorageObjectForTesting(child);
+    CHECK(storageObject == AssetObjectId(AssetGuid(main.ID), 771));
+    CHECK(storageObject != AssetObjectId::Main(AssetGuid(child.ID)));
+}
+#endif
 
 TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy without unsafe fallback")
 {

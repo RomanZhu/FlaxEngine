@@ -7,6 +7,7 @@
 #include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
 #include "Engine/Content/Artifacts/ResolvedArtifact.h"
+#include "Engine/Content/Build/Processors/ModelPipelineService.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/Content/Loading/ContentLoadTask.h"
@@ -272,6 +273,70 @@ TEST_CASE("Binary asset storage switch succeeds or restores old storage")
     ObjectsRemovalService::Flush();
     CHECK(ArtifactLease::GetCount(concurrentPath) == 0);
 }
+
+#if COMPILE_WITH_MODEL_TOOL && COMPILE_WITH_ASSETS_IMPORTER
+TEST_CASE("Model child storage switch uses source local package identity")
+{
+    const String root = Globals::ProjectCacheFolder / TEXT("Tests/ModelChildStorageSwitch");
+    const String initialPath = root / TEXT("initial.flaxpac");
+    const String replacementPath = root / TEXT("replacement.flaxpac");
+    const Guid sourceId = Guid::New();
+    const Guid childId = Guid::New();
+    AssetObjectId storageObject(AssetGuid(sourceId), 771);
+    RawDataAsset* asset = nullptr;
+    FileSystem::DeleteDirectory(root, true);
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    SCOPE_EXIT
+    {
+        if (asset)
+            Delete(asset);
+        ContentStorageManager::EnsureAccess(initialPath);
+        ContentStorageManager::EnsureAccess(replacementPath);
+        FileSystem::DeleteDirectory(root, true);
+    };
+
+    auto writePackage = [&](const String& path, byte value)
+    {
+        FlaxChunk chunk;
+        chunk.Data.Copy(&value, 1);
+        AssetInitData data;
+        data.Header.ID = childId;
+        data.Header.TypeName = RawDataAsset::TypeName;
+        data.Header.Chunks[0] = &chunk;
+        data.SerializedVersion = RawDataAsset::SerializedVersion;
+        return FlaxStorage::CreateRuntimePackage(path, Span<AssetInitData>(&data, 1), Span<AssetObjectId>(&storageObject, 1), true);
+    };
+    REQUIRE_FALSE(writePackage(initialPath, 1));
+    REQUIRE_FALSE(writePackage(replacementPath, 2));
+
+    AssetLoadLocation location;
+    location.Info = AssetInfo(childId, RawDataAsset::TypeName, TEXT("model.glb.subasset"));
+    location.Artifact.ObjectID = storageObject;
+    location.Artifact.AssetID = childId;
+    location.Artifact.TypeName = RawDataAsset::TypeName;
+    location.Artifact.StoragePath = ArtifactStoragePath(initialPath);
+    location.Artifact.OutputKind = TEXT("runtime");
+    location.Artifact.Key = TEXT("initial");
+    location.Artifact.StorageKind = ArtifactStorageKind::Generated;
+    auto* factory = static_cast<BinaryAssetFactoryBase*>(Content::GetAssetFactory(location.Info));
+    REQUIRE(factory);
+    asset = static_cast<RawDataAsset*>(factory->New(location));
+    REQUIRE(asset);
+    REQUIRE_FALSE(asset->WaitForLoaded());
+
+    AssetRecord child;
+    child.ID = childId;
+    child.SourceAssetID = sourceId;
+    child.LocalId = storageObject.LocalId;
+    ResolvedArtifact replacement = location.Artifact;
+    replacement.ObjectID = ModelPipelineService::GetHotSwapStorageObjectForTesting(child);
+    replacement.StoragePath = ArtifactStoragePath(replacementPath);
+    replacement.Key = TEXT("replacement");
+    REQUIRE(asset->SwitchStorage(replacement) == BinaryAssetStorageSwitchResult::Success);
+    REQUIRE(asset->Data.Count() == 1);
+    CHECK(asset->Data[0] == 2);
+}
+#endif
 
 TEST_CASE("Binary asset storage rejects malformed and unsupported data")
 {

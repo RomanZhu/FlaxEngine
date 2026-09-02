@@ -30,6 +30,11 @@
 
 namespace
 {
+    AssetObjectId GetHotSwapStorageObject(const AssetRecord& record)
+    {
+        return AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+    }
+
     struct ModelExecution
     {
         PreparedAsset Prepared;
@@ -169,7 +174,7 @@ namespace
             AssetPipelineDiagnostic diagnostic;
             if (!ArtifactStore::TryResolveLibraryRelative(Globals::ProjectLibraryFolder, runtime->RelativePath, storagePath, diagnostic))
             {
-                artifact.ObjectID = manifest.ObjectID;
+                artifact.ObjectID = GetHotSwapStorageObject(record);
                 artifact.AssetID = assetID;
                 artifact.TypeName = typeName;
                 artifact.StoragePath = storagePath;
@@ -214,6 +219,13 @@ namespace
         return false;
     }
 }
+
+#if FLAX_TESTS
+AssetObjectId ModelPipelineService::GetHotSwapStorageObjectForTesting(const AssetRecord& record)
+{
+    return GetHotSwapStorageObject(record);
+}
+#endif
 
 bool ModelPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
 {

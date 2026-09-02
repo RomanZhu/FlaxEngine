@@ -24,6 +24,10 @@ public:
     /// <summary>Explicitly reconciles stable candidates and atomically updates the tracked root sidecar.</summary>
     static bool ReconcileMetadata(const Guid& rootAssetID, Array<SubAssetReconcileChange>& changes, AssetPipelineDiagnostic& diagnostic);
 
+#if FLAX_TESTS
+    static AssetObjectId GetHotSwapStorageObjectForTesting(const AssetRecord& record);
+#endif
+
     static void Shutdown();
 };
 
