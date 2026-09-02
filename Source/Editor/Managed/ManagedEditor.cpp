@@ -14,6 +14,7 @@
 #include "Engine/Platform/WindowsManager.h"
 #include "Engine/Content/Assets/VisualScript.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
 #include "Engine/Level/Actor.h"
 #include "Engine/CSG/CSGBuilder.h"
 #include "Engine/Engine/CommandLine.h"
@@ -38,8 +39,7 @@ MMethod* Internal_FocusGameViewport = nullptr;
 
 bool ManagedEditor::IsAssetImportWorker()
 {
-    String value;
-    return !Platform::GetEnvironmentVariable(TEXT("FLAX_ASSET_IMPORT_WORKER"), value) && value == TEXT("1");
+    return AssetImportWorkerProcess::IsCurrentProcess();
 }
 
 bool ManagedEditor::RunAssetImportWorker()
@@ -716,6 +716,11 @@ Array<Window*> ManagedEditor::GetWindows()
 
 void ManagedEditor::OnEditorAssemblyLoaded(MAssembly* assembly)
 {
+    // Import workers load the editor assembly only to invoke the managed worker entry point.
+    // They never initialize the managed editor and must not create its half-initialized instance.
+    if (IsAssetImportWorker())
+        return;
+
     ASSERT(!HasManagedInstance());
 
     // FlaxEditor.CSharp.dll has been loaded, let's create managed object for C# editor

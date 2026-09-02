@@ -100,6 +100,7 @@ public:
     const String& GetSourcePath() const { return _sourcePath; }
     const ArtifactTarget& GetTarget() const { return _target; }
     const StringAnsi& GetSettings() const { return _settings; }
+    const Array<AssetPipelineDiagnostic>& GetDiagnostics() const { return _result.Diagnostics; }
 
     bool ReadSource(Array<byte>& data, ContentHash& hash, AssetPipelineDiagnostic& diagnostic);
     bool ReadDependencyFile(const StringView& path, Array<byte>& data, ContentHash& hash, AssetPipelineDiagnostic& diagnostic);

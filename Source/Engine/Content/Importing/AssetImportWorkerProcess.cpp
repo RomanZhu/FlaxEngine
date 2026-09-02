@@ -362,6 +362,12 @@ namespace
 #endif
 }
 
+bool AssetImportWorkerProcess::IsCurrentProcess()
+{
+    String value;
+    return !Platform::GetEnvironmentVariable(TEXT("FLAX_ASSET_IMPORT_WORKER"), value) && value == TEXT("1");
+}
+
 bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImportJobRequest& request,
                                    const AssetCancellationToken& cancellation, AssetImportJobResult& result,
                                    AssetPipelineDiagnostic& diagnostic)
@@ -448,7 +454,7 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
             return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request,
                 TEXT("Managed importer worker requires a valid current project path."));
         }
-        arguments = String::Format(TEXT("\"{0}\" -headless -null -mute -skipcompile -project \"{1}\""),
+        arguments = String::Format(TEXT("\"{0}\" -headless -null -mute -nolog -skipcompile -project \"{1}\""),
             executablePath, Globals::ProjectFolder);
     }
     else
@@ -478,6 +484,8 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     addEnvironment(TEXT("FLAX_ASSET_IMPORT_STAGING"), request.OutputStagingPath);
     addEnvironment(TEXT("TEMP"), request.OutputStagingPath);
     addEnvironment(TEXT("TMP"), request.OutputStagingPath);
+    addEnvironment(TEXT("DOTNET_EnableDiagnostics"), TEXT("0"));
+    addEnvironment(TEXT("COMPlus_EnableDiagnostics"), TEXT("0"));
     const Char* inheritedNames[] = { TEXT("SystemRoot"), TEXT("WINDIR"), TEXT("DOTNET_ROOT"), TEXT("DOTNET_ROOT(x86)") };
     for (const Char* name : inheritedNames)
     {
@@ -601,9 +609,12 @@ bool AssetImportWorkerProcess::Run(const StringView& executable, const AssetImpo
     }
     if (exitCode != 0)
     {
+        const bool hasResult = FileSystem::FileExists(resultPath);
         cleanupProtocolFiles();
         result.Status = AssetImportWorkerStatus::Crashed;
-        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, TEXT("Isolated importer process crashed or exceeded its memory limit."));
+        const String message = String::Format(TEXT("Isolated importer process exited with code {0}. Peak memory: {1} bytes; limit: {2} bytes; result file: {3}."),
+            exitCode, usage.PeakProcessMemoryUsed, request.Limits.MaximumMemoryBytes, hasResult);
+        return ProcessFail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, request, message);
     }
     if (AssetImportWorkerProtocol::LoadResult(resultPath, result, diagnostic))
     {

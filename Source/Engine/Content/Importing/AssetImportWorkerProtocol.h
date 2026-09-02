@@ -114,6 +114,9 @@ public:
 class FLAXENGINE_API AssetImportWorkerProcess
 {
 public:
+    /// <summary>Returns true inside the restricted importer child process.</summary>
+    static bool IsCurrentProcess();
+
     static bool Run(const StringView& executable, const AssetImportJobRequest& request,
                     const AssetCancellationToken& cancellation, AssetImportJobResult& result,
                     AssetPipelineDiagnostic& diagnostic);

@@ -298,6 +298,11 @@ bool CallbackImporterPipelineService::RequestBuild(const Guid& assetID, bool for
     AssetImportWorkerPublishAction publish = [execution](const AssetImportPlan& plan, const AssetImportJobResult& workerResult,
         const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& publicationDiagnostic)
     {
+        SCOPE_EXIT
+        {
+            if (FileSystem::DirectoryExists(execution->Request.OutputStagingPath))
+                FileSystem::DeleteDirectory(execution->Request.OutputStagingPath, true);
+        };
         AssetRecord current;
         if (!AssetDatabase::Get().TryGetRecord(plan.Request.Asset.Value, current) ||
             current.DatabaseRevision != plan.Request.SourceRevision)

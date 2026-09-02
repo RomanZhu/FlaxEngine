@@ -892,7 +892,9 @@ namespace FlaxEditor
                 throw new InvalidOperationException("The command action is missing.");
 
             TryWriteEvent(new { type = "started", requestId = _request.RequestId, operation = _request.Operation, action = options.Action, name = options.Name });
-            if (!IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsReady))
+            var editorReady = Editor.Instance.StateMachine.CurrentState.IsEditorReady;
+            EnsureCommandStartupProgress(editorReady);
+            if (!IsCommandStartupReady(editorReady, ScriptsBuilder.IsReady && !ScriptsBuilder.LastCompilationFailed, FlaxEngine.Scripting.HasGameModulesLoaded()))
             {
                 DeferCommandUntilScriptsLoad(options);
                 return;
@@ -907,8 +909,10 @@ namespace FlaxEditor
             Action update = null;
             update = () =>
             {
+                var editorReady = Editor.Instance.StateMachine.CurrentState.IsEditorReady;
+                EnsureCommandStartupProgress(editorReady);
                 var ready = EvaluateCommandStartup(
-                    IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsReady),
+                    IsCommandStartupReady(editorReady, ScriptsBuilder.IsReady && !ScriptsBuilder.LastCompilationFailed, FlaxEngine.Scripting.HasGameModulesLoaded()),
                     DateTime.UtcNow, deadline, out var timedOut);
                 if (ready)
                 {
@@ -932,9 +936,15 @@ namespace FlaxEditor
             return scriptsLoaded;
         }
 
-        internal static bool IsCommandStartupReady(bool editorReady, bool scriptsReady)
+        private static void EnsureCommandStartupProgress(bool editorReady)
         {
-            return editorReady && scriptsReady;
+            if (editorReady && FlaxEngine.Scripting.HasGameModulesLoaded() && ScriptsBuilder.IsSourceDirty && !ScriptsBuilder.IsCompiling)
+                ScriptsBuilder.CheckForCompile();
+        }
+
+        internal static bool IsCommandStartupReady(bool editorReady, bool scriptsReady, bool gameModulesLoaded)
+        {
+            return editorReady && scriptsReady && gameModulesLoaded;
         }
 
         private void ExecuteCommand(CliCommandOptions options)

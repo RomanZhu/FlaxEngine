@@ -256,6 +256,18 @@ TEST_CASE("Asset import worker protocol rejects mismatched capabilities and esca
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::UndeclaredInput);
     result.ObservedToolchain.Clear();
 
+    AssetImportJobRequest failedRequest = request;
+    failedRequest.Importer.ProducesMainObject = true;
+    result.Status = AssetImportWorkerStatus::Failed;
+    AssetPipelineDiagnostic workerFailure;
+    workerFailure.Code = AssetPipelineDiagnosticCode::BuildFailed;
+    workerFailure.Message = TEXT("expected importer failure");
+    result.Diagnostics.Add(workerFailure);
+    CHECK(AssetImportWorkerProtocol::ValidateResult(failedRequest, result, diagnostic));
+    CHECK(diagnostic.Message == workerFailure.Message);
+    result.Status = AssetImportWorkerStatus::Succeeded;
+    result.Diagnostics.Clear();
+
     AssetImportWorkerOutput output;
     output.Name = TEXT("runtime");
     output.Kind = "runtime";

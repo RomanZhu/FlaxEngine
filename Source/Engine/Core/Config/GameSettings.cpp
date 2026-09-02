@@ -19,8 +19,10 @@
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/AssetReference.h"
 #include "Engine/Content/AssetPipeline/AssetPipelineSettings.h"
+#include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
+#include "Engine/Platform/Platform.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Streaming/StreamingSettings.h"
 #include "Engine/Serialization/Serialization.h"
@@ -42,6 +44,8 @@ public:
     bool Init() override
     {
 #if USE_EDITOR
+        if (AssetImportWorkerProcess::IsCurrentProcess())
+            return false;
         if (!Editor::Project || Editor::Project->AssetSystemVersion != 2)
         {
             LOG(Error, "This project uses the legacy Flax asset system and cannot be opened by this engine build. This branch requires source assets and version-2 metadata using GUID plus local-file-ID references.");

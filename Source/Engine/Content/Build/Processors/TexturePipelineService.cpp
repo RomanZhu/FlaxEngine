@@ -25,6 +25,8 @@
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
 #include "Engine/Content/Importing/AssetImportService.h"
+#include "Engine/Content/Importing/CallbackImporterPipelineService.h"
+#include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/CPUInfo.h"
@@ -270,6 +272,8 @@ namespace
 
         bool Init() override
         {
+            if (AssetImportWorkerProcess::IsCurrentProcess())
+                return false;
             AssetPipelineDiagnostic diagnostic;
             if (!TexturePipelineService::GetBuildService(diagnostic))
             {
@@ -603,13 +607,16 @@ void TexturePipelineService::Shutdown()
     }
     if (builds)
         builds->Shutdown();
-    AssetImportService::Shutdown();
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    CallbackImporterPipelineService::Shutdown();
+#endif
 #if COMPILE_WITH_MODEL_TOOL && USE_EDITOR
     ModelPipelineService::Shutdown();
 #endif
 #if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
     GraphPipelineService::Shutdown();
 #endif
+    AssetImportService::Shutdown();
     registration.Reset();
 }
 

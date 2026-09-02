@@ -5,6 +5,7 @@
 #include "ArtifactLease.h"
 #include "ProjectLibrary.h"
 #include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
 #include "Engine/Core/Log.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
@@ -321,6 +322,8 @@ public:
 
     bool Init() override
     {
+        if (AssetImportWorkerProcess::IsCurrentProcess())
+            return false;
         AssetPipelineDiagnostic diagnostic;
         if (ArtifactStore::Recover(Globals::ProjectLibraryFolder, diagnostic))
         {

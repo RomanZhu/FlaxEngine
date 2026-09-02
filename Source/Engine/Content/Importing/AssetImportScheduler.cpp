@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetImportScheduler.h"
+#include "Engine/Platform/FileSystem.h"
 #include <memory>
 
 namespace
@@ -129,8 +130,11 @@ AssetBuildRequestHandle AssetImportScheduler::ScheduleIsolated(const AssetImport
         request.OutputKinds.Add(output.Kind);
     request.Build = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& buildDiagnostic)
     {
-        return AssetImportWorkerProcess::Run(execution->WorkerExecutable, execution->Request, cancellation,
+        const bool failed = AssetImportWorkerProcess::Run(execution->WorkerExecutable, execution->Request, cancellation,
             execution->Result, buildDiagnostic);
+        if (failed && FileSystem::DirectoryExists(execution->Request.OutputStagingPath))
+            FileSystem::DeleteDirectory(execution->Request.OutputStagingPath, true);
+        return failed;
     };
     request.Publish = [execution](const AssetCancellationToken& cancellation, AssetPipelineDiagnostic& publicationDiagnostic)
     {

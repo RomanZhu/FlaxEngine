@@ -13,6 +13,7 @@
 #include "Engine/Serialization/FileWriteStream.h"
 #include "Engine/Serialization/FileReadStream.h"
 #include "Engine/Content/AssetDatabase/AssetMeta.h"
+#include "Engine/Content/Importing/AssetImportWorkerProtocol.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/MessageBox.h"
@@ -86,6 +87,8 @@ void Editor::CloseSplashScreen()
 
 bool Editor::CheckProjectVersionCompatibility()
 {
+    if (AssetImportWorkerProcess::IsCurrentProcess())
+        return false;
     PROFILE_MEM(Editor);
     const auto versionFilePath = Globals::ProjectCacheFolder / TEXT("version");
 

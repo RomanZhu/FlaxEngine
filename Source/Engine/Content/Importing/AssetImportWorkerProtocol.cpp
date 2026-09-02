@@ -599,6 +599,13 @@ bool AssetImportWorkerProtocol::ValidateResult(const AssetImportJobRequest& requ
         if (!allowed)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::UndeclaredInput, TEXT("Isolated import worker observed an unapproved toolchain."));
     }
+    if (result.Status != AssetImportWorkerStatus::Succeeded)
+    {
+        diagnostic = result.Diagnostics.HasItems() ? result.Diagnostics[0] : AssetPipelineDiagnostic();
+        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
+            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, TEXT("Isolated import worker failed without a diagnostic."));
+        return true;
+    }
     for (const AssetImportDependency& dependency : result.Dependencies)
     {
         if (dependency.Kind > AssetImportDependencyKind::LogicalPath)
@@ -631,16 +638,11 @@ bool AssetImportWorkerProtocol::ValidateResult(const AssetImportJobRequest& requ
             mainObjects++;
     }
     if ((request.Importer.ProducesMainObject && mainObjects != 1) || (!request.Importer.ProducesMainObject && mainObjects != 0))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, TEXT("Isolated import worker declared an invalid main object count."));
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid,
+            String::Format(TEXT("Isolated import worker declared {0} main objects; importer requires {1}."),
+                mainObjects, request.Importer.ProducesMainObject ? 1 : 0));
     if (!request.Importer.ProducesSubObjects && result.Objects.Count() > mainObjects)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, TEXT("Isolated import worker declared unsupported sub-objects."));
-    if (result.Status != AssetImportWorkerStatus::Succeeded)
-    {
-        diagnostic = result.Diagnostics.HasItems() ? result.Diagnostics[0] : AssetPipelineDiagnostic();
-        if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::BuildFailed, TEXT("Isolated import worker failed without a diagnostic."));
-        return true;
-    }
     if (!FileSystem::DirectoryExists(request.OutputStagingPath))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactMissing, TEXT("Isolated import output staging directory is missing."));
     uint64 outputBytes = 0;

@@ -1,6 +1,9 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetImportService.h"
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+#include "CallbackImporterPipelineService.h"
+#endif
 #include <memory>
 #include <mutex>
 
@@ -150,6 +153,11 @@ GET_IMPORT_SERVICE_MEMBER(GetRefreshCoordinator, Refresh, AssetRefreshCoordinato
 
 void AssetImportService::Shutdown()
 {
+#if COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
+    // Terminal handles retain build callbacks and importer leases after the build service drains.
+    // Release them while their registry still owns the referenced registrations.
+    CallbackImporterPipelineService::Shutdown();
+#endif
     AssetImportServiceState& state = State();
     std::lock_guard<std::mutex> lock(state.Locker);
     state.Scheduler.reset();

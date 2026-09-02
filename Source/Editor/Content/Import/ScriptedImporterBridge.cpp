@@ -180,7 +180,17 @@ namespace
         const bool importFailed = descriptor.Import(context, diagnostic);
         CurrentWorkerRequest = nullptr;
         if (importFailed)
+        {
+            for (const AssetPipelineDiagnostic& item : context.GetDiagnostics())
+            {
+                if (item.Severity == AssetPipelineDiagnosticSeverity::Error)
+                {
+                    diagnostic = item;
+                    break;
+                }
+            }
             return true;
+        }
         AssetImportContextResult contextResult;
         if (context.Complete(descriptor.ProducesMainObject, contextResult, diagnostic))
             return true;

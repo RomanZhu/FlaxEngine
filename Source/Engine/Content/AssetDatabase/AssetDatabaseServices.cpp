@@ -2259,6 +2259,9 @@ Guid AssetDatabaseQueryService::GetCurrentRuntimeArtifactCacheID(const Guid& obj
     request.Target = resolver.GetDefaultTarget();
     request.OutputKind = "runtime";
     request.Policy = ArtifactResolvePolicy::NoBuild;
+    AssetProcessorDescriptor processorDescriptor;
+    if (AssetProcessorRegistry::Get().TryGetDescriptor(record.ProcessorID, processorDescriptor) && processorDescriptor.Outputs.Count())
+        request.RequiredCompatibility = processorDescriptor.Outputs[0].CompatibilityTag;
     ResolvedArtifact artifact;
     AssetPipelineDiagnostic diagnostic;
     ArtifactKey key;
