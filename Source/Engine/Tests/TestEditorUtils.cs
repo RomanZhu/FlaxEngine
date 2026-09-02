@@ -690,6 +690,7 @@ namespace FlaxEngine.Tests
                 var tests = new TestEditorUtils();
                 tests.TestMixedFolderCopyUsesOneOrderedNativeBatch();
                 tests.TestNativePresentationExcludesRolledBackPartialPaths();
+                tests.TestContentCopyRejectsFolderAndCrossTypeCollisions();
             }
             catch (Exception ex)
             {
