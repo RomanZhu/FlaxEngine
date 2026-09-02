@@ -1413,10 +1413,7 @@ namespace FlaxEditor.Modules
             var contentWindow = Editor?.Windows?.ContentWin;
             if (contentWindow != null && retainedPaths.Length != 0)
             {
-                var selected = retainedPaths.Select(path =>
-                    AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record)
-                        ? (ContentItem)FindAsset(record.ID) ?? Find(path)
-                        : Find(path)).Where(item => item != null).ToArray();
+                var selected = retainedPaths.Select(ResolveMutationSelection).Where(item => item != null).ToArray();
                 if (selected.Length != 0)
                 {
                     contentWindow.ClearSelection(false);
@@ -1428,6 +1425,16 @@ namespace FlaxEditor.Modules
             NativePresentationObserver?.Invoke(result, retainedPaths);
 #endif
             return result;
+        }
+
+        private ContentItem ResolveMutationSelection(string path)
+        {
+            if (!AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record))
+                return Find(path);
+            var item = (ContentItem)FindAsset(record.ID) ?? Find(path);
+            if (item != null && !string.Equals(item.Path, record.SourcePath, StringComparison.Ordinal))
+                item.UpdatePath(record.SourcePath);
+            return item;
         }
 
         /// <summary>
