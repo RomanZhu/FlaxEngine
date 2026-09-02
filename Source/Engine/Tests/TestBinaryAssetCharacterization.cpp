@@ -274,7 +274,7 @@ TEST_CASE("Binary asset storage switch succeeds or restores old storage")
     CHECK(ArtifactLease::GetCount(concurrentPath) == 0);
 }
 
-#if COMPILE_WITH_MODEL_TOOL && COMPILE_WITH_ASSETS_IMPORTER
+#if COMPILE_WITH_MODEL_TOOL && COMPILE_WITH_ASSETS_IMPORTER && USE_EDITOR
 TEST_CASE("Model child storage switch uses source local package identity")
 {
     const String root = Globals::ProjectCacheFolder / TEXT("Tests/ModelChildStorageSwitch");
@@ -289,7 +289,11 @@ TEST_CASE("Model child storage switch uses source local package identity")
     SCOPE_EXIT
     {
         if (asset)
-            Delete(asset);
+        {
+            Content::UnloadAsset(asset);
+            asset = nullptr;
+            ObjectsRemovalService::Flush();
+        }
         ContentStorageManager::EnsureAccess(initialPath);
         ContentStorageManager::EnsureAccess(replacementPath);
         FileSystem::DeleteDirectory(root, true);
@@ -322,7 +326,9 @@ TEST_CASE("Model child storage switch uses source local package identity")
     REQUIRE(factory);
     asset = static_cast<RawDataAsset*>(factory->New(location));
     REQUIRE(asset);
-    REQUIRE_FALSE(asset->WaitForLoaded());
+    REQUIRE_FALSE(asset->Storage->Load());
+    REQUIRE_FALSE(factory->Init(asset));
+    REQUIRE_FALSE(asset->LoadChunk(0));
 
     AssetRecord child;
     child.ID = childId;
