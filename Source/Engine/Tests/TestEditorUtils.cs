@@ -2295,7 +2295,12 @@ namespace FlaxEngine.Tests
                     x.Value<long>("fileId") == placed.LocalFileId &&
                     x.Value<string>("type") == typeof(StaticModel).FullName);
                 Assert.NotNull(savedActor, "Saved scene source omitted the Project-panel actor's persistent local file ID.");
-                StringAssert.Contains(modelId.ToString("N"), savedSource, "Saved scene source omitted the dropped model reference.");
+                var savedModelToken = savedActor.SelectToken("$..Model");
+                var savedModelText = savedModelToken?.Type == JTokenType.String
+                    ? savedModelToken.Value<string>()
+                    : savedModelToken?["guid"]?.Value<string>();
+                Assert.IsTrue(AssetGuid.TryParse(savedModelText, out var savedModelGuid), "Saved scene source omitted the dropped model reference.");
+                Assert.AreEqual(modelId, savedModelGuid.Value, "Saved scene source changed the dropped model identity.");
                 Assert.IsFalse(Level.UnloadScene(sourceScene));
                 sourceScene = null;
                 Scripting.FlushRemovedObjects();
