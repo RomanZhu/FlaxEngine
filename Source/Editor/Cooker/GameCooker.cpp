@@ -12,6 +12,7 @@
 #include "Engine/Scripting/BinaryModule.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Engine/EngineService.h"
 #include "Engine/Engine/Globals.h"
@@ -646,6 +647,34 @@ void GameCooker::GetCurrentPlatform(PlatformType& platform, BuildPlatform& build
     default: ;
     }
 }
+
+#if FLAX_TESTS
+bool GameCooker::ValidateBinaryAssetCookForTesting(const Guid& objectID)
+{
+    Asset* asset = Content::LoadAsset<Asset>(objectID, 300000.0);
+    BinaryAsset* binaryAsset = dynamic_cast<BinaryAsset*>(asset);
+    if (!binaryAsset || !binaryAsset->Storage)
+        return true;
+
+    AssetInitData initData;
+    if (binaryAsset->Storage->LoadAssetHeader(objectID, initData))
+        return true;
+    initData.Header.UnlinkChunks();
+    initData.Metadata.Release();
+    initData.Dependencies.Clear();
+
+    CookingData* data = New<CookingData>();
+    CookAssetsStep::CacheData cache;
+    CookAssetsStep::FileDependenciesList dependencies;
+    CookAssetsStep::AssetCookData options { *data, cache, initData, binaryAsset, dependencies };
+    const bool failed = CookAssetsStep::ProcessDefaultAsset(options);
+    const bool invalid = initData.Header.ID != objectID || initData.Header.TypeName != binaryAsset->GetTypeName() ||
+                         initData.Header.Chunks[0] == nullptr;
+    initData.Header.DeleteChunks();
+    data->DeleteObject();
+    return failed || invalid;
+}
+#endif
 
 void GameCookerImpl::CallEvent(GameCooker::EventType type)
 {

@@ -866,6 +866,23 @@ TEST_CASE("Reduced production validation fixture stages every representative fam
 #endif
 }
 
+TEST_CASE("Representative GLB model family survives editor lifecycle invalidation and cook")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestProductionValidationFixture");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunRepresentativeModelFamilyLifecycleAndCook", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestProductionValidationFixture"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
+}
+
 TEST_CASE("Project panel preserves authored particle and collision text lifecycle")
 {
 #if USE_CSHARP && USE_NETCORE
