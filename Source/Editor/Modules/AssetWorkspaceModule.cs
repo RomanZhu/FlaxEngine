@@ -1469,8 +1469,8 @@ namespace FlaxEditor.Modules
                         return PresentNativeMutationResult(failed, new[] { item.Path, targetPath });
                     }
                     ContentMutationDiagnostics.Log("mutation.copy.committed", $"source='{item.Path}'; destination='{targetPath}'; native=true");
-                    var result = ContentMutationResult.Success(item.Path, targetPath, completedPaths: new[] { targetPath });
-                    return PresentNativeMutationResult(result, new[] { item.Path, targetPath });
+                    var nativeResult = ContentMutationResult.Success(item.Path, targetPath, completedPaths: new[] { targetPath });
+                    return PresentNativeMutationResult(nativeResult, new[] { item.Path, targetPath });
                 }
             }
 
@@ -1507,9 +1507,9 @@ namespace FlaxEditor.Modules
                         new[] { entry.SourcePath, entry.DestinationPath }));
                 }
                 ContentMutationDiagnostics.Log("mutation.copy.committed", $"items={requests.Count}; entries={nativeEntries.Length}; nativeBatch=true");
-                var result = ContentMutationResult.Success(nativeEntries[0].SourcePath,
+                var nativeResult = ContentMutationResult.Success(nativeEntries[0].SourcePath,
                     nativeEntries[0].DestinationPath, completedPaths: nativeCompletedPaths);
-                return PresentNativeMutationResult(result, nativeEntries.SelectMany(entry =>
+                return PresentNativeMutationResult(nativeResult, nativeEntries.SelectMany(entry =>
                     new[] { entry.SourcePath, entry.DestinationPath }));
             }
 
