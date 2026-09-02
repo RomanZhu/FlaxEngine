@@ -1757,6 +1757,13 @@ namespace FlaxEngine.Tests
                         "Published particle artifact did not renew visible thumbnail demand.");
                     Assert.IsTrue(emitterItem.Thumbnail.IsValid,
                         "Publication discarded the last-good thumbnail before its replacement was ready.");
+                    Assert.IsFalse(emitterItem.ExpireThumbnailDemand(Engine.FrameCount + 2),
+                        "The save-reconciliation regression requires a transient visibility lapse.");
+                    Assert.IsFalse(emitterItem.IsThumbnailRequestQueuedForTesting,
+                        "Cancelling the post-save request left its queued state stuck.");
+                    emitterItem.RequestThumbnail(thumbnailOwner);
+                    Assert.IsTrue(FlaxEditor.Editor.Instance.Thumbnails.HasDeferredPreviewForTesting(emitterItem),
+                        "Restored Project-tree visibility did not requeue the cancelled post-save thumbnail.");
                     emitterItem.RemoveReference(thumbnailOwner);
 
                     emitterItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Document128;
