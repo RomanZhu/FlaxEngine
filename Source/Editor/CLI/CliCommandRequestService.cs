@@ -869,6 +869,8 @@ namespace FlaxEditor
 
     internal sealed partial class CliRequestService
     {
+        private static readonly TimeSpan CommandStartupTimeout = TimeSpan.FromMinutes(2);
+
         private void ExecuteCommand()
         {
             var options = _request.Command ?? throw new InvalidOperationException("The command request payload is missing.");
@@ -876,6 +878,46 @@ namespace FlaxEditor
                 throw new InvalidOperationException("The command action is missing.");
 
             TryWriteEvent(new { type = "started", requestId = _request.RequestId, operation = _request.Operation, action = options.Action, name = options.Name });
+            if (!Editor.Instance.StateMachine.CurrentState.IsEditorReady)
+            {
+                DeferCommandUntilScriptsLoad(options);
+                return;
+            }
+            ExecuteCommand(options);
+        }
+
+        private void DeferCommandUntilScriptsLoad(CliCommandOptions options)
+        {
+            var deadline = DateTime.UtcNow + CommandStartupTimeout;
+            TryWriteEvent(new { type = "phase", requestId = _request.RequestId, name = "WaitingForProjectScripts" });
+            Action update = null;
+            update = () =>
+            {
+                var ready = EvaluateCommandStartup(Editor.Instance.StateMachine.CurrentState.IsEditorReady, DateTime.UtcNow, deadline, out var timedOut);
+                if (ready)
+                {
+                    Editor.Instance.EditorUpdate -= update;
+                    ExecuteCommand(options);
+                }
+                else if (timedOut)
+                {
+                    Editor.Instance.EditorUpdate -= update;
+                    CompleteCommand(null, false,
+                        new[] { new CliCommandMessage("FLX-COMMAND-STARTUP-0006", "Timed out waiting for project scripts to load.") },
+                        Array.Empty<CliCommandMessage>());
+                }
+            };
+            Editor.Instance.EditorUpdate += update;
+        }
+
+        internal static bool EvaluateCommandStartup(bool scriptsLoaded, DateTime utcNow, DateTime deadline, out bool timedOut)
+        {
+            timedOut = !scriptsLoaded && utcNow >= deadline;
+            return scriptsLoaded;
+        }
+
+        private void ExecuteCommand(CliCommandOptions options)
+        {
             try
             {
                 var commands = CliCommandRegistry.Discover();
