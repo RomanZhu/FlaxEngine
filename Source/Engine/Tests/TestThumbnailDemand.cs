@@ -55,6 +55,12 @@ namespace FlaxEngine.Tests
             Assert.AreEqual(0, item.ReferencesCount);
             item.Dispose();
         }
+
+        public static int RunOrdinaryOwnershipDoesNotCreateThumbnailDemand()
+        {
+            new TestThumbnailDemand().OrdinaryOwnershipDoesNotCreateThumbnailDemand();
+            return 0;
+        }
     }
 }
 #endif
