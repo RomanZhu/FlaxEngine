@@ -135,7 +135,7 @@ namespace FlaxEditor.Content
                     {
                         var index = step.EntryIndices[j];
                         if ((uint)index < (uint)_plan.Entries.Count)
-                            rolledBackPaths.Add(_plan.Entries[index].SourcePath);
+                            rolledBackPaths.Add(_plan.Entries[index].DestinationPath);
                     }
                 }
                 catch (Exception ex)

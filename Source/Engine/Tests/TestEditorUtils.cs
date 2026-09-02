@@ -1029,6 +1029,10 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(result.Succeeded);
                 Assert.IsTrue(File.Exists(source));
                 Assert.IsFalse(File.Exists(destination));
+                var normalizedDestination = ContentMutationPathUtils.Normalize(destination);
+                CollectionAssert.AreEqual(new[] { normalizedDestination }, result.CompletedPaths);
+                CollectionAssert.AreEqual(new[] { normalizedDestination }, result.RolledBackPaths);
+                Assert.IsEmpty(AssetWorkspaceModule.GetRetainedMutationPaths(result));
             }
             finally
             {
@@ -1070,6 +1074,14 @@ namespace FlaxEngine.Tests
                 ContentMutationTransaction.FaultInjector = null;
                 Directory.Delete(root, true);
             }
+        }
+
+        public static int RunContentMutationRollbackTests()
+        {
+            var tests = new TestEditorUtils();
+            tests.TestContentTransactionInjectedFailureRollsBackImmediately();
+            tests.TestContentTransactionRollbackFailureIsStructured();
+            return 0;
         }
 
         [Test]

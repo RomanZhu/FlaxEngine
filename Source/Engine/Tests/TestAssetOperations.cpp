@@ -778,6 +778,23 @@ TEST_CASE("Project panel routes canonical multi-copy through native batch")
 #endif
 }
 
+TEST_CASE("Managed content mutations roll back in process without journals")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestEditorUtils");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunContentMutationRollbackTests", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestEditorUtils"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
+}
+
 TEST_CASE("Project panel and scripting route single canonical pairs through native mutations")
 {
 #if USE_CSHARP && USE_NETCORE
