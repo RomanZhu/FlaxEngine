@@ -2334,8 +2334,10 @@ namespace FlaxEngine.Tests
                 Scripting.FlushRemovedObjects();
                 Assert.IsFalse(Level.LoadScene(sourceRecord.ID));
                 sourceScene = Level.FindScene(sourceRecord.ID);
-                Assert.NotNull(sourceScene?.FindActor<StaticModel>(placedName));
-                Assert.AreEqual(modelId, sourceScene.FindActor<StaticModel>(placedName).Model.ID);
+                Assert.NotNull(sourceScene, "Saved source scene was not loaded for reopen.");
+                var reopenedModel = sourceScene.FindActor<StaticModel>(placedName);
+                Assert.NotNull(reopenedModel, "Project-panel model actor was missing after same-scene reopen.");
+                Assert.AreEqual(modelId, reopenedModel.Model.ID, "Reopened actor did not retain the dropped model identity.");
 
                 var sourceItem = FlaxEditor.Editor.Instance.ContentDatabase.FindAsset(sourceRecord.ID) as AssetItem;
                 if (sourceItem == null)

@@ -11,6 +11,8 @@
 #include "SceneFragments/SceneFragmentReconciler.h"
 #include "SceneFragments/SceneFragmentStore.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/BinaryAsset.h"
+#include "Engine/Content/Artifacts/ArtifactResolver.h"
 #include "Engine/Content/Deprecated.h"
 #include "Engine/Content/JsonAsset.h"
 #include "Engine/Core/Cache.h"
@@ -2144,6 +2146,30 @@ bool ReloadSavedSceneAsset(const Guid& sceneId, const StringView& path)
         asset = Content::GetAsset(path);
     if (!asset)
         return false;
+#if COMPILE_WITH_ASSETS_IMPORTER
+    if (BinaryAsset* binary = ScriptingObject::Cast<BinaryAsset>(asset))
+    {
+        ArtifactRequest request;
+        request.Object = AssetObjectId::Main(AssetGuid(sceneId));
+        request.Target = ArtifactResolver::Get().GetDefaultTarget();
+        request.OutputKind = "runtime";
+        request.Policy = ArtifactResolvePolicy::NoBuild;
+        ResolvedArtifact artifact;
+        AssetPipelineDiagnostic diagnostic;
+        if (ArtifactResolver::Get().Resolve(request, artifact, diagnostic))
+        {
+            LOG(Error, "Cannot resolve published scene artifact '{0}': {1}", path, diagnostic.Message);
+            return true;
+        }
+        const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
+        if (result != BinaryAssetStorageSwitchResult::Success)
+        {
+            LOG(Error, "Cannot switch to published scene artifact '{0}'. Result: {1}", path, static_cast<int32>(result));
+            return true;
+        }
+        return false;
+    }
+#endif
     asset->Reload();
     if (asset->WaitForLoaded())
     {
