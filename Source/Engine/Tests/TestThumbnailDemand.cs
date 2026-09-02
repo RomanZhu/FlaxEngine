@@ -249,6 +249,31 @@ namespace FlaxEngine.Tests
                 "Initial demand must resume automatically once rendering and cache lookup are ready.");
         }
 
+        [Test]
+        public void ExpiredDeferredTreeDemandCanRenew()
+        {
+            var item = new ContentFolder(ContentFolderType.Content, Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")), null);
+            var owner = new Owner();
+            item.AddReference(owner);
+            Editor.Instance.Thumbnails.DeferPreviewForTesting(item);
+            item.RequestThumbnail(owner);
+
+            Assert.IsTrue(item.HasThumbnailReference);
+            Assert.IsTrue(item.IsThumbnailRequestQueuedForTesting);
+            Assert.IsTrue(Editor.Instance.Thumbnails.HasDeferredPreviewForTesting(item));
+
+            Assert.IsFalse(item.ExpireThumbnailDemand(Engine.FrameCount + 2));
+            Assert.IsFalse(item.IsThumbnailRequestQueuedForTesting, "Cancelling expired deferred work must clear its queued state.");
+            Assert.IsFalse(Editor.Instance.Thumbnails.HasDeferredPreviewForTesting(item));
+
+            item.RequestThumbnail(owner);
+            Assert.IsTrue(item.HasThumbnailReference, "The same visible owner must be able to renew demand.");
+            Assert.IsTrue(item.Thumbnail.IsValid, "Renewed demand must dispatch instead of remaining blocked by stale queued state.");
+
+            item.RemoveReference(owner);
+            item.Dispose();
+        }
+
         public static int RunOrdinaryOwnershipDoesNotCreateThumbnailDemand()
         {
             var tests = new TestThumbnailDemand();
@@ -263,6 +288,7 @@ namespace FlaxEngine.Tests
             tests.RestoredVisibleTreeRowsRenewDemandWithoutDraw();
             tests.TreeRowsDetachBeforeDeletedOrDisposedItemsCanDrawAgain();
             tests.InitialTreeDemandWaitsForThumbnailCacheReadiness();
+            tests.ExpiredDeferredTreeDemandCanRenew();
             return 0;
         }
     }

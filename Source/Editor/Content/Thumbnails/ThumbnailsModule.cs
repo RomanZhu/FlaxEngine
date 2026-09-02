@@ -183,15 +183,34 @@ namespace FlaxEditor.Content.Thumbnails
         /// <param name="item">The item.</param>
         internal void CancelPreviewRequest(ContentItem item)
         {
-            _pendingRequests.Remove(item);
+            var cancelled = _pendingRequests.Remove(item);
             _pendingForcedRequests.Remove(item);
             _pendingHighPriorityRequests.Remove(item);
             if (item is AssetItem assetItem)
             {
                 lock (_requests)
-                    RemoveRequest(assetItem);
+                {
+                    var request = FindRequest(assetItem);
+                    if (request != null)
+                    {
+                        RemoveRequest(request);
+                        cancelled = true;
+                    }
+                }
             }
+            if (cancelled)
+                item.NotifyThumbnailRequestCancelled();
         }
+
+#if FLAX_TESTS
+        internal void DeferPreviewForTesting(ContentItem item)
+        {
+            item.NotifyThumbnailRequestQueued(false);
+            _pendingRequests.Add(item);
+        }
+
+        internal bool HasDeferredPreviewForTesting(ContentItem item) => _pendingRequests.Contains(item);
+#endif
 
         /// <summary>
         /// Deletes the item preview from the cache.
