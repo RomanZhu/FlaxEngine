@@ -1260,13 +1260,13 @@ TEST_CASE("Asset operations remap inline scene references to the copied scene")
     writer.JKEY("fileId");
     writer.Int64(1);
     writer.JKEY("type");
-    writer.String("FlaxEngine.Scene");
+    writer.String("FlaxEngine.Scene", ARRAY_COUNT("FlaxEngine.Scene") - 1);
     writer.EndObject();
     writer.StartObject();
     writer.JKEY("fileId");
     writer.Int64(2);
     writer.JKEY("type");
-    writer.String("FlaxEngine.Sky");
+    writer.String("FlaxEngine.Sky", ARRAY_COUNT("FlaxEngine.Sky") - 1);
     writer.JKEY("parentFileId");
     writer.Int64(1);
     writer.JKEY("Sun");
@@ -1285,7 +1285,7 @@ TEST_CASE("Asset operations remap inline scene references to the copied scene")
     writer.JKEY("fileId");
     writer.Int64(3);
     writer.JKEY("type");
-    writer.String("FlaxEngine.DirectionalLight");
+    writer.String("FlaxEngine.DirectionalLight", ARRAY_COUNT("FlaxEngine.DirectionalLight") - 1);
     writer.JKEY("parentFileId");
     writer.Int64(1);
     writer.EndObject();
@@ -1303,8 +1303,11 @@ TEST_CASE("Asset operations remap inline scene references to the copied scene")
     Guid copiedGuid;
     REQUIRE_FALSE(operations.CopyAsset(target, copied, copiedGuid, diagnostic));
 
+    BytesContainer copiedBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(copied, copiedBytes));
     rapidjson_flax::Document copiedDocument;
-    ParseJsonFile(copiedDocument, copied);
+    copiedDocument.Parse(copiedBytes.Get<char>(), copiedBytes.Length());
+    REQUIRE_FALSE(copiedDocument.HasParseError());
     const auto objects = copiedDocument.FindMember("objects");
     REQUIRE(objects != copiedDocument.MemberEnd());
     REQUIRE(objects->value.IsArray());

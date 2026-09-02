@@ -7,7 +7,7 @@ using System.IO;
 using System.Linq;
 using FlaxEditor;
 using FlaxEditor.Content;
-using FlaxEditor.Undo.Actions;
+using FlaxEditor.Actions;
 using NUnit.Framework;
 
 namespace FlaxEngine.Tests
