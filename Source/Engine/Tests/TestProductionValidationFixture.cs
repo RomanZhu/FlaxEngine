@@ -62,7 +62,9 @@ namespace FlaxEngine.Tests
             {
                 fixture = ProductionValidationFixture.Create();
                 root = fixture.RootPath;
+                stage = "initial source refresh";
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
+                stage = "initial subasset reconcile";
                 Assert.IsFalse(ModelImporterService.ReconcileSubAssets(fixture.ModelId));
                 stage = "expanded family import";
                 WriteTwoMeshGlb(fixture.ModelPath, false);
