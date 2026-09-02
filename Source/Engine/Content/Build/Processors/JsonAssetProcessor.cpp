@@ -344,6 +344,17 @@ bool JsonAssetProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& pr
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, AssetPipelineDiagnosticStage::Prepare,
                     record.ID, record.SourcePath.Get(), fragmentError);
             }
+            ArtifactKeyBuilder fragmentSetBuilder(StringAnsiView("flax-scene-fragment-source-set-v1"));
+            fragmentSetBuilder.AddUInt32(StringAnsiView("fragment-count"), fragmentIndex.Fragments.Count());
+            for (int32 i = 0; i < fragmentIndex.Fragments.Count(); i++)
+            {
+                fragmentSetBuilder.AddUInt64(StringAnsi::Format("fragment-root-{0}", i), fragmentIndex.Fragments[i].RootActorLocalId);
+                fragmentSetBuilder.AddHash(StringAnsi::Format("fragment-content-{0}", i), fragmentIndex.Fragments[i].Content);
+            }
+            AssetDependencyOrigin fragmentOrigin;
+            fragmentOrigin.Path = SceneFragmentStore::GetScenePath(context.GetProjectRoot(), record.SourceAssetID) / TEXT("scene-fragments.index");
+            if (context.DeclareToolchain(TEXT("scene-fragment-source-set"), fragmentSetBuilder.Finalize().Digest, fragmentOrigin, diagnostic))
+                return true;
             for (int32 i = 0; i < fragmentIndex.Fragments.Count(); i++)
             {
                 const SceneFragmentIndexEntry& indexEntry = fragmentIndex.Fragments[i];

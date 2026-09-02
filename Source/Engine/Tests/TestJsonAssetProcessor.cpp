@@ -352,4 +352,42 @@ TEST_CASE("External actor scene preparation embeds project-root fragments for se
     CHECK(runtime["Data"].Size() == 2);
 }
 
+TEST_CASE("External actor fragment edits and removals invalidate scene preparation")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("JsonExternalActorsInvalidation-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(library));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    const Guid sceneId = Guid::New();
+    const char sceneJson[] = R"({"sceneVersion":4,"externalActors":true,"objects":[{"fileId":1,"type":"FlaxEngine.Scene"}]})";
+    AssetPipelineDiagnostic diagnostic;
+    PreparedAsset initial;
+    REQUIRE_FALSE(WriteFragmentStore(root, sceneId,
+        R"([{"fileId":2,"type":"FlaxEngine.EmptyActor","parentFileId":1,"Name":"Initial"}])"));
+    REQUIRE_FALSE(PrepareDocument(root, content, library, TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), sceneId,
+        sceneJson, initial, diagnostic));
+
+    PreparedAsset edited;
+    REQUIRE_FALSE(WriteFragmentStore(root, sceneId,
+        R"([{"fileId":2,"type":"FlaxEngine.EmptyActor","parentFileId":1,"Name":"Edited"}])"));
+    REQUIRE_FALSE(PrepareDocument(root, content, library, TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), sceneId,
+        sceneJson, edited, diagnostic));
+    CHECK(edited.InputFingerprint != initial.InputFingerprint);
+
+    Array<SceneFragmentWrite> noFragments;
+    SceneFragmentSavePlan emptyPlan;
+    String error;
+    REQUIRE_FALSE(SceneFragmentStore::PrepareSave(sceneId, noFragments, emptyPlan, error));
+    const String indexPath = SceneFragmentStore::GetScenePath(root, sceneId) / TEXT("scene-fragments.index");
+    REQUIRE_FALSE(File::WriteAllBytes(indexPath, emptyPlan.IndexData.Get(), emptyPlan.IndexData.Count()));
+    PreparedAsset removed;
+    REQUIRE_FALSE(PrepareDocument(root, content, library, TEXT(".scene"), TEXT("FlaxEngine.SceneAsset"), sceneId,
+        sceneJson, removed, diagnostic));
+    CHECK(removed.InputFingerprint != edited.InputFingerprint);
+    CHECK(removed.InputFingerprint != initial.InputFingerprint);
+}
+
 #endif
