@@ -45,12 +45,35 @@ namespace FlaxEditor
             {
                 public readonly int VisiblePixels;
                 public readonly ulong Hash;
+                public readonly Color32[] Pixels;
 
-                public PixelWitness(int visiblePixels, ulong hash)
+                public PixelWitness(int visiblePixels, ulong hash, Color32[] pixels)
                 {
                     VisiblePixels = visiblePixels;
                     Hash = hash;
+                    Pixels = pixels;
                 }
+            }
+
+            private readonly struct PixelComparison
+            {
+                public readonly double MeanAbsoluteError;
+                public readonly double RootMeanSquareError;
+                public readonly double SimilarPixelRatio;
+                public readonly double VisiblePixelRatio;
+
+                public PixelComparison(double meanAbsoluteError, double rootMeanSquareError, double similarPixelRatio, double visiblePixelRatio)
+                {
+                    MeanAbsoluteError = meanAbsoluteError;
+                    RootMeanSquareError = rootMeanSquareError;
+                    SimilarPixelRatio = similarPixelRatio;
+                    VisiblePixelRatio = visiblePixelRatio;
+                }
+
+                public bool IsMatch => MeanAbsoluteError <= 4.0 &&
+                                       RootMeanSquareError <= 12.0 &&
+                                       SimilarPixelRatio >= 0.97 &&
+                                       VisiblePixelRatio >= 0.90;
             }
 
             private enum Stage
@@ -90,9 +113,12 @@ namespace FlaxEditor
             private ParticleEmitterProxy _particleProxy;
             private PreviewsCache _particleCache;
             private ulong _particleHash;
+            private ulong _particleReloadHash;
             private int _particlePixels;
             private int _materialPixels;
             private int _particleRenderCount;
+            private PixelWitness _savedParticleWitness;
+            private PixelComparison _particleCacheComparison;
             private bool _particleReferenced;
             private bool _materialReferenced;
             private Task<TextureData> _readbackTask;
@@ -296,6 +322,7 @@ namespace FlaxEditor
                 AssertParticleThumbnail(witness, "saved particle thumbnail");
                 _particlePixels = witness.VisiblePixels;
                 _particleHash = witness.Hash;
+                _savedParticleWitness = witness;
                 _particleCache = (PreviewsCache)thumbnail.Atlas;
                 _particleItem.RemoveReference(this);
                 _particleReferenced = false;
@@ -323,8 +350,19 @@ namespace FlaxEditor
                     throw new InvalidOperationException("Reloaded cache has no exact saved-particle thumbnail.");
                 if (!TryGetPixelWitness(thumbnail, out var witness))
                     return;
-                if (witness.VisiblePixels == 0 || witness.Hash != _particleHash)
-                    throw new InvalidOperationException("Reloaded cache did not preserve the saved particle pixels.");
+                _particleReloadHash = witness.Hash;
+                _particleCacheComparison = ComparePixels(_savedParticleWitness, witness);
+                if (witness.VisiblePixels == 0 || !_particleCacheComparison.IsMatch)
+                {
+                    throw new InvalidOperationException(
+                        $"Reloaded cache did not preserve the saved particle image: " +
+                        $"savedHash={_particleHash:x16}, reloadHash={_particleReloadHash:x16}, " +
+                        $"savedVisible={_particlePixels}, reloadVisible={witness.VisiblePixels}, " +
+                        $"meanAbsError={_particleCacheComparison.MeanAbsoluteError:F3}, " +
+                        $"rmsError={_particleCacheComparison.RootMeanSquareError:F3}, " +
+                        $"similarPixels={_particleCacheComparison.SimilarPixelRatio:P2}, " +
+                        $"visibleRetention={_particleCacheComparison.VisiblePixelRatio:P2}.");
+                }
                 _stage = Stage.RequestMaterialThumbnail;
             }
 
@@ -372,7 +410,18 @@ namespace FlaxEditor
                 _context.ReportProgress("Validated saved graph thumbnails", 1.0f);
                 Complete(CliCommandResult.Success(new
                 {
-                    particle = new { version = _particleVersion, visiblePixels = _particlePixels, pixelHash = _particleHash.ToString("x16"), cacheReloaded = true },
+                    particle = new
+                    {
+                        version = _particleVersion,
+                        visiblePixels = _particlePixels,
+                        pixelHash = _particleHash.ToString("x16"),
+                        reloadHash = _particleReloadHash.ToString("x16"),
+                        cacheMeanAbsoluteError = _particleCacheComparison.MeanAbsoluteError,
+                        cacheRootMeanSquareError = _particleCacheComparison.RootMeanSquareError,
+                        cacheSimilarPixelRatio = _particleCacheComparison.SimilarPixelRatio,
+                        cacheVisiblePixelRatio = _particleCacheComparison.VisiblePixelRatio,
+                        cacheReloaded = true,
+                    },
                     material = new { version = _materialVersion, visiblePixels = _materialPixels },
                 }));
             }
@@ -429,6 +478,40 @@ namespace FlaxEditor
                     throw new InvalidOperationException(name + " contains no visible pixels.");
             }
 
+            private static PixelComparison ComparePixels(PixelWitness saved, PixelWitness reloaded)
+            {
+                if (saved.Pixels == null || reloaded.Pixels == null || saved.Pixels.Length != reloaded.Pixels.Length || saved.Pixels.Length == 0)
+                    throw new InvalidOperationException("Saved and reloaded thumbnail dimensions do not match.");
+
+                long absoluteError = 0;
+                long squaredError = 0;
+                var similarPixels = 0;
+                for (var i = 0; i < saved.Pixels.Length; i++)
+                {
+                    var a = saved.Pixels[i];
+                    var b = reloaded.Pixels[i];
+                    var dr = Math.Abs(a.R - b.R);
+                    var dg = Math.Abs(a.G - b.G);
+                    var db = Math.Abs(a.B - b.B);
+                    var da = Math.Abs(a.A - b.A);
+                    absoluteError += dr + dg + db + da;
+                    squaredError += dr * dr + dg * dg + db * db + da * da;
+                    if (Math.Max(Math.Max(dr, dg), Math.Max(db, da)) <= 16)
+                        similarPixels++;
+                }
+
+                var channels = saved.Pixels.Length * 4.0;
+                var visibleMaximum = Math.Max(saved.VisiblePixels, reloaded.VisiblePixels);
+                var visibleRatio = visibleMaximum == 0
+                    ? 1.0
+                    : (double)Math.Min(saved.VisiblePixels, reloaded.VisiblePixels) / visibleMaximum;
+                return new PixelComparison(
+                    absoluteError / channels,
+                    Math.Sqrt(squaredError / channels),
+                    (double)similarPixels / saved.Pixels.Length,
+                    visibleRatio);
+            }
+
             private bool TryGetPixelWitness(SpriteHandle thumbnail, out PixelWitness witness)
             {
                 witness = default;
@@ -455,6 +538,7 @@ namespace FlaxEditor
                     var top = (int)_readbackLocation.Y;
                     var width = (int)_readbackSize.X;
                     var height = (int)_readbackSize.Y;
+                    var thumbnailPixels = new Color32[width * height];
                     var visible = 0;
                     ulong hash = 1469598103934665603UL;
                     for (var y = 0; y < height; y++)
@@ -463,7 +547,8 @@ namespace FlaxEditor
                         for (var x = 0; x < width; x++)
                         {
                             var pixel = pixels[row + x];
-                            if (y < height - 2 && pixel.R + pixel.G + pixel.B > 24)
+                            thumbnailPixels[y * width + x] = pixel;
+                            if (y < height - 2 && pixel.A > 8 && pixel.R + pixel.G + pixel.B > 24)
                                 visible++;
                             hash = (hash ^ pixel.R) * 1099511628211UL;
                             hash = (hash ^ pixel.G) * 1099511628211UL;
@@ -471,7 +556,7 @@ namespace FlaxEditor
                             hash = (hash ^ pixel.A) * 1099511628211UL;
                         }
                     }
-                    witness = new PixelWitness(visible, hash);
+                    witness = new PixelWitness(visible, hash, thumbnailPixels);
                     return true;
                 }
                 finally
