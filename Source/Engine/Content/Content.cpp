@@ -216,7 +216,7 @@ namespace
 #if PLATFORM_WINDOWS
             // Content mutations must be rename-only. MOVEFILE_COPY_ALLOWED can report failure
             // after copying and leave both paths behind if deleting the source is blocked.
-            if (MoveFileExW(*sourcePath, *destinationPath, MOVEFILE_WRITE_THROUGH) != 0)
+            if (MoveFileExW(*sourcePath, *destinationPath, 0) != 0)
                 return false;
             lastError = (uint32)GetLastError();
             if (attempt == 0)
@@ -246,7 +246,7 @@ namespace
             return true;
         const String destinationPath(destination);
         const String sourcePath(source);
-        if (MoveFileExW(*sourcePath, *destinationPath, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0)
+        if (MoveFileExW(*sourcePath, *destinationPath, MOVEFILE_REPLACE_EXISTING) != 0)
             return false;
         LOG(Warning, "Win32 failed to atomically move '{0}' to '{1}' (error 0x{2:x}).", source, destination, (uint32)GetLastError());
         return true;
@@ -277,7 +277,7 @@ namespace
             if (FileSystem::DirectoryExists(destination) || (destinationIsFile && FileSystem::GetFileSize(destination) != 0))
                 return true;
 
-            const DWORD flags = MOVEFILE_WRITE_THROUGH | (destinationIsFile ? MOVEFILE_REPLACE_EXISTING : 0);
+            const DWORD flags = destinationIsFile ? MOVEFILE_REPLACE_EXISTING : 0;
             if (MoveFileExW(*sourcePath, *destinationPath, flags) != 0)
             {
                 if (destinationIsFile)

@@ -1013,7 +1013,7 @@ namespace FlaxEditor.Modules
             }
 
             // Plain canonical source imports need no managed importer callback. Let the native
-            // operation own source, metadata, database publication, and crash recovery together.
+            // operation own source, metadata, database publication, and bounded rollback together.
             if (!destinationExisted && entry.GetType() == typeof(ImportFileEntry) &&
                 ((ImportFileEntry)entry).IsCanonicalSource)
             {
