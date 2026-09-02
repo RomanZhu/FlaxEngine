@@ -14,7 +14,7 @@ namespace FlaxEngine.Tests
         public static object ProjectCommand() => new { ready = true };
 
         [Test]
-        public void TestProjectOwnedCommandIsDeferredUntilScriptsLoad()
+        public void TestLoadedCommandDiscoveryAfterStartupGate()
         {
             var deadline = DateTime.UtcNow.AddSeconds(1);
             Assert.IsFalse(CliRequestService.EvaluateCommandStartup(false, DateTime.UtcNow, deadline, out var timedOut));
@@ -24,6 +24,14 @@ namespace FlaxEngine.Tests
 
             var command = CliCommandRegistry.RequireCommand(CliCommandRegistry.Discover(), "tests.project-command-after-load");
             Assert.AreEqual(typeof(TestCliCommandStartup).Assembly, command.Method.DeclaringType.Assembly);
+        }
+
+        [Test]
+        public void TestLoadedAssembliesAreAvailableWithoutEngineScriptingContext()
+        {
+            var assemblies = Utils.GetAssemblies();
+            CollectionAssert.Contains(assemblies, typeof(Utils).Assembly);
+            CollectionAssert.Contains(assemblies, typeof(TestCliCommandStartup).Assembly);
         }
 
         [Test]

@@ -191,7 +191,10 @@ namespace FlaxEngine
         public static Assembly[] GetAssemblies()
         {
 #if USE_NETCORE
-            return AssemblyLoadContext.Default.Assemblies.Concat(NativeInterop.scriptingAssemblyLoadContext.Assemblies).ToArray();
+            var scriptingContext = NativeInterop.scriptingAssemblyLoadContext;
+            return scriptingContext == null
+                ? AssemblyLoadContext.Default.Assemblies.ToArray()
+                : AssemblyLoadContext.Default.Assemblies.Concat(scriptingContext.Assemblies).ToArray();
 #else
             return AppDomain.CurrentDomain.GetAssemblies();
 #endif
