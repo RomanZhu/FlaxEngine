@@ -2264,9 +2264,11 @@ namespace FlaxEngine.Tests
             try
             {
                 FlaxEditor.CliAuthoringCommands.CreateScene(scenePath);
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(scenePath, out var sourceRecord));
-                Assert.IsFalse(AssetPipelineService.RebuildAsset(sourceRecord.ID, true));
-                Assert.IsFalse(Level.LoadScene(sourceRecord.ID));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { scenePath }, false), "Created scene source refresh failed.");
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(scenePath, out var sourceRecord), "Created scene was not registered.");
+                Assert.IsFalse(AssetPipelineService.RebuildAsset(sourceRecord.ID, true), "Created scene artifact build failed.");
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(sourceRecord.ID), "Created scene artifact was not current.");
+                Assert.IsFalse(Level.LoadScene(sourceRecord.ID), "Created scene failed to load.");
                 sourceScene = Level.FindScene(sourceRecord.ID);
                 Assert.NotNull(sourceScene);
                 FlaxEditor.Editor.Instance.Scene.SetActiveScene(sourceScene);
@@ -2276,7 +2278,7 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(model.WaitForLoaded());
                 var modelId = model.ID;
                 var modelItem = new ModelItem(model.Path, ref modelId, typeof(Model).FullName, typeof(Model));
-                Assert.IsTrue(SceneTreeWindow.PlaceAssetItems(new AssetItem[] { modelItem }, null, out var placedNodes));
+                Assert.IsTrue(SceneTreeWindow.PlaceAssetItems(new AssetItem[] { modelItem }, null, out var placedNodes), "Project-panel drop logic rejected the model.");
                 Assert.AreEqual(1, placedNodes.Count);
                 var placed = (placedNodes[0] as FlaxEditor.SceneGraph.ActorNode)?.Actor as StaticModel;
                 Assert.NotNull(placed);
@@ -2284,9 +2286,9 @@ namespace FlaxEngine.Tests
                 Assert.AreSame(model, placed.Model);
                 Assert.IsTrue(FlaxEditor.Editor.Instance.Scene.IsEdited(sourceScene));
 
-                Assert.IsTrue(FlaxEditor.Editor.Instance.Scene.SaveSceneSynchronously(sourceScene));
+                Assert.IsTrue(FlaxEditor.Editor.Instance.Scene.SaveSceneSynchronously(sourceScene), "Synchronous scene save failed or left the scene dirty.");
                 Assert.IsFalse(FlaxEditor.Editor.Instance.Scene.IsEdited(sourceScene));
-                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(sourceRecord.ID));
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(sourceRecord.ID), "Scene save did not publish the current artifact.");
                 Assert.IsFalse(Level.UnloadScene(sourceScene));
                 sourceScene = null;
                 Scripting.FlushRemovedObjects();
