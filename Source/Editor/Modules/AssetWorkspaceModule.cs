@@ -1413,7 +1413,10 @@ namespace FlaxEditor.Modules
             var contentWindow = Editor?.Windows?.ContentWin;
             if (contentWindow != null && retainedPaths.Length != 0)
             {
-                var selected = retainedPaths.Select(Find).Where(item => item != null).ToArray();
+                var selected = retainedPaths.Select(path =>
+                    AssetDatabaseQueryService.TryGetMainRecordAtPath(path, out var record)
+                        ? (ContentItem)FindAsset(record.ID) ?? Find(path)
+                        : Find(path)).Where(item => item != null).ToArray();
                 if (selected.Length != 0)
                 {
                     contentWindow.ClearSelection(false);
