@@ -1,6 +1,7 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;
@@ -47,5 +48,10 @@ namespace FlaxEditor.Content
                 throw new Exception("Failed to create new asset.");
         }
 
+        /// <inheritdoc />
+        public override bool CanDrawThumbnail(ThumbnailRequest request)
+        {
+            return _preview.HasLoadedAssets && ThumbnailsModule.HasMinimumQuality((MaterialInstance)request.Asset);
+        }
     }
 }

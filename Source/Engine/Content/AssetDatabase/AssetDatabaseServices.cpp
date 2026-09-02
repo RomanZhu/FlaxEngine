@@ -2221,7 +2221,7 @@ Guid AssetDatabaseQueryService::GetBackingAssetID(const Guid& objectID)
     if (!objectID.IsValid() || EnsureDatabaseLoaded())
         return Guid::Empty;
     AssetRecord record;
-    return AssetDatabase::Get().TryGetRecord(objectID, record) && IsFacadeRecord(record) ? record.ID : Guid::Empty;
+    return AssetDatabase::Get().TryGetRecord(objectID, record) && IsFacadeRecord(record) ? record.SourceAssetID : Guid::Empty;
 }
 
 String AssetDatabaseQueryService::GetCanonicalSourcePath(const Guid& assetID)
@@ -2230,6 +2230,30 @@ String AssetDatabaseQueryService::GetCanonicalSourcePath(const Guid& assetID)
     return assetID.IsValid() && AssetDatabase::Get().TryGetRecord(assetID, record) && IsFacadeRecord(record)
         ? String(record.SourcePath.Get())
         : String::Empty;
+}
+
+Guid AssetDatabaseQueryService::GetCurrentRuntimeArtifactCacheID(const Guid& objectID)
+{
+#if USE_EDITOR
+    ArtifactResolver& resolver = ArtifactResolver::Get();
+    AssetRecord record;
+    if (!resolver.IsConfigured() || !objectID.IsValid() || EnsureDatabaseLoaded() ||
+        !AssetDatabase::Get().TryGetRecord(objectID, record) || !IsFacadeRecord(record))
+        return Guid::Empty;
+    ArtifactRequest request;
+    request.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+    request.Target = resolver.GetDefaultTarget();
+    request.OutputKind = "runtime";
+    request.Policy = ArtifactResolvePolicy::NoBuild;
+    ResolvedArtifact artifact;
+    AssetPipelineDiagnostic diagnostic;
+    ArtifactKey key;
+    if (resolver.Resolve(request, artifact, diagnostic) || !artifact.IsExact || ArtifactKey::Parse(artifact.Key, key))
+        return Guid::Empty;
+    return Guid(key.Digest.Values[0], key.Digest.Values[1], key.Digest.Values[2], key.Digest.Values[3]);
+#else
+    return Guid::Empty;
+#endif
 }
 
 Asset* AssetDatabaseQueryService::LoadAssetPreview(const Guid& objectID)

@@ -204,6 +204,7 @@ namespace FlaxEditor.Content
         private static ContentItem _lastHighlightedItem;
         private readonly List<IContentItemOwner> _references = new List<IContentItemOwner>(4);
 
+        private SpriteHandle _thumbnail;
         private SpriteHandle _shadowIcon;
 
         /// <summary>
@@ -298,9 +299,18 @@ namespace FlaxEditor.Content
         /// <summary>
         /// Gets the default static icon of the content item.
         /// </summary>
-        public virtual SpriteHandle DefaultThumbnail => Editor.Instance.Icons.Document128;
+        public virtual SpriteHandle DefaultThumbnail => SpriteHandle.Invalid;
 
-        private SpriteHandle PresentationIcon => DefaultThumbnail.IsValid ? DefaultThumbnail : Editor.Instance.Icons.Document128;
+        /// <summary>
+        /// Gets or sets the rendered thumbnail. An invalid handle uses the static presentation icon.
+        /// </summary>
+        public SpriteHandle Thumbnail
+        {
+            get => _thumbnail;
+            set => _thumbnail = value;
+        }
+
+        private SpriteHandle PresentationIcon => _thumbnail.IsValid ? _thumbnail : DefaultThumbnail.IsValid ? DefaultThumbnail : Editor.Instance.Icons.Document128;
 
         /// <inheritdoc />
         public SpriteHandle TooltipPreview => PresentationIcon;

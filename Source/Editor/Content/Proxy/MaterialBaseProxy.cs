@@ -1,7 +1,10 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
+using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.GUI.ContextMenu;
+using FlaxEditor.Viewport.Previews;
 using FlaxEngine;
+using FlaxEngine.GUI;
 
 namespace FlaxEditor.Content
 {
@@ -11,6 +14,11 @@ namespace FlaxEditor.Content
     /// <seealso cref="FlaxEditor.Content.BinaryAssetProxy" />
     public abstract class MaterialBaseProxy : BinaryAssetProxy
     {
+        /// <summary>
+        /// The material preview drawer.
+        /// </summary>
+        protected MaterialPreview _preview;
+
         /// <inheritdoc />
         public override bool CanCreate(ContentFolder targetLocation)
         {
@@ -59,5 +67,43 @@ namespace FlaxEditor.Content
             Editor.Instance.ContentDatabase.SaveAsset(materialInstance);
         }
 
+        /// <inheritdoc />
+        public override void OnThumbnailDrawPrepare(ThumbnailRequest request)
+        {
+            if (_preview == null)
+            {
+                _preview = new MaterialPreview(false);
+                InitAssetPreview(_preview);
+            }
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
+        {
+            _preview.Material = (MaterialBase)request.Asset;
+            _preview.Parent = guiRoot;
+            _preview.SyncBackbufferSize();
+
+            _preview.Task.OnDraw();
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawEnd(ThumbnailRequest request, ContainerControl guiRoot)
+        {
+            _preview.Material = null;
+            _preview.Parent = null;
+        }
+
+        /// <inheritdoc />
+        public override void Dispose()
+        {
+            if (_preview != null)
+            {
+                _preview.Dispose();
+                _preview = null;
+            }
+
+            base.Dispose();
+        }
     }
 }

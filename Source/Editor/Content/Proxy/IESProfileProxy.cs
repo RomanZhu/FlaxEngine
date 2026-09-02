@@ -1,9 +1,12 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEditor.Content.Thumbnails;
+using FlaxEditor.Viewport.Previews;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;
+using FlaxEngine.GUI;
 
 namespace FlaxEditor.Content
 {
@@ -13,6 +16,8 @@ namespace FlaxEditor.Content
     /// <seealso cref="FlaxEditor.Content.BinaryAssetProxy" />
     public class IESProfileProxy : BinaryAssetProxy
     {
+        private IESProfilePreview _preview;
+
         /// <inheritdoc />
         public override string Name => "IES Profile";
 
@@ -34,5 +39,49 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override Type AssetType => typeof(IESProfile);
 
+        /// <inheritdoc />
+        public override void OnThumbnailDrawPrepare(ThumbnailRequest request)
+        {
+            if (_preview == null)
+            {
+                _preview = new IESProfilePreview
+                {
+                    AnchorPreset = AnchorPresets.StretchAll,
+                    Offsets = Margin.Zero,
+                };
+            }
+        }
+
+        /// <inheritdoc />
+        public override bool CanDrawThumbnail(ThumbnailRequest request)
+        {
+            return ThumbnailsModule.HasMinimumQuality((IESProfile)request.Asset);
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
+        {
+            _preview.Asset = (IESProfile)request.Asset;
+            _preview.Parent = guiRoot;
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawEnd(ThumbnailRequest request, ContainerControl guiRoot)
+        {
+            _preview.Asset = null;
+            _preview.Parent = null;
+        }
+
+        /// <inheritdoc />
+        public override void Dispose()
+        {
+            if (_preview != null)
+            {
+                _preview.Dispose();
+                _preview = null;
+            }
+
+            base.Dispose();
+        }
     }
 }

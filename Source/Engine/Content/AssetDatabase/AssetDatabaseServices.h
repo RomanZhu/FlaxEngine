@@ -215,6 +215,8 @@ public:
     API_FUNCTION() static bool TryGetAssetGuid(Asset* asset, API_PARAM(Out) Guid& result);
     API_FUNCTION() static Guid GetBackingAssetID(const Guid& objectID);
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
+    /// <summary>Gets the current default-target runtime artifact digest projected to a cache identifier.</summary>
+    API_FUNCTION() static Guid GetCurrentRuntimeArtifactCacheID(const Guid& objectID);
     API_FUNCTION() static Asset* LoadAssetPreview(const Guid& objectID);
 };
 

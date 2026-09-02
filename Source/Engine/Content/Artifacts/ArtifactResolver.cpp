@@ -194,9 +194,10 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
             return ResolveFail(diagnostic, AssetPipelineDiagnosticCode::SourceMissing, request, StringView::Empty, TEXT("Asset database contains no record for the requested object."));
         ArtifactInspection inspection;
         Inspect(_libraryRoot, record, request, inspection);
+        const bool compatibilityMatches = request.RequiredCompatibility.IsEmpty() || inspection.IsCompatible;
         if (request.Policy == ArtifactResolvePolicy::PublishedOnly)
         {
-            if (inspection.HasOutput && inspection.IsCompatible)
+            if (inspection.HasOutput && compatibilityMatches)
             {
                 result = inspection.Artifact;
                 result.IsExact = false;
@@ -237,7 +238,6 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
         }
         plan.BuildRequest.RefreshId = request.RefreshId;
         plan.BuildRequest.Pass = request.Pass;
-        const bool compatibilityMatches = request.RequiredCompatibility.IsEmpty() || inspection.IsCompatible;
         const bool hasExact = inspection.HasOutput && compatibilityMatches && inspection.Manifest.InputFingerprint == plan.CurrentInputFingerprint;
         if (hasExact)
         {

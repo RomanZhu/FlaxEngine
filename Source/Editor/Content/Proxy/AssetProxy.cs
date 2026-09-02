@@ -1,7 +1,9 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEditor.Content.Thumbnails;
 using FlaxEngine;
+using FlaxEngine.GUI;
 
 namespace FlaxEditor.Content
 {
@@ -54,5 +56,85 @@ namespace FlaxEditor.Content
         /// <returns>Created item.</returns>
         public abstract AssetItem ConstructItem(string path, string typeName, ref Guid id);
 
+        /// <summary>
+        /// Called when thumbnail request gets prepared for drawing.
+        /// </summary>
+        /// <param name="request">The request.</param>
+        public virtual void OnThumbnailDrawPrepare(ThumbnailRequest request)
+        {
+        }
+
+        /// <summary>
+        /// Determines whether thumbnail can be drawn for the specified item.
+        /// </summary>
+        /// <param name="request">The request.</param>
+        /// <returns><c>true</c> if this thumbnail can be drawn for the specified item; otherwise, <c>false</c>.</returns>
+        public virtual bool CanDrawThumbnail(ThumbnailRequest request)
+        {
+            return true;
+        }
+
+        /// <summary>
+        /// Called when thumbnail drawing begins. Proxy should setup scene GUI for guiRoot.
+        /// </summary>
+        /// <param name="request">The request to render thumbnail.</param>
+        /// <param name="guiRoot">The GUI root container control.</param>
+        /// <param name="context">GPU context.</param>
+        public virtual void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
+        {
+            guiRoot.AddChild(new Label
+            {
+                Text = Name,
+                AnchorPreset = AnchorPresets.StretchAll,
+                Offsets = Margin.Zero,
+                Wrapping = TextWrapping.WrapWords
+            });
+        }
+
+        /// <summary>
+        /// Called when thumbnail drawing ends. Proxy should clear custom GUI from guiRoot from that should be not destroyed.
+        /// </summary>
+        /// <param name="request">The request to render thumbnail.</param>
+        /// <param name="guiRoot">The GUI root container control.</param>
+        public virtual void OnThumbnailDrawEnd(ThumbnailRequest request, ContainerControl guiRoot)
+        {
+        }
+
+        /// <summary>
+        /// Called when thumbnail requests cleans data after drawing.
+        /// </summary>
+        /// <param name="request">The request.</param>
+        public virtual void OnThumbnailDrawCleanup(ThumbnailRequest request)
+        {
+        }
+
+        /// <summary>
+        /// Initializes rendering settings for asset preview drawing for a thumbnail.
+        /// </summary>
+        /// <param name="preview">The asset preview.</param>
+        protected void InitAssetPreview(Viewport.Previews.AssetPreview preview)
+        {
+            preview.RenderOnlyWithWindow = false;
+            preview.UseAutomaticTaskManagement = false;
+            preview.AnchorPreset = AnchorPresets.StretchAll;
+            preview.Offsets = Margin.Zero;
+
+            var task = preview.Task;
+            task.Enabled = false;
+
+            var view = task.View;
+            view.IsSingleFrame = true; // Disable LOD transitions
+            task.View = view;
+
+            var eyeAdaptation = preview.PostFxVolume.EyeAdaptation;
+            eyeAdaptation.Mode = EyeAdaptationMode.None;
+            eyeAdaptation.OverrideFlags |= EyeAdaptationSettingsOverride.Mode;
+            preview.PostFxVolume.EyeAdaptation = eyeAdaptation;
+
+            var antiAliasing = preview.PostFxVolume.AntiAliasing;
+            antiAliasing.Mode = AntialiasingMode.FastApproximateAntialiasing;
+            antiAliasing.OverrideFlags |= AntiAliasingSettingsOverride.Mode;
+            preview.PostFxVolume.AntiAliasing = antiAliasing;
+        }
     }
 }

@@ -1,10 +1,13 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 using System;
+using FlaxEditor.Content.Thumbnails;
 using FlaxEditor.GUI.ContextMenu;
+using FlaxEditor.Viewport.Previews;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using FlaxEngine;
+using FlaxEngine.GUI;
 
 namespace FlaxEditor.Content
 {
@@ -14,6 +17,9 @@ namespace FlaxEditor.Content
     /// <seealso cref="FlaxEditor.Content.BinaryAssetProxy" />
     public class SkinnedModelProxy : BinaryAssetProxy
     {
+        private AnimatedModelPreview _preview;
+        private ThumbnailRequest _previewRequest;
+
         /// <inheritdoc />
         public override string Name => "Skinned Model";
 
@@ -88,5 +94,70 @@ namespace FlaxEditor.Content
             win.Close();
         }
 
+        /// <inheritdoc />
+        public override void OnThumbnailDrawPrepare(ThumbnailRequest request)
+        {
+            if (_preview == null)
+            {
+                _preview = new AnimatedModelPreview(false);
+                InitAssetPreview(_preview);
+            }
+        }
+
+        /// <inheritdoc />
+        public override bool CanDrawThumbnail(ThumbnailRequest request)
+        {
+            if (_previewRequest == null)
+            {
+                _previewRequest = request;
+                _preview.SkinnedModel = (SkinnedModel)request.Asset;
+                return false;
+            }
+            return _previewRequest == request && _preview.HasLoadedAssets && ThumbnailsModule.HasMinimumQuality((SkinnedModel)request.Asset);
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawBegin(ThumbnailRequest request, ContainerControl guiRoot, GPUContext context)
+        {
+            _preview.ShowNodes = ((SkinnedModel)request.Asset).LODsCount == 0;
+            _preview.Parent = guiRoot;
+            _preview.SyncBackbufferSize();
+
+            _preview.Task.OnDraw();
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawEnd(ThumbnailRequest request, ContainerControl guiRoot)
+        {
+            _preview.Parent = null;
+            ReleasePreview(request);
+        }
+
+        /// <inheritdoc />
+        public override void OnThumbnailDrawCleanup(ThumbnailRequest request)
+        {
+            ReleasePreview(request);
+        }
+
+        private void ReleasePreview(ThumbnailRequest request)
+        {
+            if (_previewRequest != request)
+                return;
+            _preview.SkinnedModel = null;
+            _previewRequest = null;
+        }
+
+        /// <inheritdoc />
+        public override void Dispose()
+        {
+            _previewRequest = null;
+            if (_preview != null)
+            {
+                _preview.Dispose();
+                _preview = null;
+            }
+
+            base.Dispose();
+        }
     }
 }
