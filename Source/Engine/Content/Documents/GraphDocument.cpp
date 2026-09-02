@@ -1587,10 +1587,13 @@ namespace
 
     void CollectGuid(const Variant& value, Array<Guid>& ids)
     {
-        const Guid id = (Guid)value;
-        if (id.IsValid())
-            ids.Add(id);
-        if (value.Type.Type == VariantType::Array)
+        if (value.Type.Type == VariantType::Asset)
+        {
+            const Guid id = (Guid)value;
+            if (id.IsValid())
+                ids.Add(id);
+        }
+        else if (value.Type.Type == VariantType::Array)
         {
             const auto* items = reinterpret_cast<const Array<Variant>*>(value.AsData);
             if (items)

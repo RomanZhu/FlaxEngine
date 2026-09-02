@@ -602,7 +602,7 @@ namespace FlaxEditor.Modules
                 return record.TypeName;
             try
             {
-                return (string)JObject.Parse(File.ReadAllText(record.SourcePath))["TypeName"] ?? record.TypeName;
+                return (string)JObject.Parse(File.ReadAllText(record.SourcePath))["type"] ?? record.TypeName;
             }
             catch
             {

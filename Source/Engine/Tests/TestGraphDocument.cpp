@@ -173,12 +173,16 @@ TEST_CASE("Graph documents decode asset references as assets")
 
 TEST_CASE("Graph dependencies retain persistent object GUIDs across source object remaps")
 {
+    auto* referencedAsset = Content::CreateVirtualAsset<Texture>();
+    REQUIRE(referencedAsset);
+    SCOPE_EXIT { Content::DeleteAsset(referencedAsset); };
+
     AssetDatabase& database = AssetDatabase::Get();
     const AssetDatabaseSnapshot savedDatabase = database.GetSnapshot();
     AssetPipelineDiagnostic diagnostic;
     SCOPE_EXIT { database.PublishFullSnapshot(savedDatabase.Records, diagnostic); };
 
-    const Guid persistentId(10, 20, 30, 40);
+    const Guid persistentId = referencedAsset->GetID();
     const Guid firstSourceId(11, 21, 31, 41);
     AssetRecord mainRecord;
     mainRecord.ID = firstSourceId;
@@ -208,9 +212,15 @@ TEST_CASE("Graph dependencies retain persistent object GUIDs across source objec
     GraphDocumentParameter parameter;
     parameter.ID = Guid(1, 2, 3, 4);
     parameter.Name = TEXT("SkinnedModel");
-    parameter.Type = VariantType::Guid;
-    parameter.Default = Variant(persistentId);
+    parameter.Type = VariantType::Asset;
+    parameter.Default = Variant(referencedAsset);
     document.Parameters.Add(MoveTemp(parameter));
+    GraphDocumentParameter identifier;
+    identifier.ID = Guid(2, 3, 4, 5);
+    identifier.Name = TEXT("Identifier");
+    identifier.Type = VariantType::Guid;
+    identifier.Default = Variant(Guid(3, 4, 5, 6));
+    document.Parameters.Add(MoveTemp(identifier));
     Array<AssetDependency> dependencies;
     ContentHash interfaceHash;
     REQUIRE_FALSE(GraphDependencyExtractor::Extract(document, dependencies, interfaceHash, diagnostic));

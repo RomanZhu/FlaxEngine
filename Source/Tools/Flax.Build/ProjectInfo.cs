@@ -485,10 +485,9 @@ namespace Flax.Build
             }
             if (root.TryGetProperty("DefaultScene", out var defaultScene))
             {
-                if (defaultScene.ValueKind != JsonValueKind.Object || !defaultScene.TryGetProperty("guid", out var guid) ||
-                    guid.ValueKind != JsonValueKind.String || !Guid.TryParseExact(guid.GetString(), "N", out var parsedGuid) ||
-                    parsedGuid == Guid.Empty || parsedGuid.ToString("N") != guid.GetString() ||
-                    !defaultScene.TryGetProperty("fileId", out var fileId) || !fileId.TryGetInt64(out var localId) || localId == 0)
+                if (defaultScene.ValueKind != JsonValueKind.String ||
+                    !Guid.TryParseExact(defaultScene.GetString(), "N", out var parsedGuid) || parsedGuid == Guid.Empty ||
+                    parsedGuid.ToString("N") != defaultScene.GetString())
                     throw new InvalidDataException(guidance);
             }
             if (root.TryGetProperty("EngineNickname", out var nickname) &&
