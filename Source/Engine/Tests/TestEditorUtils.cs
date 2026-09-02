@@ -27,6 +27,14 @@ namespace FlaxEngine.Tests
     [TestFixture]
     public class TestEditorUtils
     {
+        private sealed class ThumbnailOwner : IContentItemOwner
+        {
+            public void OnItemDeleted(ContentItem item) { }
+            public void OnItemRenamed(ContentItem item) { }
+            public void OnItemReimported(ContentItem item) { }
+            public void OnItemDispose(ContentItem item) { }
+        }
+
         private static ContentFolder CreateCanonicalTextFolder(string folderPath, out string assetPath, out Guid assetId)
         {
             Directory.CreateDirectory(folderPath);
@@ -1654,6 +1662,10 @@ namespace FlaxEngine.Tests
                     "Flax.CollisionData", "CollisionDataItem", "CollisionDataProxy", typeof(CollisionDataWindow));
 
                 lifecycleStage = "emitter edit";
+                var thumbnailOwner = new ThumbnailOwner();
+                var stableEmitterId = emitterItem.ObjectID;
+                emitterItem.Thumbnail = Editor.Instance.Icons.Document128;
+                emitterItem.AddReference(thumbnailOwner, true);
                 var emitter = AssetDocumentRegistry.OpenGraph<ParticleEmitter>(emitterItem, out var emitterSession);
                 try
                 {
@@ -1661,12 +1673,28 @@ namespace FlaxEngine.Tests
                     Assert.IsFalse(emitter.WaitForLoaded());
                     emitterSession.SetGraphSurface((byte[])emitterSession.GetGraphSurface().Clone());
                     Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
+                    Assert.IsTrue(emitterItem.IsThumbnailRequestQueuedForTesting,
+                        "Saving the emitter graph did not renew visible thumbnail demand.");
+                    Assert.IsTrue(emitterItem.IsThumbnailForceRetryForTesting,
+                        "Saving the emitter graph did not request the newly published artifact preview.");
+                    Assert.IsTrue(emitterItem.Thumbnail.IsValid,
+                        "Saving the emitter graph discarded the last-good thumbnail while replacement was queued.");
+                    emitterItem.Thumbnail = Editor.Instance.Icons.Folder128;
+                    emitterSession.SetGraphSurface((byte[])emitterSession.GetGraphSurface().Clone());
+                    Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
+                    Assert.AreEqual(stableEmitterId, emitterItem.ObjectID,
+                        "Repeated graph saves changed the emitter's persistent thumbnail identity.");
+                    Assert.IsTrue(emitterItem.IsThumbnailRequestQueuedForTesting,
+                        "A repeated emitter graph save did not renew thumbnail demand.");
+                    Assert.IsTrue(emitterItem.Thumbnail.IsValid,
+                        "A repeated emitter graph save discarded the last-good thumbnail.");
                     Assert.IsFalse(emitterSession.IsDirty);
                     Assert.IsTrue(emitterSession.ReloadFromDisk(), "Emitter graph session did not reload from disk.");
                 }
                 finally
                 {
                     AssetDocumentRegistry.Close(emitterItem, ref emitterSession);
+                    emitterItem.RemoveReference(thumbnailOwner);
                 }
 
                 lifecycleStage = "timeline and collision save";
