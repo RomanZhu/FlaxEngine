@@ -1,6 +1,11 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "Engine/Content/Loading/AssetHotReloadCoordinator.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
+#include "Engine/Content/Storage/FlaxStorage.h"
+#include "Engine/Core/ScopeExit.h"
+#include "Engine/Engine/Globals.h"
+#include "Engine/Platform/FileSystem.h"
 #include <ThirdParty/catch2/catch.hpp>
 #include <atomic>
 #include <chrono>
@@ -115,6 +120,38 @@ namespace
         }
     };
 
+    class PlayerCatalogResolver : public IEditorAssetObjectResolver, public IRuntimeAssetObjectResolver
+    {
+    private:
+        RuntimeCatalogAssetObjectResolver _runtime;
+
+    public:
+        std::atomic<int32> EditorCalls{0};
+        std::atomic<int32> RuntimeCalls{0};
+
+        explicit PlayerCatalogResolver(const RuntimeAssetCatalog& catalog)
+            : _runtime(catalog, 1)
+        {
+        }
+
+        bool ResolveArtifactObject(const Guid& object, AssetObjectLoadLocation& location,
+            AssetPipelineDiagnostic& diagnostic) override
+        {
+            EditorCalls.fetch_add(1);
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactMissing;
+            diagnostic.Message = TEXT("Player load attempted to consult the Editor artifact resolver.");
+            return true;
+        }
+
+        bool ResolveCatalogObject(const Guid& object, AssetObjectLoadLocation& location,
+            AssetPipelineDiagnostic& diagnostic) override
+        {
+            RuntimeCalls.fetch_add(1);
+            return _runtime.ResolveCatalogObject(object, location, diagnostic);
+        }
+    };
+
     class TestObjectFactory : public IAssetObjectFactory
     {
     public:
@@ -144,6 +181,48 @@ namespace
         {
             REQUIRE(instance != nullptr);
             Destroys.fetch_add(1);
+        }
+    };
+
+    class RuntimePackageObjectFactory : public IAssetObjectFactory
+    {
+    public:
+        std::atomic<int32> Creates{0};
+        Array<Guid> CreatedObjects;
+        Array<Guid> BootstrapDependencies;
+
+        bool CreateObject(const AssetObjectLoadLocation& location, void*& instance,
+            AssetPipelineDiagnostic& diagnostic) override
+        {
+            String storagePath = location.StorageName;
+            if (FileSystem::IsRelative(storagePath))
+                storagePath = Globals::ProjectContentFolder / storagePath;
+            const FlaxStorageReference storage = ContentStorageManager::GetStorage(storagePath);
+            AssetInitData header;
+            if (location.StorageKind != AssetObjectStorageKind::RuntimePackage ||
+                location.SourceName != location.StorageName || !storage || !storage->UsesAssetObjectIds() ||
+                storage->LoadAssetHeader(location.StorageObject, header) ||
+                header.Header.TypeName != String(location.TypeName))
+            {
+                diagnostic = AssetPipelineDiagnostic();
+                diagnostic.Code = AssetPipelineDiagnosticCode::ArtifactInvalid;
+                diagnostic.SourcePath = storagePath;
+                diagnostic.Message = TEXT("Player package entry did not match its persistent catalog record.");
+                instance = nullptr;
+                return true;
+            }
+
+            if (Creates.load() == 0)
+                BootstrapDependencies = location.Dependencies;
+            CreatedObjects.Add(location.Object);
+            instance = reinterpret_cast<void*>(static_cast<uintptr_t>(Creates.fetch_add(1) + 1));
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+
+        void DestroyObject(void* instance) override
+        {
+            REQUIRE(instance != nullptr);
         }
     };
 
@@ -368,17 +447,44 @@ TEST_CASE("Cold cooked player bootstraps GameSettings and packaged scene without
 {
     const Guid gameSettings(116, 0, 0, 1);
     const Guid scene(116, 0, 0, 2);
+    const String packageName = String::Format(TEXT("__PlayerBootstrap_{0}.flaxpac"), Guid::New());
+    const String packagePath = Globals::ProjectContentFolder / packageName;
+    FlaxChunk settingsChunk;
+    settingsChunk.Data.Copy((const byte*)"settings", 8);
+    FlaxChunk sceneChunk;
+    sceneChunk.Data.Copy((const byte*)"scene", 5);
+    Array<AssetInitData> packagedAssets;
+    packagedAssets.Resize(2);
+    packagedAssets[0].Header.ID = Guid::New();
+    packagedAssets[0].Header.TypeName = "FlaxEditor.Content.Settings.GameSettings";
+    packagedAssets[0].Header.Chunks[0] = &settingsChunk;
+    packagedAssets[0].SerializedVersion = 1;
+    packagedAssets[1].Header.ID = Guid::New();
+    packagedAssets[1].Header.TypeName = "FlaxEngine.SceneAsset";
+    packagedAssets[1].Header.Chunks[0] = &sceneChunk;
+    packagedAssets[1].SerializedVersion = 1;
+    Array<AssetObjectId> packagedObjects;
+    packagedObjects.Add(AssetObjectId::Main(AssetGuid(gameSettings)));
+    packagedObjects.Add(AssetObjectId::Main(AssetGuid(scene)));
+    FileSystem::DeleteFile(packagePath);
+    REQUIRE_FALSE(FlaxStorage::CreateRuntimePackage(packagePath, ToSpan(packagedAssets), ToSpan(packagedObjects), true));
+    SCOPE_EXIT
+    {
+        ContentStorageManager::EnsureAccess(packagePath);
+        FileSystem::DeleteFile(packagePath);
+    };
+
     RuntimeAssetCatalogEntry settingsEntry;
     settingsEntry.Object = gameSettings;
     settingsEntry.TypeName = "FlaxEditor.Content.Settings.GameSettings";
-    settingsEntry.PackageName = "Data_0.flaxpac";
+    settingsEntry.PackageName = StringAnsi(packageName);
     settingsEntry.Size = 48;
     settingsEntry.Content = LoadingTestHash("cooked-game-settings");
     settingsEntry.Dependencies.Add(scene);
     RuntimeAssetCatalogEntry sceneEntry;
     sceneEntry.Object = scene;
     sceneEntry.TypeName = "FlaxEngine.SceneAsset";
-    sceneEntry.PackageName = "Data_0.flaxpac";
+    sceneEntry.PackageName = StringAnsi(packageName);
     sceneEntry.Size = 96;
     sceneEntry.Content = LoadingTestHash("cooked-scene");
     Array<RuntimeAssetCatalogEntry> entries;
@@ -399,31 +505,26 @@ TEST_CASE("Cold cooked player bootstraps GameSettings and packaged scene without
     RuntimeAssetCatalog playerCatalog;
     REQUIRE_FALSE(RuntimeAssetCatalog::FromBytes(Span<byte>(catalogBytes.Get(), catalogBytes.Count()), playerCatalog, diagnostic));
     REQUIRE(playerCatalog.GetGameSettingsObject() == gameSettings);
-    RuntimeCatalogAssetObjectResolver runtimeResolver(playerCatalog, 1);
-    TestObjectResolver poisonEditorResolver;
-    poisonEditorResolver.FailResolution = true;
-    TestObjectFactory factory;
+    PlayerCatalogResolver resolver(playerCatalog);
+    RuntimePackageObjectFactory factory;
     LoadedAssetRegistry registry;
-    AssetObjectLoader playerLoader(registry, static_cast<IRuntimeAssetObjectResolver&>(runtimeResolver), factory);
+    AssetObjectLoader playerLoader(registry, static_cast<IRuntimeAssetObjectResolver&>(resolver), factory);
     CHECK_FALSE(playerLoader.AllowsStaleContinuity());
 
     AssetObjectLoadResult settingsResult;
     REQUIRE_FALSE(playerLoader.Load(playerCatalog.GetGameSettingsObject(), settingsResult, diagnostic));
     CHECK(settingsResult.Object == gameSettings);
-    CHECK(factory.LastStorage == TEXT("Data_0.flaxpac"));
-    CHECK(factory.LastSource == factory.LastStorage);
-    CHECK(factory.LastStorageKind == AssetObjectStorageKind::RuntimePackage);
-    REQUIRE(factory.LastDependencies.Count() == 1);
-    CHECK(factory.LastDependencies[0] == scene);
 
     AssetObjectLoadResult sceneResult;
     REQUIRE_FALSE(playerLoader.Load(scene, sceneResult, diagnostic));
     CHECK(sceneResult.Object == scene);
-    CHECK(factory.LastStorage == TEXT("Data_0.flaxpac"));
-    CHECK(factory.LastSource == factory.LastStorage);
-    CHECK(factory.LastStorageObject == AssetObjectId::Main(AssetGuid(scene)));
-    CHECK(factory.LastStorageKind == AssetObjectStorageKind::RuntimePackage);
-    CHECK(poisonEditorResolver.Calls.load() == 0);
+    REQUIRE(factory.CreatedObjects.Count() == 2);
+    CHECK(factory.CreatedObjects[0] == gameSettings);
+    CHECK(factory.CreatedObjects[1] == scene);
+    REQUIRE(factory.BootstrapDependencies.Count() == 1);
+    CHECK(factory.BootstrapDependencies[0] == scene);
+    CHECK(resolver.RuntimeCalls.load() == 2);
+    CHECK(resolver.EditorCalls.load() == 0);
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
 }
 

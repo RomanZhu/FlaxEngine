@@ -44,7 +44,7 @@ public class Content : EngineModule
             AddSources(options, Path.Combine(FolderPath, "Storage"));
             AddSources(options, Path.Combine(FolderPath, "Artifacts"), SearchOption.TopDirectoryOnly, "ArtifactCompatibility.h", "ArtifactKey.cpp", "ArtifactKey.h", "ArtifactLease.cpp", "ArtifactLease.h", "ArtifactTarget.cpp", "ArtifactTarget.h", "ResolvedArtifact.cpp", "ResolvedArtifact.h");
             AddSources(options, Path.Combine(FolderPath, "AssetDatabase"), SearchOption.TopDirectoryOnly, "AssetPath.cpp", "AssetPath.h", "DurableAssetFileSystem.cpp", "DurableAssetFileSystem.h");
-            AddSources(options, Path.Combine(FolderPath, "AssetDatabase", "Identity"), SearchOption.TopDirectoryOnly, "AssetGuid.h", "AssetIdentitySerialization.cpp", "AssetIdentitySerialization.h", "AssetObjectId.h", "GlobalAssetObjectId.h");
+            AddSources(options, Path.Combine(FolderPath, "AssetDatabase", "Identity"), SearchOption.TopDirectoryOnly, "AssetGuid.cs", "AssetGuid.h", "AssetIdentitySerialization.cpp", "AssetIdentitySerialization.h", "AssetObjectId.h", "GlobalAssetObjectId.cs", "GlobalAssetObjectId.h");
             AddSources(options, Path.Combine(FolderPath, "AssetPipeline"), SearchOption.TopDirectoryOnly, "AssetPipelineDiagnostics.cpp", "AssetPipelineDiagnostics.h", "AssetPipelineSettings.cpp", "AssetPipelineSettings.h");
             AddSources(options, Path.Combine(FolderPath, "Build"), SearchOption.TopDirectoryOnly, "CookedContentGeneration.cpp", "CookedContentGeneration.h", "RuntimeAssetCatalog.cpp", "RuntimeAssetCatalog.h");
         }
