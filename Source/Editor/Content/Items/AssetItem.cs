@@ -113,11 +113,6 @@ namespace FlaxEditor.Content
             {
                 sb.Append("Status: ").Append(DatabaseStatus).AppendLine();
                 sb.Append("Processor: ").Append(ProcessorID).AppendLine();
-                sb.Append("Source: ").Append(SourcePath).AppendLine();
-                var storagePath = StoragePath;
-                if (!string.IsNullOrEmpty(storagePath))
-                    sb.Append("Storage: ").Append(storagePath).AppendLine();
-                sb.Append("Metadata: ").Append(MetadataPath).AppendLine();
             }
         }
 
