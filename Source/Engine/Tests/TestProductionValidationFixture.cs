@@ -57,12 +57,14 @@ namespace FlaxEngine.Tests
             var timer = System.Diagnostics.Stopwatch.StartNew();
             string root = null;
             ProductionValidationFixture fixture = null;
+            var stage = "initial registration";
             try
             {
                 fixture = ProductionValidationFixture.Create();
                 root = fixture.RootPath;
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
                 Assert.IsFalse(ModelImporterService.ReconcileSubAssets(fixture.ModelId));
+                stage = "expanded family import";
                 WriteTwoMeshGlb(fixture.ModelPath, false);
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
                 Assert.IsFalse(ModelImporterService.ReconcileSubAssets(fixture.ModelId));
@@ -95,6 +97,7 @@ namespace FlaxEngine.Tests
                 AssertModelProjectRoute(main);
                 AssertModelProjectRoute(children.First(x => x.TypeName == typeof(Model).FullName));
 
+                stage = "runtime load and cook";
                 var model = FlaxEngine.Content.LoadAssetAsync<Model>(main.ID);
                 Assert.NotNull(model);
                 Assert.IsFalse(model.WaitForLoaded());
@@ -104,6 +107,7 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(FlaxEditor.GameCooker.ValidateBinaryAssetCookForTesting(main.ID),
                     "The exact model artifact failed the cooker binary-asset path.");
 
+                stage = "source reorder invalidation";
                 WriteTwoMeshGlb(fixture.ModelPath, true);
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }));
                 Assert.IsFalse(AssetPipelineService.IsArtifactCurrent(main.ID), "Source change did not invalidate the model artifact.");
@@ -116,6 +120,7 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.ModelId));
                 ProductionValidationFixture.WaitForImports(new[] { fixture.ModelId });
 
+                stage = "pipeline restart";
                 FlaxEditor.Editor.Instance.Windows.ContentWin.ClearSelection(false);
                 FlaxEngine.Content.UnloadAsset(model);
                 model = null;
@@ -131,6 +136,10 @@ namespace FlaxEngine.Tests
                 Assert.IsEmpty(AssetPipelineService.DrainArtifactPublications(), "Restart unexpectedly reimported the unchanged GLB family.");
                 AssertModelProjectRoute(restarted.Single(x => x.IsMain));
                 Assert.Less(timer.Elapsed, ProductionValidationFixture.ImportTimeout);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Representative model lifecycle failed during " + stage + ".", ex);
             }
             finally
             {
