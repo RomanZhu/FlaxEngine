@@ -273,6 +273,12 @@ bool ScriptsBuilder::RunBuildTool(const StringView& args, const StringView& work
 
 bool ScriptsBuilder::GenerateProject(const StringView& customArgs)
 {
+#if COMPILE_WITH_TESTS
+    // The test host uses a throwaway headless project. Once its scripts build has
+    // started, repeated IDE workspace regeneration is unnecessary and can race it.
+    if (Engine::IsHeadless() && _compilationsCount > 0)
+        return false;
+#endif
     String args(TEXT("-log -mutex -genproject "));
     args += customArgs;
     _wasProjectStructureChanged = false;
