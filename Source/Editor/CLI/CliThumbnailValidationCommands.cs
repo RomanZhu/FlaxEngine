@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using FlaxEditor.Content;
 using FlaxEditor.Content.Documents;
 using FlaxEditor.Surface;
@@ -40,6 +41,18 @@ namespace FlaxEditor
 
         private sealed class ThumbnailLifecycleOperation : CliCommandOperation, IContentItemOwner
         {
+            private readonly struct PixelWitness
+            {
+                public readonly int VisiblePixels;
+                public readonly ulong Hash;
+
+                public PixelWitness(int visiblePixels, ulong hash)
+                {
+                    VisiblePixels = visiblePixels;
+                    Hash = hash;
+                }
+            }
+
             private enum Stage
             {
                 Create,
@@ -82,6 +95,9 @@ namespace FlaxEditor
             private int _particleRenderCount;
             private bool _particleReferenced;
             private bool _materialReferenced;
+            private Task<TextureData> _readbackTask;
+            private Float2 _readbackLocation;
+            private Float2 _readbackSize;
 
             public ThumbnailLifecycleOperation(CliCommandContext context)
             {
@@ -230,9 +246,10 @@ namespace FlaxEditor
 
             private void WaitForInitialParticleThumbnail()
             {
-                if (!TryGetExactThumbnail(_particleItem, _particleVersion, out var thumbnail))
+                if (!TryGetExactThumbnail(_particleItem, _particleVersion, out var thumbnail) ||
+                    !TryGetPixelWitness(thumbnail, out var witness))
                     return;
-                AssertParticleThumbnail(thumbnail, "initial particle thumbnail");
+                AssertParticleThumbnail(witness, "initial particle thumbnail");
                 _particleRenderCount = _particleProxy.ThumbnailRenderCount;
                 _context.ReportProgress("Rendered initial particle thumbnail", 0.3f);
                 _stage = Stage.EditParticle;
@@ -248,9 +265,10 @@ namespace FlaxEditor
             private void WaitForEditedParticleThumbnail()
             {
                 if (_particleProxy.ThumbnailRenderCount <= _particleRenderCount ||
-                    !TryGetExactThumbnail(_particleItem, _particleVersion, out var thumbnail))
+                    !TryGetExactThumbnail(_particleItem, _particleVersion, out var thumbnail) ||
+                    !TryGetPixelWitness(thumbnail, out var witness))
                     return;
-                AssertParticleThumbnail(thumbnail, "edited particle thumbnail");
+                AssertParticleThumbnail(witness, "edited particle thumbnail");
                 _particleRenderCount = _particleProxy.ThumbnailRenderCount;
                 _context.ReportProgress("Rendered edited particle thumbnail", 0.45f);
                 _stage = Stage.SaveParticle;
@@ -272,11 +290,12 @@ namespace FlaxEditor
             private void WaitForSavedParticleThumbnail()
             {
                 if (!LoadedExact(_particleId, _particleVersion) ||
-                    !TryGetExactThumbnail(_particleItem, _particleVersion, out var thumbnail))
+                    !TryGetExactThumbnail(_particleItem, _particleVersion, out var thumbnail) ||
+                    !TryGetPixelWitness(thumbnail, out var witness))
                     return;
-                AssertParticleThumbnail(thumbnail, "saved particle thumbnail");
-                _particlePixels = CountVisiblePixels(thumbnail);
-                _particleHash = GetPixelHash(thumbnail);
+                AssertParticleThumbnail(witness, "saved particle thumbnail");
+                _particlePixels = witness.VisiblePixels;
+                _particleHash = witness.Hash;
                 _particleCache = (PreviewsCache)thumbnail.Atlas;
                 _particleItem.RemoveReference(this);
                 _particleReferenced = false;
@@ -302,7 +321,9 @@ namespace FlaxEditor
                 var thumbnail = _particleCache.FindSlotVersioned(_particleId, _particleVersion);
                 if (!thumbnail.IsValid)
                     throw new InvalidOperationException("Reloaded cache has no exact saved-particle thumbnail.");
-                if (CountVisiblePixels(thumbnail) == 0 || GetPixelHash(thumbnail) != _particleHash)
+                if (!TryGetPixelWitness(thumbnail, out var witness))
+                    return;
+                if (witness.VisiblePixels == 0 || witness.Hash != _particleHash)
                     throw new InvalidOperationException("Reloaded cache did not preserve the saved particle pixels.");
                 _stage = Stage.RequestMaterialThumbnail;
             }
@@ -318,9 +339,10 @@ namespace FlaxEditor
 
             private void WaitForInitialMaterialThumbnail()
             {
-                if (!TryGetExactThumbnail(_materialItem, _materialVersion, out var thumbnail))
+                if (!TryGetExactThumbnail(_materialItem, _materialVersion, out var thumbnail) ||
+                    !TryGetPixelWitness(thumbnail, out var witness))
                     return;
-                if (CountVisiblePixels(thumbnail) == 0)
+                if (witness.VisiblePixels == 0)
                     throw new InvalidOperationException("Initial material thumbnail contains no visible pixels.");
                 _context.ReportProgress("Rendered initial material thumbnail", 0.8f);
                 _stage = Stage.SaveMaterial;
@@ -341,9 +363,10 @@ namespace FlaxEditor
             private void WaitForSavedMaterialThumbnail()
             {
                 if (!LoadedExact(_materialId, _materialVersion) ||
-                    !TryGetExactThumbnail(_materialItem, _materialVersion, out var thumbnail))
+                    !TryGetExactThumbnail(_materialItem, _materialVersion, out var thumbnail) ||
+                    !TryGetPixelWitness(thumbnail, out var witness))
                     return;
-                _materialPixels = CountVisiblePixels(thumbnail);
+                _materialPixels = witness.VisiblePixels;
                 if (_materialPixels == 0)
                     throw new InvalidOperationException("Saved material thumbnail contains no visible pixels.");
                 _context.ReportProgress("Validated saved graph thumbnails", 1.0f);
@@ -398,69 +421,58 @@ namespace FlaxEditor
                 return thumbnail.IsValid;
             }
 
-            private void AssertParticleThumbnail(SpriteHandle thumbnail, string name)
+            private void AssertParticleThumbnail(PixelWitness witness, string name)
             {
                 if (_particleProxy.LastThumbnailParticleCount <= 0)
                     throw new InvalidOperationException(name + " rendered without simulated particles.");
-                if (CountVisiblePixels(thumbnail) == 0)
+                if (witness.VisiblePixels == 0)
                     throw new InvalidOperationException(name + " contains no visible pixels.");
             }
 
-            private static int CountVisiblePixels(SpriteHandle thumbnail)
+            private bool TryGetPixelWitness(SpriteHandle thumbnail, out PixelWitness witness)
             {
-                var data = thumbnail.Atlas.Texture.DownloadData();
+                witness = default;
+                if (_readbackTask == null)
+                {
+                    var texture = thumbnail.Atlas.Texture;
+                    _readbackLocation = thumbnail.Location;
+                    _readbackSize = thumbnail.Size;
+                    _readbackTask = Task.Run(texture.DownloadData);
+                    return false;
+                }
+                if (!_readbackTask.IsCompleted)
+                    return false;
+                var readback = _readbackTask;
+                _readbackTask = null;
+                var data = readback.GetAwaiter().GetResult();
                 if (data == null)
-                    throw new InvalidOperationException("Thumbnail atlas GPU download failed.");
+                    throw new InvalidOperationException("Thumbnail atlas asynchronous GPU download failed.");
                 try
                 {
                     if (data.GetPixels(out Color32[] pixels))
                         throw new InvalidOperationException("Thumbnail atlas pixel conversion failed.");
-                    var location = thumbnail.Location;
-                    var size = thumbnail.Size;
+                    var left = (int)_readbackLocation.X;
+                    var top = (int)_readbackLocation.Y;
+                    var width = (int)_readbackSize.X;
+                    var height = (int)_readbackSize.Y;
                     var visible = 0;
-                    for (var y = 0; y < (int)size.Y - 2; y++)
-                    {
-                        var row = ((int)location.Y + y) * data.Width + (int)location.X;
-                        for (var x = 0; x < (int)size.X; x++)
-                        {
-                            var pixel = pixels[row + x];
-                            if (pixel.R + pixel.G + pixel.B > 24)
-                                visible++;
-                        }
-                    }
-                    return visible;
-                }
-                finally
-                {
-                    FlaxEngine.Object.Destroy(data);
-                }
-            }
-
-            private static ulong GetPixelHash(SpriteHandle thumbnail)
-            {
-                var data = thumbnail.Atlas.Texture.DownloadData();
-                if (data == null)
-                    throw new InvalidOperationException("Thumbnail atlas pixel download failed.");
-                try
-                {
-                    if (data.GetPixels(out Color32[] pixels))
-                        throw new InvalidOperationException("Thumbnail atlas pixel conversion failed.");
-                    var location = thumbnail.Location;
-                    var size = thumbnail.Size;
                     ulong hash = 1469598103934665603UL;
-                    for (var y = 0; y < (int)size.Y; y++)
+                    for (var y = 0; y < height; y++)
                     {
-                        var row = ((int)location.Y + y) * data.Width + (int)location.X;
-                        for (var x = 0; x < (int)size.X; x++)
+                        var row = (top + y) * data.Width + left;
+                        for (var x = 0; x < width; x++)
                         {
                             var pixel = pixels[row + x];
+                            if (y < height - 2 && pixel.R + pixel.G + pixel.B > 24)
+                                visible++;
                             hash = (hash ^ pixel.R) * 1099511628211UL;
                             hash = (hash ^ pixel.G) * 1099511628211UL;
                             hash = (hash ^ pixel.B) * 1099511628211UL;
                             hash = (hash ^ pixel.A) * 1099511628211UL;
                         }
                     }
-                    return hash;
+                    witness = new PixelWitness(visible, hash);
+                    return true;
                 }
                 finally
                 {
