@@ -451,6 +451,20 @@ namespace FlaxEditor
         private static Assembly[] _cachedAssemblies;
         private static CliRegisteredCommand[] _cachedCommands;
 
+        static CliCommandRegistry()
+        {
+            ScriptsBuilder.ScriptsReloadBegin += ClearCache;
+        }
+
+        internal static void ClearCache()
+        {
+            lock (CacheLocker)
+            {
+                _cachedAssemblies = null;
+                _cachedCommands = null;
+            }
+        }
+
         public static CliRegisteredCommand[] Discover()
         {
             var result = new Dictionary<string, CliRegisteredCommand>(StringComparer.OrdinalIgnoreCase);
@@ -878,7 +892,7 @@ namespace FlaxEditor
                 throw new InvalidOperationException("The command action is missing.");
 
             TryWriteEvent(new { type = "started", requestId = _request.RequestId, operation = _request.Operation, action = options.Action, name = options.Name });
-            if (!Editor.Instance.StateMachine.CurrentState.IsEditorReady)
+            if (!IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsCompiling))
             {
                 DeferCommandUntilScriptsLoad(options);
                 return;
@@ -893,7 +907,9 @@ namespace FlaxEditor
             Action update = null;
             update = () =>
             {
-                var ready = EvaluateCommandStartup(Editor.Instance.StateMachine.CurrentState.IsEditorReady, DateTime.UtcNow, deadline, out var timedOut);
+                var ready = EvaluateCommandStartup(
+                    IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsCompiling),
+                    DateTime.UtcNow, deadline, out var timedOut);
                 if (ready)
                 {
                     Editor.Instance.EditorUpdate -= update;
@@ -914,6 +930,11 @@ namespace FlaxEditor
         {
             timedOut = !scriptsLoaded && utcNow >= deadline;
             return scriptsLoaded;
+        }
+
+        internal static bool IsCommandStartupReady(bool editorReady, bool scriptsCompiling)
+        {
+            return editorReady && !scriptsCompiling;
         }
 
         private void ExecuteCommand(CliCommandOptions options)

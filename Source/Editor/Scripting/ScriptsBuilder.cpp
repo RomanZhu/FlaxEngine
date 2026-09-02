@@ -52,6 +52,7 @@ namespace ScriptsBuilderImpl
     bool _isInited = false;
     bool _isCompileRequested = false;
     bool _isCompileRunning = false;
+    bool _isReloadPending = false;
     bool _wasProjectStructureChanged = false;
     bool _lastCompilationFailed = false;
     int32 _compilationsCount = 0;
@@ -181,13 +182,13 @@ bool ScriptsBuilder::IsSourceDirtyFor(const TimeSpan& timeout)
 bool ScriptsBuilder::IsCompiling()
 {
     ScopeLock scopeLock(_locker);
-    return _isCompileRunning;
+    return _isCompileRunning || _isReloadPending;
 }
 
 bool ScriptsBuilder::IsReady()
 {
     ScopeLock scopeLock(_locker);
-    return !IsSourceDirty() && !_isCompileRequested && !_isCompileRunning;
+    return !IsSourceDirty() && !_isCompileRequested && !_isCompileRunning && !_isReloadPending;
 }
 
 void ScriptsBuilder::MarkWorkspaceDirty()
@@ -216,6 +217,10 @@ void ScriptsBuilderImpl::onScriptsReload()
 
 void ScriptsBuilderImpl::onScriptsReloadEnd()
 {
+    {
+        ScopeLock scopeLock(_locker);
+        _isReloadPending = false;
+    }
     CallEvent(EventType::ReloadEnd);
 }
 
@@ -435,6 +440,10 @@ bool ScriptsBuilderImpl::compileGameScriptsAsyncInner()
     {
         LOG(Info, "Missing EditorTarget in project. Skipping compilation.");
         CallEvent(EventType::ReloadCalled);
+        {
+            ScopeLock scopeLock(_locker);
+            _isReloadPending = true;
+        }
         Scripting::Reload();
         return false;
     }
@@ -451,6 +460,10 @@ bool ScriptsBuilderImpl::compileGameScriptsAsyncInner()
 
     // Reload scripts
     CallEvent(EventType::ReloadCalled);
+    {
+        ScopeLock scopeLock(_locker);
+        _isReloadPending = true;
+    }
     Scripting::Reload();
 
     return false;

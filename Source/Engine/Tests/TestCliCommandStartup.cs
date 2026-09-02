@@ -2,6 +2,7 @@
 
 #if FLAX_TESTS && FLAX_EDITOR
 using System;
+using System.Linq;
 using FlaxEditor;
 using NUnit.Framework;
 
@@ -35,8 +36,24 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestCommandDiscoveryCacheReleasesAssembliesForScriptsReload()
+        {
+            var beforeReload = CliCommandRegistry.Discover();
+            CliCommandRegistry.ClearCache();
+            var afterReload = CliCommandRegistry.Discover();
+
+            Assert.AreNotSame(beforeReload, afterReload);
+            Assert.AreEqual(beforeReload.Length, afterReload.Length);
+            Assert.AreEqual(beforeReload.Select(x => x.Attribute.Name), afterReload.Select(x => x.Attribute.Name));
+        }
+
+        [Test]
         public void TestProjectCommandStartupWaitIsBounded()
         {
+            Assert.IsFalse(CliRequestService.IsCommandStartupReady(true, true));
+            Assert.IsFalse(CliRequestService.IsCommandStartupReady(false, false));
+            Assert.IsTrue(CliRequestService.IsCommandStartupReady(true, false));
+
             var deadline = DateTime.UtcNow.AddSeconds(-1);
             Assert.IsFalse(CliRequestService.EvaluateCommandStartup(false, DateTime.UtcNow, deadline, out var timedOut));
             Assert.IsTrue(timedOut);
