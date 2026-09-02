@@ -2570,9 +2570,9 @@ namespace FlaxEditor.Windows
             var game = Editor.ContentDatabase.Game;
             if (game != null)
             {
-                game.ShowHeader = false;
-                game.IsSelectable = false;
-                game.ChildrenIndent = 0;
+                game.ShowHeader = true;
+                game.IsSelectable = true;
+                game.ChildrenIndent = 12.0f;
                 _root.AddChild(game);
             }
             Editor.ContentDatabase.Projects.Sort();
@@ -2590,8 +2590,6 @@ namespace FlaxEditor.Windows
             _root.AddChild(Editor.ContentDatabase.Engine);
 
             game?.Expand(true);
-            // The internal workspace container is non-presenting; only real project folders
-            // contribute visible rows.
             _tree.Margin = new Margin(0.0f, 0.0f, 0.0f, ScrollBar.DefaultSize + 2);
             _tree.AddChild(_root);
 

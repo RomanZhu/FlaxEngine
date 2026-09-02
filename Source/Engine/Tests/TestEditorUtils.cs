@@ -1419,6 +1419,19 @@ namespace FlaxEngine.Tests
             Assert.IsTrue(ContentWindow.ShouldRefreshWorkspace(true, false));
         }
 
+        public static int RunProjectPanelShowsGameProjectRoot()
+        {
+            var game = FlaxEditor.Editor.Instance.ContentDatabase.Game;
+            Assert.IsNotNull(game);
+            Assert.AreEqual(FlaxEditor.Editor.Instance.GameProject.Name, game.Text);
+            Assert.IsTrue(game.ShowHeader);
+            Assert.IsTrue(game.IsSelectable);
+            Assert.Greater(game.ChildrenIndent, 0.0f);
+            Assert.AreSame(game, game.Content.ParentNode);
+            Assert.AreSame(game, game.Source.ParentNode);
+            return 0;
+        }
+
         [Test]
         public void TestContentRenameRejectsReentrantPopup()
         {
