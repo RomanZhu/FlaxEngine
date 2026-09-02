@@ -50,11 +50,15 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     {
         if (item == null)
             return SpriteHandle.Invalid;
-        var icon = item.DefaultThumbnail;
+        var icon = item.Thumbnail;
+        if (!icon.IsValid)
+            icon = item.DefaultThumbnail;
         if (!icon.IsValid)
             icon = Editor.Instance.Icons.Document128;
         return icon;
     }
+
+    internal static SpriteHandle GetIconForTesting(ContentItem item) => GetIcon(item);
 
     /// <summary>
     /// Updates the query search filter.

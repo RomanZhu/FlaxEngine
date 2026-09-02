@@ -132,6 +132,17 @@ namespace FlaxEngine.Tests
             Assert.IsTrue(ThumbnailsModule.HasMaterialRenderingQuality(true, true));
         }
 
+        [Test]
+        public void TreeRowsPreferGeneratedThumbnails()
+        {
+            var item = new FileItem(Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")));
+            var generated = Editor.Instance.Icons.Folder128;
+            item.Thumbnail = generated;
+
+            Assert.AreEqual(generated, ContentItemTreeNode.GetIconForTesting(item));
+            item.Dispose();
+        }
+
         public static int RunOrdinaryOwnershipDoesNotCreateThumbnailDemand()
         {
             var tests = new TestThumbnailDemand();
@@ -140,6 +151,7 @@ namespace FlaxEngine.Tests
             tests.ForcedUndoReplacementCannotPublishLaterPixels();
             tests.ExactArtifactVersionIsImmutableAndRejectsSupersession();
             tests.LoadedMaterialWaitsForRenderingShaderReadiness();
+            tests.TreeRowsPreferGeneratedThumbnails();
             return 0;
         }
     }
