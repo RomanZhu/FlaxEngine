@@ -883,6 +883,23 @@ TEST_CASE("Representative GLB model family survives editor lifecycle invalidatio
 #endif
 }
 
+TEST_CASE("Representative PNG texture survives editor lifecycle invalidation and cook")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestTextureProductionValidation");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunRepresentativePngHumanLifecycle", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestTextureProductionValidation"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
+}
+
 TEST_CASE("Project panel preserves authored particle and collision text lifecycle")
 {
 #if USE_CSHARP && USE_NETCORE
