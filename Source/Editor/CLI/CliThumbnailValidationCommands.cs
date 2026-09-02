@@ -471,29 +471,43 @@ namespace FlaxEditor
             private static byte[] MoveParticleGraphNode(byte[] data, Float2 delta)
             {
                 var owner = new SurfaceOwner { SurfaceData = (byte[])data.Clone() };
-                using var surface = new ParticleEmitterSurface(owner, null, null);
-                if (surface.Load())
-                    throw new InvalidOperationException("Particle graph failed to load.");
-                var node = surface.Nodes.FirstOrDefault(x => x != surface.RootNode)
-                           ?? throw new InvalidOperationException("Particle graph has no movable node.");
-                node.Location += delta;
-                if (surface.Save())
-                    throw new InvalidOperationException("Particle graph failed to serialize.");
-                return owner.SurfaceData;
+                var surface = new ParticleEmitterSurface(owner, null, null);
+                try
+                {
+                    if (surface.Load())
+                        throw new InvalidOperationException("Particle graph failed to load.");
+                    var node = surface.Nodes.FirstOrDefault(x => x != surface.RootNode)
+                               ?? throw new InvalidOperationException("Particle graph has no movable node.");
+                    node.Location += delta;
+                    if (surface.Save())
+                        throw new InvalidOperationException("Particle graph failed to serialize.");
+                    return owner.SurfaceData;
+                }
+                finally
+                {
+                    surface.Dispose();
+                }
             }
 
             private static byte[] MoveMaterialGraphNode(byte[] data, Float2 delta)
             {
                 var owner = new SurfaceOwner { SurfaceData = (byte[])data.Clone() };
-                using var surface = new MaterialSurface(owner);
-                if (surface.Load())
-                    throw new InvalidOperationException("Material graph failed to load.");
-                var node = surface.Nodes.FirstOrDefault()
-                           ?? throw new InvalidOperationException("Material graph has no movable node.");
-                node.Location += delta;
-                if (surface.Save())
-                    throw new InvalidOperationException("Material graph failed to serialize.");
-                return owner.SurfaceData;
+                var surface = new MaterialSurface(owner);
+                try
+                {
+                    if (surface.Load())
+                        throw new InvalidOperationException("Material graph failed to load.");
+                    var node = surface.Nodes.FirstOrDefault()
+                               ?? throw new InvalidOperationException("Material graph has no movable node.");
+                    node.Location += delta;
+                    if (surface.Save())
+                        throw new InvalidOperationException("Material graph failed to serialize.");
+                    return owner.SurfaceData;
+                }
+                finally
+                {
+                    surface.Dispose();
+                }
             }
 
             private void Complete(CliCommandResult result)
