@@ -178,6 +178,7 @@ namespace FlaxEditor
             var outputPath = ResolveAuthoringPath(path, ".scene", true);
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
             Editor.Instance.Scene.CreateSceneFile(outputPath);
+            CreateCanonicalJsonMetadata(outputPath);
             RefreshCreatedContent(outputPath);
 
             Guid sceneId = Guid.Empty;

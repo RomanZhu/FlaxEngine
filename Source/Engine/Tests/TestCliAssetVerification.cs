@@ -1,6 +1,8 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #if FLAX_TESTS
+using System;
+using System.IO;
 using FlaxEditor;
 using FlaxEditor.Content;
 using NUnit.Framework;
@@ -39,6 +41,15 @@ namespace FlaxEngine.Tests
         {
             Assert.IsTrue(CliAssetCommands.UsesDirectHeadlessCreate(new PrefabProxy()));
             Assert.IsTrue(CliAssetCommands.UsesDirectHeadlessCreate(new ParticleEmitterProxy()));
+        }
+
+        [Test]
+        public void TestHeadlessSceneCreatePublishesMetadata()
+        {
+            var path = Path.Combine(Globals.ProjectContentFolder, $"CliScene-{Guid.NewGuid():N}.scene");
+            CliAuthoringCommands.CreateScene(path);
+            Assert.IsTrue(File.Exists(path));
+            Assert.IsTrue(File.Exists(path + ".meta"));
         }
     }
 }
