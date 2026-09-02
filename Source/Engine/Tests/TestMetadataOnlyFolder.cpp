@@ -52,6 +52,15 @@ TEST_CASE("Asset database materializes a metadata-only folder")
     CHECK(records[0].ID == meta.ID);
     CHECK(records[0].SourceKind == AssetSourceKind::Folder);
     CHECK(records[0].Status == AssetRecordStatus::Ready);
+
+    AssetDatabase database;
+    REQUIRE_FALSE(database.Open(library, Guid::New(), diagnostic));
+    SCOPE_EXIT { database.Close(); };
+    REQUIRE_FALSE(database.ReconcileScanRows(records, result.Diagnostics, result.FileStates, diagnostic));
+    AssetRecord published;
+    REQUIRE(database.TryGetRecord(meta.ID, published));
+    CHECK(published.SourceKind == AssetSourceKind::Folder);
+    CHECK(published.Status == AssetRecordStatus::Ready);
 }
 
 TEST_CASE("Project panel discovers and deletes a metadata-only folder")

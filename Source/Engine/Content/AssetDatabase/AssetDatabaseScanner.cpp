@@ -275,6 +275,39 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         }
     }
 
+    // Folder metadata is authoritative. Materialize a missing directory before the pairing pass so
+    // targeted watcher refreshes follow the same record and collision path as ordinary folders.
+    Array<String> reconstructedFolders;
+    for (const String& metaPath : orderedFiles)
+    {
+        if (options.Cancel && *options.Cancel)
+        {
+            result.Cancelled = true;
+            return false;
+        }
+        if (IsExcluded(metaPath, contentRoot, libraryRoot) || !IsMeta(metaPath))
+            continue;
+        const String sourcePath = metaPath.Substring(0, metaPath.Length() - 5);
+        if (FileSystem::FileExists(sourcePath) || FileSystem::DirectoryExists(sourcePath))
+            continue;
+        AssetMeta meta;
+        AssetPipelineDiagnostic diagnostic;
+        ResolvedAssetSourcePath normalizedSource;
+        if (AssetMeta::Load(metaPath, meta, diagnostic) || !meta.FolderAsset || roots.ResolveForScan(sourcePath, normalizedSource, diagnostic))
+            continue;
+        if (orderedFiles.Count() + reconstructedFolders.Count() >= options.MaximumFiles)
+        {
+            result.Diagnostics.Add(MakeDiagnostic(AssetPipelineDiagnosticCode::SourceBusy, sourcePath, TEXT("Content scan exceeds the configured bounded entry count after folder reconstruction.")));
+            return true;
+        }
+        if (FileSystem::CreateDirectory(sourcePath) && !FileSystem::DirectoryExists(sourcePath))
+            continue;
+        reconstructedFolders.Add(sourcePath);
+        fileSet.Add(sourcePath);
+    }
+    orderedFiles.Add(reconstructedFolders);
+    SortScanPaths(orderedFiles);
+
     Dictionary<Guid, int32> recordIndices;
     Dictionary<String, int32> mainPathIndices;
     HashSet<String> consumedMeta;
@@ -379,27 +412,9 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             result.Diagnostics.Add(diagnostic);
             continue;
         }
-        AssetRecordStatus status = AssetRecordStatus::OrphanMeta;
-        if (meta.FolderAsset)
-        {
-            if (FileSystem::CreateDirectory(sourcePath) && !FileSystem::DirectoryExists(sourcePath))
-            {
-                AssetPipelineDiagnostic orphan = MakeDiagnostic(AssetPipelineDiagnosticCode::SourceMissing, sourcePath, TEXT("Folder metadata sidecar could not materialize its adjacent directory."));
-                orphan.Related.Add(metaPath);
-                result.Diagnostics.Add(MoveTemp(orphan));
-            }
-            else
-            {
-                status = AssetRecordStatus::Ready;
-                result.SidecarsParsed++;
-            }
-        }
-        else
-        {
-            AssetPipelineDiagnostic orphan = MakeDiagnostic(AssetPipelineDiagnosticCode::SourceMissing, sourcePath, TEXT("Metadata sidecar has no adjacent source file."));
-            orphan.Related.Add(metaPath);
-            result.Diagnostics.Add(MoveTemp(orphan));
-        }
+        AssetPipelineDiagnostic orphan = MakeDiagnostic(AssetPipelineDiagnosticCode::SourceMissing, sourcePath, TEXT("Metadata sidecar has no adjacent source file."));
+        orphan.Related.Add(metaPath);
+        result.Diagnostics.Add(MoveTemp(orphan));
         AssetPathPolicy::ProjectPath& normalizedPath = normalizedSource.Path;
         StringAnsi canonicalMeta;
         if (meta.ToJson(canonicalMeta, diagnostic))
@@ -408,7 +423,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             continue;
         }
         Array<AssetRecord> metaRecords;
-        AddMetaRecords(meta, sourcePath, metaPath, normalizedPath, Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length()), status, metaRecords);
+        AddMetaRecords(meta, sourcePath, metaPath, normalizedPath, Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length()), AssetRecordStatus::OrphanMeta, metaRecords);
         for (AssetRecord& record : metaRecords)
             AddRecordWithDuplicateCheck(MoveTemp(record), records, recordIndices, result.Diagnostics);
     }

@@ -35,9 +35,9 @@ namespace FlaxEngine.Tests
                     "}\n");
                 Assert.IsFalse(Directory.Exists(folderPath));
 
-                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { folderPath }));
-                Assert.IsTrue(Directory.Exists(folderPath));
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(folderId, out var record));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { metadataPath }));
+                Assert.IsTrue(Directory.Exists(folderPath), "Metadata refresh did not materialize the folder.");
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(folderId, out var record), "Materialized folder was not published.");
                 Assert.AreEqual(AssetRecordStatus.Ready, record.Status);
                 Assert.AreEqual(AssetSourceKind.Folder, record.SourceKind);
 
