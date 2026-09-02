@@ -62,12 +62,9 @@ namespace FlaxEngine.Tests
             {
                 fixture = ProductionValidationFixture.Create();
                 root = fixture.RootPath;
-                stage = "initial source refresh";
-                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
-                stage = "initial subasset reconcile";
-                Assert.IsFalse(ModelImporterService.ReconcileSubAssets(fixture.ModelId));
                 stage = "expanded family import";
                 WriteTwoMeshGlb(fixture.ModelPath, false);
+                StageAuthoredModelMetadata(fixture);
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
                 Assert.IsFalse(ModelImporterService.ReconcileSubAssets(fixture.ModelId));
                 Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.ModelId));
@@ -196,6 +193,18 @@ namespace FlaxEngine.Tests
                 Assert.IsTrue(item.IsOfType<Animation>());
                 Assert.AreEqual(ContentItemSearchFilter.Animation, item.SearchFilter);
             }
+        }
+
+        private static void StageAuthoredModelMetadata(ProductionValidationFixture fixture)
+        {
+            var stagingPath = fixture.ModelPath + ".staged-meta";
+            var stagedIds = AssetOperationService.StageDefaultMetadataBatch(
+                new[] { fixture.ModelPath }, new[] { stagingPath });
+            Assert.AreEqual(1, stagedIds.Length, "Model metadata staging did not produce one authored root.");
+            var metadata = File.ReadAllText(stagingPath)
+                .Replace(stagedIds[0].ToString("N"), fixture.ModelId.ToString("N"));
+            File.WriteAllText(fixture.ModelPath + ".meta", metadata, new UTF8Encoding(false));
+            File.Delete(stagingPath);
         }
 
         private static void WriteTwoMeshGlb(string path, bool reversed)
