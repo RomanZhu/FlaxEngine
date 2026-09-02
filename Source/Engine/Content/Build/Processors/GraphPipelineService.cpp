@@ -122,10 +122,11 @@ namespace
                 if (result != BinaryAssetStorageSwitchResult::Success)
                     LOG(Error, "Failed to hot-swap graph artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
             }
-            else if (json && json->GetTypeName() == artifact.TypeName && (json->IsLoaded() || json->LastLoadFailed()))
+            else if (json && json->GetTypeName() == artifact.TypeName)
             {
                 json->SetStoragePath(artifact.StoragePath.Get());
-                json->Reload();
+                if (json->IsLoaded() || json->LastLoadFailed())
+                    json->Reload();
             }
         }
         AssetPipelineService::NotifyArtifactPublished(assetID);
