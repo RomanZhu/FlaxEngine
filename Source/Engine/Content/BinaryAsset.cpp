@@ -5,7 +5,6 @@
 #include "Loading/Tasks/LoadAssetDataTask.h"
 #include "Factories/BinaryAssetFactory.h"
 #include "Artifacts/ResolvedArtifact.h"
-#include "AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Serialization/JsonTools.h"
 #include "Engine/Debug/Exceptions/JsonParseException.h"
@@ -13,6 +12,7 @@
 #include "Engine/Threading/Threading.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #if USE_EDITOR
+#include "AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Engine/Globals.h"
 #endif

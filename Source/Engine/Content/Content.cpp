@@ -9,11 +9,6 @@
 #include "Storage/JsonStorageProxy.h"
 #include "Factories/IAssetFactory.h"
 #include "Artifacts/ResolvedArtifact.h"
-#include "AssetDatabase/Identity/AssetIdentitySerialization.h"
-#include "Artifacts/ArtifactResolver.h"
-#include "AssetDatabase/AssetPath.h"
-#include "AssetDatabase/AssetDatabase.h"
-#include "AssetDatabase/AssetMeta.h"
 #include "Loading/LoadingThread.h"
 #include "Loading/ContentLoadTask.h"
 #include "Loading/AssetObjectLoader.h"
@@ -39,12 +34,19 @@
 #include "Engine/Engine/Time.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Level/Types.h"
-#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
 #include "Engine/Profiler/ProfilerCPU.h"
 #include "Engine/Profiler/ProfilerMemory.h"
 #include "Engine/Scripting/ManagedCLR/MClass.h"
 #include "Engine/Scripting/Internal/InternalCalls.h"
 #include "Engine/Scripting/Scripting.h"
+#if USE_EDITOR
+#include "AssetDatabase/Identity/AssetIdentitySerialization.h"
+#include "Artifacts/ArtifactResolver.h"
+#include "AssetDatabase/AssetPath.h"
+#include "AssetDatabase/AssetDatabase.h"
+#include "AssetDatabase/AssetMeta.h"
+#include "Engine/Level/SceneFragments/SceneFragmentStore.h"
+#endif
 #if USE_EDITOR && PLATFORM_WINDOWS
 #include "Engine/Platform/Win32/IncludeWindowsHeaders.h"
 #include <propidlbase.h>

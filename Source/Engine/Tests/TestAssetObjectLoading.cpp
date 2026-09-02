@@ -15,6 +15,17 @@ namespace
         return ContentHash::Compute(value, StringUtils::Length(value));
     }
 
+    bool ContainsAscii(const Array<byte>& bytes, const char* value)
+    {
+        const int32 length = StringUtils::Length(value);
+        for (int32 i = 0; i + length <= bytes.Count(); i++)
+        {
+            if (Platform::MemoryCompare(bytes.Get() + i, value, length) == 0)
+                return true;
+        }
+        return false;
+    }
+
     AssetObjectLoadLocation TestLocation(const Guid& object, uint64 revision, const AssetObjectId& storageObject = AssetObjectId())
     {
         AssetObjectLoadLocation result;
@@ -110,14 +121,20 @@ namespace
         std::atomic<int32> Creates{0};
         std::atomic<int32> Destroys{0};
         String LastStorage;
+        String LastSource;
         AssetObjectId LastStorageObject;
+        AssetObjectStorageKind LastStorageKind = AssetObjectStorageKind::EditorArtifact;
+        Array<Guid> LastDependencies;
 
         bool CreateObject(const AssetObjectLoadLocation& location, void*& instance,
             AssetPipelineDiagnostic& diagnostic) override
         {
             const int32 number = Creates.fetch_add(1) + 1;
             LastStorage = location.StorageName;
+            LastSource = location.SourceName;
             LastStorageObject = location.StorageObject;
+            LastStorageKind = location.StorageKind;
+            LastDependencies = location.Dependencies;
             instance = reinterpret_cast<void*>(static_cast<uintptr_t>(number));
             diagnostic = AssetPipelineDiagnostic();
             return false;
@@ -345,6 +362,69 @@ TEST_CASE("Cooked player loads exact main and subasset GUIDs after registry reco
     CHECK(unresolved.State == LoadedAssetState::Unresolved);
     CHECK(unresolved.Instance == nullptr);
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactMissing);
+}
+
+TEST_CASE("Cold cooked player bootstraps GameSettings and packaged scene without Editor sources")
+{
+    const Guid gameSettings(116, 0, 0, 1);
+    const Guid scene(116, 0, 0, 2);
+    RuntimeAssetCatalogEntry settingsEntry;
+    settingsEntry.Object = gameSettings;
+    settingsEntry.TypeName = "FlaxEditor.Content.Settings.GameSettings";
+    settingsEntry.PackageName = "Data_0.flaxpac";
+    settingsEntry.Size = 48;
+    settingsEntry.Content = LoadingTestHash("cooked-game-settings");
+    settingsEntry.Dependencies.Add(scene);
+    RuntimeAssetCatalogEntry sceneEntry;
+    sceneEntry.Object = scene;
+    sceneEntry.TypeName = "FlaxEngine.SceneAsset";
+    sceneEntry.PackageName = "Data_0.flaxpac";
+    sceneEntry.Size = 96;
+    sceneEntry.Content = LoadingTestHash("cooked-scene");
+    Array<RuntimeAssetCatalogEntry> entries;
+    entries.Add(settingsEntry);
+    entries.Add(sceneEntry);
+
+    AssetPipelineDiagnostic diagnostic;
+    RuntimeAssetCatalog cookedCatalog;
+    REQUIRE_FALSE(cookedCatalog.Set(StringAnsiView("player-cold-start"), LoadingTestHash("player-target"), entries, diagnostic));
+    cookedCatalog.SetGameSettingsObject(gameSettings);
+    Array<byte> catalogBytes;
+    REQUIRE_FALSE(cookedCatalog.ToBytes(catalogBytes, diagnostic));
+    CHECK_FALSE(ContainsAscii(catalogBytes, ".meta"));
+    CHECK_FALSE(ContainsAscii(catalogBytes, "Content/"));
+    CHECK_FALSE(ContainsAscii(catalogBytes, "Migration"));
+    CHECK_FALSE(ContainsAscii(catalogBytes, "Thumbnail"));
+
+    RuntimeAssetCatalog playerCatalog;
+    REQUIRE_FALSE(RuntimeAssetCatalog::FromBytes(Span<byte>(catalogBytes.Get(), catalogBytes.Count()), playerCatalog, diagnostic));
+    REQUIRE(playerCatalog.GetGameSettingsObject() == gameSettings);
+    RuntimeCatalogAssetObjectResolver runtimeResolver(playerCatalog, 1);
+    TestObjectResolver poisonEditorResolver;
+    poisonEditorResolver.FailResolution = true;
+    TestObjectFactory factory;
+    LoadedAssetRegistry registry;
+    AssetObjectLoader playerLoader(registry, static_cast<IRuntimeAssetObjectResolver&>(runtimeResolver), factory);
+    CHECK_FALSE(playerLoader.AllowsStaleContinuity());
+
+    AssetObjectLoadResult settingsResult;
+    REQUIRE_FALSE(playerLoader.Load(playerCatalog.GetGameSettingsObject(), settingsResult, diagnostic));
+    CHECK(settingsResult.Object == gameSettings);
+    CHECK(factory.LastStorage == TEXT("Data_0.flaxpac"));
+    CHECK(factory.LastSource == factory.LastStorage);
+    CHECK(factory.LastStorageKind == AssetObjectStorageKind::RuntimePackage);
+    REQUIRE(factory.LastDependencies.Count() == 1);
+    CHECK(factory.LastDependencies[0] == scene);
+
+    AssetObjectLoadResult sceneResult;
+    REQUIRE_FALSE(playerLoader.Load(scene, sceneResult, diagnostic));
+    CHECK(sceneResult.Object == scene);
+    CHECK(factory.LastStorage == TEXT("Data_0.flaxpac"));
+    CHECK(factory.LastSource == factory.LastStorage);
+    CHECK(factory.LastStorageObject == AssetObjectId::Main(AssetGuid(scene)));
+    CHECK(factory.LastStorageKind == AssetObjectStorageKind::RuntimePackage);
+    CHECK(poisonEditorResolver.Calls.load() == 0);
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
 }
 
 TEST_CASE("Object loader rematerializes an unloaded registry instance")
