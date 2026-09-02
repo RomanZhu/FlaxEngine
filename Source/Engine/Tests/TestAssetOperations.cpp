@@ -22,6 +22,11 @@
 
 #if USE_EDITOR
 
+namespace EditorImpl
+{
+    bool CreateNewProjectSettingsBootstrap(const StringView& projectPath, const Guid& settingsIndexGuid, const Guid& gameSettingsGuid);
+}
+
 namespace
 {
     AssetMeta MakeOperationMeta()
@@ -805,6 +810,29 @@ TEST_CASE("Managed content mutations roll back in process without journals")
     REQUIRE(result);
     CHECK(MUtils::Unbox<int32>(result) == 0);
 #endif
+}
+
+TEST_CASE("New project bootstrap serializes the GameSettings source GUID")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("ProjectSettingsBootstrap-") + Guid::New().ToString(Guid::FormatType::N));
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    const Guid indexGuid = Guid::New();
+    const Guid gameSettingsGuid = Guid::New();
+
+    REQUIRE_FALSE(EditorImpl::CreateNewProjectSettingsBootstrap(root, indexGuid, gameSettingsGuid));
+    BytesContainer sourceBytes;
+    REQUIRE_FALSE(File::ReadAllBytes(root / TEXT("Content/Settings/ProjectSettingsIndex.settings"), sourceBytes));
+    rapidjson_flax::Document document;
+    document.Parse(sourceBytes.Get<char>(), sourceBytes.Length());
+    REQUIRE_FALSE(document.HasParseError());
+    const auto data = document.FindMember("data");
+    REQUIRE(data != document.MemberEnd());
+    REQUIRE(data->value.IsObject());
+    const auto gameSettings = data->value.FindMember("GameSettings");
+    REQUIRE(gameSettings != data->value.MemberEnd());
+    REQUIRE(gameSettings->value.IsString());
+    CHECK(JsonTools::GetGuid(gameSettings->value) == gameSettingsGuid);
 }
 
 TEST_CASE("Content workspace reports ordinary write failures without journals")

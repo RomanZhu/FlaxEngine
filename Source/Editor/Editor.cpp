@@ -66,7 +66,7 @@ namespace EditorImpl
         const String indexSourcePath = settingsPath / TEXT("ProjectSettingsIndex.settings");
         const StringAnsi gameGuid(gameSettingsGuid.ToString(Guid::FormatType::N).ToLower());
         const StringAnsi indexSource = StringAnsi::Format(
-            "{{\n  \"settingsVersion\": 1,\n  \"type\": \"FlaxEngine.JsonAsset\",\n  \"data\": {{\n    \"GameSettings\": {{\n      \"guid\": \"{0}\",\n      \"fileId\": 1\n    }}\n  }}\n}}\n",
+            "{{\n  \"settingsVersion\": 1,\n  \"type\": \"FlaxEngine.JsonAsset\",\n  \"data\": {{\n    \"GameSettings\": \"{0}\"\n  }}\n}}\n",
             gameGuid);
         return File::WriteAllBytes(indexSourcePath, reinterpret_cast<const byte*>(indexSource.Get()), indexSource.Length()) ||
             AssetMeta::SaveAtomic(indexSourcePath + TEXT(".meta"), indexMeta, diagnostic);
