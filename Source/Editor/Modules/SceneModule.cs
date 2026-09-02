@@ -291,7 +291,7 @@ namespace FlaxEditor.Modules
 
             // Cleanup
             Object.Destroy(ref scene);
-            Scripting.FlushRemovedObjects();
+            FlaxEngine.Scripting.FlushRemovedObjects();
 
             if (bytes == null || bytes.Length == 0)
                 throw new Exception("Failed to serialize scene.");
