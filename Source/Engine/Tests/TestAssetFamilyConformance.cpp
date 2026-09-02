@@ -125,7 +125,7 @@ TEST_CASE("Required asset families publish concise executable conformance eviden
     AssetDatabaseRecordInfo unsupported;
     REQUIRE(AssetDatabaseQueryService::TryGetMainRecordAtPath(source, unsupported));
     CHECK(unsupported.TypeName == RawDataAsset::TypeName);
-    CHECK(unsupported.ProcessorID == TEXT("Flax.Binary"));
+    CHECK(unsupported.ProcessorID == TEXT("Flax.Unsupported"));
     CHECK(unsupported.Status == AssetRecordStatus::UnsupportedProcessor);
     CHECK(AssetPipelineService::ImportAsset(source));
     CHECK_FALSE(AssetPipelineService::IsArtifactCurrent(unsupported.ID));

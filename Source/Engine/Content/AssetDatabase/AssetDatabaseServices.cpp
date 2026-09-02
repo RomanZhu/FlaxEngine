@@ -986,7 +986,7 @@ namespace
         else
         {
             meta.AssetType = RawDataAsset::TypeName;
-            meta.Processor.ID = TEXT("Flax.Binary");
+            meta.Processor.ID = TEXT("Flax.Unsupported");
         }
         meta.Processor.SettingsVersion = 1;
         meta.Processor.SettingsJson = "{}\n";
@@ -1392,7 +1392,7 @@ namespace
         {
             metadata.AssetType = RawDataAsset::TypeName;
             metadata.SourceKind = AssetSourceKind::ImportedSource;
-            metadata.Processor.ID = TEXT("Flax.Binary");
+            metadata.Processor.ID = TEXT("Flax.Unsupported");
             metadata.Processor.SettingsVersion = 1;
             metadata.Processor.SettingsJson = "{}\n";
             return AssetMeta::SaveAtomic(metaPath, metadata, diagnostic);
