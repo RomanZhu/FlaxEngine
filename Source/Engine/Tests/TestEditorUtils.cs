@@ -2168,20 +2168,24 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(AssetPipelineService.RefreshSources(paths));
 
                 stage = "overlapping builds";
+                var overlapWitnessId = ids[1];
                 var cancelledId = ids[2];
+                AssetPipelineService.SetBuildPausedForTesting(overlapWitnessId, true);
                 AssetPipelineService.SetBuildPausedForTesting(cancelledId, true);
                 foreach (var id in ids)
                     Assert.IsFalse(AssetPipelineService.BuildAsset(id));
-                while (AssetPipelineService.GetBuildStatus(cancelledId) != "Building")
+                while (AssetPipelineService.GetBuildStatus(overlapWitnessId) != "Building" ||
+                       AssetPipelineService.GetBuildStatus(cancelledId) != "Building")
                 {
-                    Assert.Less(total.ElapsedMilliseconds, 5 * 60 * 1000, "Cancellation target did not start before the hard abort ceiling.");
+                    Assert.Less(total.ElapsedMilliseconds, 5 * 60 * 1000, "Concurrent import witnesses did not start before the hard abort ceiling.");
                     Thread.Sleep(1);
                 }
-                Assert.IsFalse(AssetPipelineService.CancelBuild(cancelledId));
-                AssetPipelineService.SetBuildPausedForTesting(cancelledId, false);
                 var statusLatency = System.Diagnostics.Stopwatch.StartNew();
                 var initialStatuses = ids.Select(AssetPipelineService.GetBuildStatus).ToArray();
                 Assert.Less(statusLatency.ElapsedMilliseconds, 1000, "Human-facing build status queries stalled Editor interaction.");
+                Assert.IsFalse(AssetPipelineService.CancelBuild(cancelledId));
+                AssetPipelineService.SetBuildPausedForTesting(overlapWitnessId, false);
+                AssetPipelineService.SetBuildPausedForTesting(cancelledId, false);
                 var peakActive = initialStatuses.Count(status => status == "Queued" || status == "Building" || status == "Publishing");
                 while (true)
                 {
@@ -2251,7 +2255,10 @@ namespace FlaxEngine.Tests
             finally
             {
                 if (ids.Count > 2)
+                {
+                    AssetPipelineService.SetBuildPausedForTesting(ids[1], false);
                     AssetPipelineService.SetBuildPausedForTesting(ids[2], false);
+                }
                 Debug.LogMessageReceived -= capture;
                 foreach (var path in paths)
                     CleanupCanonicalCopyAsset(path);
