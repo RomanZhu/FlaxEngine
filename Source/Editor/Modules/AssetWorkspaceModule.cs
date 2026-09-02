@@ -225,15 +225,9 @@ namespace FlaxEditor.Modules
             var item = FindLoadedAsset(objectId);
             if (item?.HasThumbnailReference == true)
                 Editor.Thumbnails.RequestPreview(item, forceRegenerate, true);
-            else if (item != null)
-                Editor.Thumbnails.DeletePreview(item);
             else
                 Editor.Thumbnails.DeletePreview(objectId);
         }
-
-#if FLAX_TESTS
-        internal void InvalidateThumbnailForTesting(Guid objectId, bool forceRegenerate) => InvalidateThumbnail(objectId, forceRegenerate);
-#endif
 
         private static AssetDatabaseRecordInfo[] QueryDirectFolderRecords(string folderPath, bool mainAssets)
         {

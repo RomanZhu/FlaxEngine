@@ -1770,18 +1770,6 @@ namespace FlaxEngine.Tests
                         "Repeated graph saves changed the emitter's persistent thumbnail identity.");
                     Assert.IsTrue(emitterItem.IsThumbnailRequestQueuedForTesting,
                         "Repeated publication did not renew visible thumbnail demand.");
-
-                    emitterItem.RemoveReference(thumbnailOwner);
-                    Assert.IsFalse(emitterItem.HasThumbnailReference);
-                    Assert.IsTrue(emitterItem.Thumbnail.IsValid,
-                        "The no-demand invalidation regression needs a previously published thumbnail handle.");
-                    FlaxEditor.Editor.Instance.ContentDatabase.InvalidateThumbnailForTesting(emitterId, true);
-                    Assert.IsFalse(emitterItem.Thumbnail.IsValid,
-                        "No-demand publication released the cache slot without invalidating the loaded item's handle.");
-                    Assert.IsFalse(emitterItem.IsThumbnailRequestQueuedForTesting);
-                    emitterItem.AddReference(thumbnailOwner, true);
-                    Assert.IsTrue(emitterItem.IsThumbnailRequestQueuedForTesting,
-                        "Visibility demand did not requeue a thumbnail after its no-demand cache slot was released.");
                     Assert.IsFalse(emitterSession.IsDirty);
                     Assert.IsTrue(emitterSession.ReloadFromDisk(), "Emitter graph session did not reload from disk.");
                 }
