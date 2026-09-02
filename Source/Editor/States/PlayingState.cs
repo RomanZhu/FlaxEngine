@@ -195,7 +195,7 @@ namespace FlaxEditor.States
 
             // Restore editor scene
             SceneRestoring?.Invoke();
-            _duplicateScenes.UnloadScenes();
+            var sceneObjectReferences = _duplicateScenes.UnloadScenes();
             PluginManager.Internal_DeinitializeGamePlugins();
             FlaxEngine.Scripting.FlushRemovedObjects();
             Editor.WipeOutLeftoverSceneObjects();
@@ -214,6 +214,9 @@ namespace FlaxEditor.States
             Editor.OnPlayEnd();
             IsPlayModeEnding = false;
             Profiler.EndEvent();
+
+            // Keep runtime scene wrappers rooted through native unload and object flushing.
+            GC.KeepAlive(sceneObjectReferences);
 
             Time.Synchronize(true);
         }

@@ -130,22 +130,48 @@ namespace FlaxEditor.Utilities
         /// <summary>
         /// Deletes the creates scenes for the simulation.
         /// </summary>
-        public void UnloadScenes()
+        public List<object> UnloadScenes()
         {
             Profiler.BeginEvent("DuplicateScenes.UnloadScenes");
             Editor.Log("Restoring scene data");
 
             // TODO: here we can keep changes for actors marked to keep their state after simulation
 
+            // Keep managed wrappers alive while native EndPlay and object removal walk the
+            // runtime hierarchy. Scene graph disposal releases its references before the
+            // native unload starts, so a GC at this point could otherwise invalidate a
+            // wrapper that is still used by native script callbacks.
+            var sceneObjectReferences = new List<object>();
+            var visitedActors = new HashSet<Actor>();
+            var scenes = Level.Scenes;
+            for (int i = 0; i < scenes.Length; i++)
+                CollectSceneObjectReferences(scenes[i], sceneObjectReferences, visitedActors);
+
             // Delete new scenes
             if (Level.UnloadAllScenes())
             {
                 Profiler.EndEvent();
                 Editor.LogError("Failed to unload scenes.");
-                return;
+                return sceneObjectReferences;
             }
 
             Profiler.EndEvent();
+            return sceneObjectReferences;
+        }
+
+        private static void CollectSceneObjectReferences(Actor actor, List<object> references, HashSet<Actor> visitedActors)
+        {
+            if (!visitedActors.Add(actor))
+                return;
+            references.Add(actor);
+
+            var scripts = actor.Scripts;
+            for (int i = 0; i < scripts.Length; i++)
+                references.Add(scripts[i]);
+
+            var children = actor.Children;
+            for (int i = 0; i < children.Length; i++)
+                CollectSceneObjectReferences(children[i], references, visitedActors);
         }
 
         /// <summary>

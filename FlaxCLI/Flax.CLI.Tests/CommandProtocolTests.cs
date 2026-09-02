@@ -156,6 +156,7 @@ public sealed class CommandProtocolTests
     [TestCase("prefab-assets", "reference.set", "prefab-assets.reference.set")]
     [TestCase("prefab-assets", "batch", "prefab-assets.batch")]
     [TestCase("history", "undo", "history.undo")]
+    [TestCase("visject", "parameter.add", "visject.parameter.add")]
     public void AuthoringGroupsRouteToTypedCommandNames(string group, string action, string expected)
     {
         Assert.That(CommandDispatcher.AuthoringCommandName(group, action), Is.EqualTo(expected));

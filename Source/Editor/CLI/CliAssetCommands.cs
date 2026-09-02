@@ -108,6 +108,12 @@ namespace FlaxEditor
         public string[] Sources { get; set; }
 
         /// <summary>
+        /// Gets or sets the importer kind used to interpret <see cref="ImportOptions"/>.
+        /// </summary>
+        [JsonProperty("importer")]
+        public string Importer { get; set; }
+
+        /// <summary>
         /// Gets or sets the asset type used for creation.
         /// </summary>
         [JsonProperty("assetType")]
@@ -224,6 +230,7 @@ namespace FlaxEditor
             private bool _waitingForImport;
             private bool _importCompleted;
             private bool _importFailed;
+            private AssetItem _waitingForTextureBuild;
             private bool _cancelled;
 
             public AssetBatchOperation(CliCommandContext context, CliAssetOperationOptions[] operations, bool continueOnError, bool verifyReload, bool single)
@@ -260,6 +267,12 @@ namespace FlaxEditor
                     return;
                 }
 
+                if (_waitingForTextureBuild != null)
+                {
+                    CompleteTextureBuildIfReady();
+                    return;
+                }
+
                 if (_index < _operations.Length)
                 {
                     ExecuteNext();
@@ -280,6 +293,7 @@ namespace FlaxEditor
                 if (_cancelled)
                     return;
                 _cancelled = true;
+                _waitingForTextureBuild = null;
                 DetachImportEvents();
             }
 
@@ -447,6 +461,9 @@ namespace FlaxEditor
 
             private void BeginImport(CliAssetOperationOptions options, bool reimport)
             {
+                if (reimport && TryBeginCanonicalTextureReimport(options))
+                    return;
+
                 lock (_importLocker)
                 {
                     _importedAssets.Clear();
@@ -468,7 +485,7 @@ namespace FlaxEditor
                             throw new InvalidOperationException($"Asset '{item.Path}' does not support reimport.");
                         if (item.GetImportPath(out var importPath) || !File.Exists(importPath))
                             throw new FileNotFoundException($"The import source for asset '{item.Path}' does not exist.", importPath);
-                        importing.Reimport(item, CreateImportSettings(options.AssetType, options.ImportOptions), true);
+                        importing.Reimport(item, CreateImportSettings(options), true);
                     }
                     else
                     {
@@ -484,7 +501,7 @@ namespace FlaxEditor
                         var preflight = importing.PreflightImport(sources, target);
                         if (!preflight.Succeeded)
                             throw new InvalidOperationException(preflight.Message ?? $"Asset import preflight failed ({preflight.Failure}).");
-                        importing.Import(sources, target, true, CreateImportSettings(options.AssetType, options.ImportOptions));
+                        importing.Import(sources, target, true, CreateImportSettings(options));
                     }
                 }
                 catch
@@ -496,20 +513,80 @@ namespace FlaxEditor
                 }
             }
 
-            private static object CreateImportSettings(string assetType, JObject importOptions)
+            private bool TryBeginCanonicalTextureReimport(CliAssetOperationOptions options)
             {
-                if (string.IsNullOrWhiteSpace(assetType) && importOptions == null)
-                    return null;
-                var modelOptions = importOptions == null
-                    ? ModelTool.Options.Default
-                    : JsonConvert.DeserializeObject<ModelTool.Options>(importOptions.ToString(Formatting.None), FlaxJsonSerializer.Settings);
-                if (!string.IsNullOrWhiteSpace(assetType))
+                if (!string.Equals(options.Importer?.Trim(), "texture", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                var item = RequireItem(options.Path) as AssetItem;
+                if (item is not { IsCanonicalSource: true } || item is not TextureAssetItem)
+                    return false;
+
+                var textureOptions = TextureTool.Options.Default;
+                if (AssetDatabaseFacade.LoadTextureMetadata(item.Path, out textureOptions))
+                    throw new InvalidOperationException($"Failed to load tracked texture settings for '{item.Path}'.");
+                textureOptions = MergeImportOptions(textureOptions, options.ImportOptions);
+                using var save = Editor.Instance.ContentDatabase.TrackAssetSave(item.Path + ".meta");
+                var failed = AssetDatabaseFacade.ApplyTextureMetadata(item.Path, textureOptions);
+                save.Complete(!failed);
+                if (failed)
                 {
-                    if (!Enum.TryParse(assetType, true, out ModelTool.ModelType modelType))
-                        throw new InvalidOperationException($"Unsupported import asset type '{assetType}'.");
+                    var diagnostic = AssetDatabaseFacade.GetTextureBuildDiagnostic(item.ID);
+                    throw new InvalidOperationException(string.IsNullOrEmpty(diagnostic.Message)
+                        ? $"Failed to apply tracked texture settings for '{item.Path}'."
+                        : diagnostic.Message);
+                }
+
+                TrackVerification(item.Path);
+                _waitingForTextureBuild = item;
+                return true;
+            }
+
+            private static object CreateImportSettings(CliAssetOperationOptions options)
+            {
+                if (string.IsNullOrWhiteSpace(options.Importer) &&
+                    string.IsNullOrWhiteSpace(options.AssetType) && options.ImportOptions == null)
+                    return null;
+
+                var importer = options.Importer?.Trim();
+                if (string.Equals(importer, "texture", StringComparison.OrdinalIgnoreCase))
+                {
+                    var textureOptions = TextureTool.Options.Default;
+                    if (!string.IsNullOrWhiteSpace(options.Path))
+                        Editor.TryRestoreImportOptions(ref textureOptions, options.Path);
+                    textureOptions = MergeImportOptions(textureOptions, options.ImportOptions);
+                    return new TextureImportSettings { Settings = textureOptions };
+                }
+
+                if (!string.IsNullOrWhiteSpace(importer) &&
+                    !string.Equals(importer, "model", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"Unsupported importer '{options.Importer}'. Supported importers are 'model' and 'texture'.");
+                }
+
+                var modelOptions = ModelTool.Options.Default;
+                modelOptions = MergeImportOptions(modelOptions, options.ImportOptions);
+                if (!string.IsNullOrWhiteSpace(options.AssetType))
+                {
+                    if (!Enum.TryParse(options.AssetType, true, out ModelTool.ModelType modelType))
+                        throw new InvalidOperationException($"Unsupported import asset type '{options.AssetType}'.");
                     modelOptions.Type = modelType;
                 }
                 return new ModelImportSettings { Settings = modelOptions };
+            }
+
+            private static T MergeImportOptions<T>(T defaults, JObject overrides)
+            {
+                if (overrides == null)
+                    return defaults;
+                var serializer = Newtonsoft.Json.JsonSerializer.Create(FlaxJsonSerializer.Settings);
+                var merged = JObject.FromObject(defaults, serializer);
+                merged.Merge(overrides, new JsonMergeSettings
+                {
+                    MergeArrayHandling = MergeArrayHandling.Replace,
+                    MergeNullValueHandling = MergeNullValueHandling.Ignore,
+                });
+                return merged.ToObject<T>(serializer);
             }
 
             private void OnAssetImportFileEnd(FlaxEditor.Content.IFileEntryAction entry, bool failed)
@@ -547,6 +624,24 @@ namespace FlaxEditor
                     RecordFailure(action, new InvalidOperationException("One or more assets failed to import."));
                 else
                     RecordSuccess(action, imported);
+            }
+
+            private void CompleteTextureBuildIfReady()
+            {
+                var item = _waitingForTextureBuild;
+                var status = AssetDatabaseFacade.GetTextureBuildStatus(item.ID);
+                if (status == "ReadyExact")
+                {
+                    _waitingForTextureBuild = null;
+                    RecordSuccess("reimport", new { id = item.ID, path = item.Path, status });
+                }
+                else if (status == "Failed" || status == "Cancelled")
+                {
+                    _waitingForTextureBuild = null;
+                    var diagnostic = AssetDatabaseFacade.GetTextureBuildDiagnostic(item.ID);
+                    RecordFailure("reimport", new InvalidOperationException(
+                        string.IsNullOrEmpty(diagnostic.Message) ? $"Texture build {status.ToLowerInvariant()}." : diagnostic.Message));
+                }
             }
 
             private void DetachImportEvents()

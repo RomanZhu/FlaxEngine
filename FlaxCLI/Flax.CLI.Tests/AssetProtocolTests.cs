@@ -84,6 +84,38 @@ public sealed class AssetProtocolTests
     }
 
     [Test]
+    public void BatchContractCarriesTextureReimportSettings()
+    {
+        var batch = new AssetBatchInput
+        {
+            VerifyReload = true,
+            Operations =
+            [
+                new AssetRequestOptions
+                {
+                    Action = "reimport",
+                    Path = "Textures/UI/Journal/Paper.png",
+                    Importer = "texture",
+                    ImportOptions = new JsonObject
+                    {
+                        ["sRGB"] = true,
+                        ["AlphaIsTransparency"] = true,
+                        ["GenerateMipMaps"] = true,
+                    },
+                },
+            ],
+        };
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(batch, JsonSupport.Options));
+        var operation = document.RootElement.GetProperty("operations")[0];
+
+        Assert.That(operation.GetProperty("importer").GetString(), Is.EqualTo("texture"));
+        Assert.That(operation.GetProperty("importOptions").GetProperty("sRGB").GetBoolean(), Is.True);
+        Assert.That(operation.GetProperty("importOptions").GetProperty("AlphaIsTransparency").GetBoolean(), Is.True);
+        Assert.That(operation.GetProperty("importOptions").GetProperty("GenerateMipMaps").GetBoolean(), Is.True);
+    }
+
+    [Test]
     public void BatchOperationsResolveContentAndSourcePaths()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "FlaxCliAssetBatchPathTest"));

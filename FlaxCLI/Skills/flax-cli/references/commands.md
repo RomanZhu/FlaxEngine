@@ -20,7 +20,7 @@ Use `flax` directly when a published executable is installed.
 - Durable jobs: `jobs list|info|status|wait|cancel|prune`; add `--detach` to `compile`, `build`, or `command`
 - Signed local feeds: `feeds verify|list|install --manifest <file> --signature <file> --public-key <RSA-PEM>`
 - Development Player: `player status|pause|resume|step|quit|input`; `runtime input` is an alias. Input supports virtual `key`, absolute/relative `pointer`, `inspect`, and `reset`
-- Visject: `visject groups list`, `asset inspect`, `validate`, `node add|remove|set`, `connect`, `disconnect`. Graph mutations require the asset editor window to be closed; saves are rollback-protected and reload-verified.
+- Visject: `visject groups list`, `asset inspect`, `validate`, `parameter add`, `node add|remove|set`, `connect`, `disconnect`. Graph mutations require the asset editor window to be closed; saves are rollback-protected and reload-verified.
 - Agent bridge: `mcp` (stdio `initialize`, `ping`, `tools/list`, `tools/call`)
 - Diagnostics: `diagnose status|bundle --to <project-relative.zip>`
 
@@ -40,7 +40,7 @@ assuming remote services.
 - Scene-data builders: `bake status`, `bake lighting|navmesh|probes|csg|scenes|sdf start` plus supported cancel/clear actions
 - Diagnostics: `dev unlock-eval`, then `dev eval` or `dev eval-file` in the same live Editor. Eval is bounded expression-only and cannot mutate project state.
 - Arbitrary C#: `dev unlock-csharp`, then `dev eval-csharp` or `dev eval-csharp-file` with the returned token. This is audited, in-process development code, not a sandbox.
-- Visject graphs: `visject groups list`, `asset inspect|validate`, node add/remove/set, and connect/disconnect for Material and Animation Graph assets.
+- Visject graphs: `visject groups list`, `asset inspect|validate`, parameter add, node add/remove/set, and connect/disconnect for Material and Animation Graph assets.
 - Player/runtime: `player status|pause|resume|step|quit` and virtual keyboard/mouse `player input`; use pointer `--state relative --dx ... --dy ...` for mouse-look deltas and `input inspect` for device/mapping/state diagnostics. Gamepad/action synthesis is unsupported.
 - Authoring: `authoring-root`, `scenes`, `actors`, `prefabs`, `prefab-assets`
 - FMOD audio: `audio.authoring.inspect|diagnose|run` for contained JavaScript migrations, clean diagnostics, bank builds, and typed-asset synchronization; use the companion `flax-fmod-audio` skill for complete authoring and gameplay hookup workflows.
@@ -80,6 +80,30 @@ dotnet $cli editor close --discard --project $project --engine $engine --json
 
 `editor close` returns only after the Editor has accepted the save/discard policy
 and requested exit. Verify the process is gone before rebuilding the Editor.
+
+Canonical texture import settings can be changed through a reload-verified batch
+without editing generated metadata. Use `"importer": "texture"`; `importOptions`
+is a partial overlay on the texture's existing tracked settings. The operation
+waits for the exact texture build before it reports success:
+
+```json
+{
+  "schemaVersion": 1,
+  "verifyReload": true,
+  "operations": [
+    {
+      "action": "reimport",
+      "path": "Textures/UI/Journal/Paper.png",
+      "importer": "texture",
+      "importOptions": {
+        "sRGB": true,
+        "AlphaIsTransparency": true,
+        "GenerateMipMaps": true
+      }
+    }
+  ]
+}
+```
 
 Playtest example:
 

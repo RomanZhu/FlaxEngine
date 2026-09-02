@@ -788,10 +788,10 @@ internal sealed class CommandDispatcher(
         }
         else if (group == "visject")
         {
-            // `groups`, `asset`, and `node` have a second verb. `validate`,
+            // `groups`, `asset`, `node`, and `parameter` have a second verb. `validate`,
             // `connect`, and `disconnect` are complete command names and must
             // leave their first option (for example --asset) untouched.
-            if (action is "groups" or "asset" or "node")
+            if (action is "groups" or "asset" or "node" or "parameter")
             {
                 var nested = args.Positional()?.ToLowerInvariant() ?? throw CommandLine.Usage($"visject {action} requires an operation.");
                 action += "." + nested;
@@ -1793,7 +1793,7 @@ internal sealed class CommandDispatcher(
         "runtime" => "flax runtime input <key|pointer|inspect|reset> [options] [--project path] [--instance id|pid]",
         "jobs" => "flax jobs <list|info|status|wait|cancel|prune> [job-id] [--project path] [--yes]",
         "feeds" => "flax feeds <verify|list|install> --manifest path --signature path --public-key path [--id entry --to directory --yes]",
-        "visject" => "flax visject groups list | asset inspect --asset path [--kind material|animation] | validate | node add|remove|set | connect|disconnect",
+        "visject" => "flax visject groups list | asset inspect --asset path [--kind material|animation] | validate | parameter add | node add|remove|set | connect|disconnect",
         "mcp" => "flax mcp [--project path] [--instance id|pid]",
         "test" => "flax test <list|run> [native|managed|build] [--kind kind] [--path path] [--filter value]",
         "diagnose" => "flax diagnose <status|bundle> [--to project-relative-zip-path] [--project path]",
@@ -1916,7 +1916,7 @@ Local engine commands:
   settings list|get|schema|diff|set
   bake status, lighting|navmesh|probes|csg|scenes|sdf start|cancel|clear
   dev unlock-eval|eval|eval-file|unlock-csharp|eval-csharp|eval-csharp-file
-  visject groups|asset|validate|node|connect|disconnect
+  visject groups|asset|validate|parameter|node|connect|disconnect
   player status|pause|resume|step|quit|input
   runtime input key|pointer|inspect|reset (alias for Player virtual input)
   jobs list|info|status|wait|cancel|prune [--detach on long-running commands]

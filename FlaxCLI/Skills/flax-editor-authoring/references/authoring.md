@@ -74,6 +74,8 @@ sandbox.
 flax visject groups list --project <project> --engine <engine> --live-only --json
 flax visject asset inspect --asset Materials\Player.flax --kind material --project <project> --live-only --json
 flax visject validate --asset Animations\Locomotion.flax --kind animation --project <project> --live-only --json
+flax visject parameter add --asset Materials\Page.material --kind material --name PageUI --type texture --project <project> --live-only --json
+flax visject parameter add --asset Materials\Page.material --kind material --name PageRenderTarget --type gputexture --project <project> --live-only --json
 flax visject node add --asset Materials\Player.flax --kind material --group <group-id> --type <type-id> --x 0 --y 0 --project <project> --live-only --json
 flax visject node set --asset Materials\Player.flax --node <node-id> --index 0 --value-json 1 --project <project> --live-only --json
 flax visject connect --asset Materials\Player.flax --from-node <node-id> --from-box <box-id> --to-node <node-id> --to-box <box-id> --project <project> --live-only --json
@@ -81,6 +83,8 @@ flax visject connect --asset Materials\Player.flax --from-node <node-id> --from-
 
 These routes load the actual Flax `MaterialSurface` or `AnimGraphSurface`, use
 the discovered node archetypes, and save through the native asset serializer.
+`visject.parameter.add` creates a persisted public graph parameter and returns
+its stable ID for a subsequent Parameters/Get Parameter node.
 `visject.node.remove` is destructive and requires `--yes`.
 
 ## Development Player and runtime input

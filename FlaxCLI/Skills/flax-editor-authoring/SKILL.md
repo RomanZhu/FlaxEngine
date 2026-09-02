@@ -27,7 +27,7 @@ Read [references/authoring.md](references/authoring.md) for the supported groups
 - Use `flax capture viewport|game --to <path>` for project-confined Editor evidence; the Editor owns the screenshot and the CLI returns the saved path.
 - Use `flax playtest begin` to load the persisted startup scene and wait for play mode, then `playtest find|wait|assert` with stable Actor IDs or exact name/type filters. Use `playtest end` before authoring mutations.
 - Raw input and Player control require an explicitly advertised `player`/`runtimeInput` capability. `player input` sends virtual Flax device events, not OS hardware; gamepad/action synthesis and collision/gameplay event observation are not silently emulated.
-- Use `visject groups list` to discover real Flax node groups before editing Material or Animation Graph assets. Inspect/validate first, then mutate with typed node/connect commands so Visject serialization remains authoritative.
+- Use `visject groups list` to discover real Flax node groups before editing Material or Animation Graph assets. Inspect/validate first, create graph parameters with `visject parameter add`, then mutate with typed node/connect commands so Visject serialization remains authoritative.
 - For open-world trusted development work, use `dev unlock-csharp` and the returned token with `dev eval-csharp`; this is audited in-process code, not a sandbox, and should not replace a reusable typed command.
 - Pass `--yes` only when the requested destructive action and exact target have been verified.
 - Use `--arguments <json>` or `--input <file.json>` for complex objects and arrays instead of fragile shell quoting.

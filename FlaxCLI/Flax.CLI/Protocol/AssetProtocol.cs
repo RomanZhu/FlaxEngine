@@ -21,7 +21,9 @@ internal sealed class AssetRequestOptions
     public string? Path { get; set; }
     public string? Destination { get; set; }
     public string[]? Sources { get; set; }
+    public string? Importer { get; set; }
     public string? AssetType { get; set; }
+    public JsonObject? ImportOptions { get; set; }
     public string? PropertyPath { get; set; }
     public JsonNode? Value { get; set; }
     public string? BaseMaterial { get; set; }

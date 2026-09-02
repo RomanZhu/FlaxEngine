@@ -5,9 +5,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using FlaxEditor.Content;
+using FlaxEditor.Scripting;
 using FlaxEditor.Surface;
 using FlaxEditor.Surface.Elements;
 using FlaxEngine;
+using FlaxEngine.Utilities;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -73,6 +75,33 @@ namespace FlaxEditor
             if (node == null) throw new InvalidOperationException($"Visject node group={group}, type={type} is not valid for {state.Kind}.");
             state.Save();
             return DescribeNode(node);
+        }
+
+        [CliCommand("visject.parameter.add", Description = "Add a typed public parameter to a material or animation graph and persist it.", Access = CliCommandAccess.MutatesProject)]
+        public static object AddParameter([CliOption("asset", Required = true)] string asset, [CliOption("name", Required = true)] string name, [CliOption("type", Required = true)] string type, [CliOption("value-json")] JToken valueJson = null, [CliOption("id")] Guid? id = null, [CliOption("public")] bool isPublic = true, [CliOption("kind")] string kind = null)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("Visject parameter name cannot be empty.", nameof(name));
+            using var state = Open(asset, kind, writable: true);
+            if (state.Surface.GetParameter(name) != null)
+                throw new InvalidOperationException($"Visject parameter '{name}' already exists.");
+            var scriptType = ResolveParameterType(type);
+            var parameter = new SurfaceParameter
+            {
+                ID = id.GetValueOrDefault() == Guid.Empty ? Guid.NewGuid() : id.Value,
+                IsPublic = isPublic,
+                Name = name.Trim(),
+                Type = scriptType,
+                Value = valueJson == null || valueJson.Type == JTokenType.Null
+                    ? TypeUtils.GetDefaultValue(scriptType)
+                    : ConvertParameterValue(scriptType, valueJson),
+            };
+            if (state.Surface.GetParameter(parameter.ID) != null)
+                throw new InvalidOperationException($"Visject parameter ID '{parameter.ID}' already exists.");
+            state.Surface.Parameters.Add(parameter);
+            state.Surface.OnParamCreated(parameter);
+            state.Save();
+            return DescribeParameter(parameter);
         }
 
         [CliCommand("visject.node.remove", Description = "Remove a node from a material or animation graph.", Access = CliCommandAccess.Destructive)]
@@ -272,6 +301,42 @@ namespace FlaxEditor
             };
         }
 
+        private static ScriptType ResolveParameterType(string value)
+        {
+            switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+            {
+            case "bool": return new ScriptType(typeof(bool));
+            case "int":
+            case "integer": return new ScriptType(typeof(int));
+            case "float": return new ScriptType(typeof(float));
+            case "float2": return new ScriptType(typeof(Float2));
+            case "float3": return new ScriptType(typeof(Float3));
+            case "float4": return new ScriptType(typeof(Float4));
+            case "color": return new ScriptType(typeof(Color));
+            case "texture":
+            case "texture2d": return new ScriptType(typeof(Texture));
+            case "gputexture":
+            case "gpu-texture": return new ScriptType(typeof(GPUTexture));
+            case "cubetexture": return new ScriptType(typeof(CubeTexture));
+            default: throw new ArgumentException($"Unsupported Visject parameter type '{value}'. Supported types: bool, int, float, float2, float3, float4, color, texture, gputexture, cubetexture.", nameof(value));
+            }
+        }
+
+        private static object ConvertParameterValue(ScriptType type, JToken value)
+        {
+            var target = type.Type;
+            if (target == typeof(Texture) || target == typeof(CubeTexture))
+            {
+                var id = value.Type == JTokenType.String && Guid.TryParse(value.Value<string>(), out var parsed)
+                    ? parsed
+                    : throw new ArgumentException($"The default value for '{target.Name}' must be an asset GUID.");
+                return target == typeof(Texture)
+                    ? (object)FlaxEngine.Content.LoadAsync<Texture>(id)
+                    : FlaxEngine.Content.LoadAsync<CubeTexture>(id);
+            }
+            return value.ToObject(target);
+        }
+
         private static Box RequireBox(VisjectSurface surface, uint nodeId, int boxId)
         {
             var node = surface.FindNode(nodeId) ?? throw new InvalidOperationException($"Visject node '{nodeId}' was not found.");
@@ -299,6 +364,15 @@ namespace FlaxEditor
             y = node.Location.Y,
             values = SafeValues(node.Values),
             boxes = node.Elements.OfType<Box>().Select(x => new { id = x.ID, text = x.Text, isOutput = x.IsOutput, connections = x.Connections.Select(c => new { node = c.ParentNode.ID, box = c.ID }).ToArray() }).ToArray(),
+        };
+
+        private static object DescribeParameter(SurfaceParameter parameter) => new
+        {
+            parameter.ID,
+            parameter.Name,
+            type = parameter.Type.ToString(),
+            parameter.IsPublic,
+            value = SafeValue(parameter.Value),
         };
 
         private static object[] SafeValues(object[] values) => values?.Select(SafeValue).ToArray();
