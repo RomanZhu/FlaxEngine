@@ -316,7 +316,7 @@ namespace FlaxEditor
             {
                 if (_particleCache.LastLoadFailed)
                     throw new InvalidOperationException("Persisted thumbnail cache failed to reload.");
-                if (!_particleCache.IsLoaded)
+                if (!_particleCache.IsReady || !_particleCache.Texture.IsAllocated)
                     return;
                 var thumbnail = _particleCache.FindSlotVersioned(_particleId, _particleVersion);
                 if (!thumbnail.IsValid)
