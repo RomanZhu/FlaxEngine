@@ -268,7 +268,9 @@ namespace FlaxEngine.Tests
 
             item.RequestThumbnail(owner);
             Assert.IsTrue(item.HasThumbnailReference, "The same visible owner must be able to renew demand.");
-            Assert.IsTrue(item.Thumbnail.IsValid, "Renewed demand must dispatch instead of remaining blocked by stale queued state.");
+            Assert.IsTrue(item.IsThumbnailRequestQueuedForTesting);
+            Assert.IsTrue(Editor.Instance.Thumbnails.HasDeferredPreviewForTesting(item),
+                "Renewed demand must dispatch instead of remaining blocked by stale queued state.");
 
             item.RemoveReference(owner);
             item.Dispose();
