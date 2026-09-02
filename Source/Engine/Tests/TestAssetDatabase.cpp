@@ -626,8 +626,20 @@ TEST_CASE("Persistent GUID identity survives reimport move restart and Library r
     REQUIRE(database.TryGetRecord(copiedMeta.SubAssets[TEXT("mesh:/Head")].ID, record));
     const AssetDatabaseSnapshot reconstructed = database.GetSnapshot();
     REQUIRE(reconstructed.Records.Count() == beforeRestart.Records.Count());
-    for (int32 i = 0; i < beforeRestart.Records.Count(); i++)
-        CHECK(reconstructed.Records[i].HasSameIdentityAndContent(beforeRestart.Records[i]));
+    for (const AssetRecord& expected : beforeRestart.Records)
+    {
+        const AssetRecord* actual = nullptr;
+        for (const AssetRecord& candidate : reconstructed.Records)
+        {
+            if (candidate.ID == expected.ID)
+            {
+                actual = &candidate;
+                break;
+            }
+        }
+        REQUIRE(actual);
+        CHECK(actual->HasSameIdentityAndContent(expected));
+    }
     REQUIRE_FALSE(database.Close(&diagnostic));
 }
 
