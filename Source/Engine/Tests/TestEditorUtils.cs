@@ -2290,7 +2290,11 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(FlaxEditor.Editor.Instance.Scene.IsEdited(sourceScene));
                 Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(sourceRecord.ID), "Scene save did not publish the current artifact.");
                 var savedSource = File.ReadAllText(scenePath);
-                StringAssert.Contains(placed.ID.ToString("N"), savedSource, "Saved scene source omitted the Project-panel actor.");
+                var savedDocument = JObject.Parse(savedSource);
+                var savedActor = (savedDocument["objects"] as JArray)?.OfType<JObject>().FirstOrDefault(x =>
+                    x.Value<long>("fileId") == placed.LocalFileId &&
+                    x.Value<string>("type") == typeof(StaticModel).FullName);
+                Assert.NotNull(savedActor, "Saved scene source omitted the Project-panel actor's persistent local file ID.");
                 StringAssert.Contains(modelId.ToString("N"), savedSource, "Saved scene source omitted the dropped model reference.");
                 Assert.IsFalse(Level.UnloadScene(sourceScene));
                 sourceScene = null;
