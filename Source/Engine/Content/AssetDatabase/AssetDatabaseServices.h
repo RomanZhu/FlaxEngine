@@ -5,6 +5,7 @@
 #include "AssetOperations.h"
 #include "AssetDatabaseScanner.h"
 #include "Engine/Core/Types/DataContainer.h"
+#include "Engine/Core/Delegate.h"
 #include "Engine/Scripting/ScriptingType.h"
 #include "Identity/AssetObjectId.h"
 #include "Engine/Physics/CollisionData.h"
@@ -25,6 +26,10 @@ class Asset;
 class Material;
 class MaterialInstance;
 class SkeletonMask;
+
+#if FLAX_TESTS
+bool ExecuteCleanLibraryForTesting(const Function<bool()>& shutdown, const Function<bool()>& clean, bool& shutdownFailed);
+#endif
 
 /// <summary>Controls generic asset import and refresh behavior.</summary>
 API_ENUM(Attributes="Flags") enum class ImportAssetOptions : uint32

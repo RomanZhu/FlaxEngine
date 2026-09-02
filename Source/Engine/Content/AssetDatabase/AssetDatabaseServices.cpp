@@ -89,7 +89,20 @@ namespace
     Array<uint64> PendingDatabaseEvents;
     std::mutex OperationWriteDrainLocker;
     Array<AssetOperationSelfWrite> PendingOperationSelfWrites;
+
+    bool ExecuteCleanLibrary(const Function<bool()>& shutdown, const Function<bool()>& clean, bool& shutdownFailed)
+    {
+        shutdownFailed = shutdown();
+        return shutdownFailed || clean();
+    }
 }
+
+#if FLAX_TESTS
+bool ExecuteCleanLibraryForTesting(const Function<bool()>& shutdown, const Function<bool()>& clean, bool& shutdownFailed)
+{
+    return ExecuteCleanLibrary(shutdown, clean, shutdownFailed);
+}
+#endif
 
 void AssetPipelineService::NotifyArtifactPublished(const Guid& assetID)
 {
@@ -3397,8 +3410,14 @@ bool AssetPipelineService::IsArtifactCurrent(const Guid& assetID)
 bool AssetPipelineService::CleanLibrary()
 {
 #if USE_EDITOR
+    bool shutdownFailed;
     AssetPipelineDiagnostic diagnostic;
-    const bool failed = ArtifactStore::CleanEntireLibrary(diagnostic);
+    const bool failed = ExecuteCleanLibrary(
+        []() { return Shutdown(); },
+        [&diagnostic]() { return ArtifactStore::CleanEntireLibrary(diagnostic); },
+        shutdownFailed);
+    if (shutdownFailed)
+        return true;
     Array<AssetPipelineDiagnostic> diagnostics;
     if (diagnostic.Code != AssetPipelineDiagnosticCode::None)
         diagnostics.Add(diagnostic);

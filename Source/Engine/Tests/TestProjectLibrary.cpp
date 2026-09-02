@@ -3,6 +3,7 @@
 #include "Engine/Content/Artifacts/ProjectLibrary.h"
 #include "Engine/Content/Artifacts/ArtifactLease.h"
 #include "Engine/Content/Artifacts/ArtifactStore.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Core/Types/Guid.h"
 #include "Engine/Engine/Globals.h"
@@ -100,4 +101,27 @@ TEST_CASE("Project Library creation failure is diagnosed")
     CHECK(ProjectLibrary::EnsureRoot(root, root / TEXT("Content"), library, normalized, diagnostic));
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::LibraryCreationFailed);
     CHECK_FALSE(FileSystem::DirectoryExists(library));
+}
+
+TEST_CASE("Project Library clean closes database before deletion and propagates shutdown failure")
+{
+    Array<int32> calls;
+    bool shutdownFailed;
+    CHECK_FALSE(ExecuteCleanLibraryForTesting(
+        [&calls]() { calls.Add(1); return false; },
+        [&calls]() { calls.Add(2); return false; },
+        shutdownFailed));
+    CHECK_FALSE(shutdownFailed);
+    REQUIRE(calls.Count() == 2);
+    CHECK(calls[0] == 1);
+    CHECK(calls[1] == 2);
+
+    calls.Clear();
+    CHECK(ExecuteCleanLibraryForTesting(
+        [&calls]() { calls.Add(1); return true; },
+        [&calls]() { calls.Add(2); return false; },
+        shutdownFailed));
+    CHECK(shutdownFailed);
+    REQUIRE(calls.Count() == 1);
+    CHECK(calls[0] == 1);
 }
