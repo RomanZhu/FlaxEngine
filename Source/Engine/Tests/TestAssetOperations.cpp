@@ -241,6 +241,12 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     const byte sourceBytes[] = { 1, 2, 3, 4, 5 };
     REQUIRE_FALSE(operations.CreateAsset(source, Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)),
         sourceMeta, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
+    CHECK(FileSystem::FileExists(source));
+    CHECK(FileSystem::FileExists(source + TEXT(".meta")));
+    CHECK(operations.CreateAsset(source, Span<byte>(const_cast<byte*>(sourceBytes), ARRAY_COUNT(sourceBytes)),
+        sourceMeta, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::PathCollision);
     CHECK(FileSystem::FileExists(source));
     CHECK(FileSystem::FileExists(source + TEXT(".meta")));
 
@@ -251,6 +257,7 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     Guid copiedGuid;
     operations.StartAssetEditing();
     REQUIRE_FALSE(operations.CopyAsset(target, copied, copiedGuid, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
     CHECK(copiedGuid.IsValid());
     CHECK(copiedGuid != sourceMeta.ID);
     CHECK(database.ClearCalls == 1);
@@ -268,6 +275,7 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
 
     const String moved = content / TEXT("Moved/Robot.gltf");
     REQUIRE_FALSE(operations.MoveAsset(target, moved, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
     CHECK_FALSE(FileSystem::FileExists(source));
     CHECK(FileSystem::FileExists(moved));
     CHECK(database.RefreshCalls == 1); // Create refreshed immediately; editing defers copy and move.
@@ -292,8 +300,12 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     CHECK_FALSE(FileSystem::FileExists(moved));
     CHECK(FileSystem::FileExists(trash.TrashSourcePath));
     REQUIRE_FALSE(operations.RestoreAsset(trash, diagnostic));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::None);
     CHECK(FileSystem::FileExists(moved));
     CHECK_FALSE(FileSystem::FileExists(trash.TrashSourcePath));
+    CHECK(operations.RestoreAsset(trash, diagnostic));
+    CHECK(diagnostic.Code != AssetPipelineDiagnosticCode::None);
+    CHECK(FileSystem::FileExists(moved));
 
 #if PLATFORM_WINDOWS
     const String caseRenamed = content / TEXT("Moved/robot.gltf");

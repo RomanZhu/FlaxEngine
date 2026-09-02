@@ -884,16 +884,6 @@ bool AssetOperations::CreateFromBytes(AssetOperationKind kind, const StringView&
                 TEXT("Asset create/import transaction could not publish source and metadata."));
         return true;
     }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
-        return true;
-    }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
-        return true;
-    }
     DeleteTree(transactionDirectory);
     commit = AssetOperationCommit();
     commit.TransactionId = plan.TransactionId;
@@ -1039,16 +1029,6 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
                 TEXT("Asset move transaction could not publish source and metadata together."));
         return true;
     }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
-        return true;
-    }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
-        return true;
-    }
     DeleteTree(transactionDirectory);
 
     AssetOperationCommit commit;
@@ -1192,16 +1172,6 @@ bool AssetOperations::CopyAssetInternal(const AssetOperationTarget& target, cons
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destinationPath.AbsolutePath,
                 fragmentError.HasChars() ? fragmentError :
                     TEXT("Asset copy transaction could not publish source, cloned metadata, and private fragments."));
-        return true;
-    }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
-        return true;
-    }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
         return true;
     }
     DeleteTree(transactionDirectory);
@@ -1896,16 +1866,6 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, trash.OriginalSourcePath,
                 TEXT("Asset restore transaction could not publish source and metadata."));
-        return true;
-    }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
-        return true;
-    }
-    {
-        RollbackOperation(plan);
-        DeleteTree(transactionDirectory);
         return true;
     }
     DeleteTree(transactionDirectory);
