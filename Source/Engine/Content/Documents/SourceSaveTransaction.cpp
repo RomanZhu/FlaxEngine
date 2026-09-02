@@ -3,7 +3,6 @@
 #include "SourceSaveTransaction.h"
 #include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/AssetDatabase/AssetPath.h"
-#include "Engine/Content/AssetDatabase/DurableAssetFileSystem.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/CriticalSection.h"
@@ -294,7 +293,7 @@ bool SourceSaveTransaction::Commit(const SourceSaveRequest& request, SourceSaveR
     }
 
     const String parent = StringUtils::GetDirectoryName(result.Current.SourcePath);
-    if (DurableAssetFileSystem::EnsureDirectory(parent))
+    if (FileSystem::CreateDirectory(parent))
     {
         result.Outcome = SourceSaveOutcome::Failed;
         return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, parent,
@@ -308,12 +307,12 @@ bool SourceSaveTransaction::Commit(const SourceSaveRequest& request, SourceSaveR
     }
 
     const String staging = result.Current.SourcePath + TEXT(".stage-") + result.TransactionID.ToString(Guid::FormatType::N);
-    SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
-    if (DurableAssetFileSystem::WriteFile(staging, request.CanonicalBytes.Get(), request.CanonicalBytes.Length()))
+    SCOPE_EXIT { FileSystem::DeleteFile(staging); };
+    if (File::WriteAllBytes(staging, request.CanonicalBytes.Get(), request.CanonicalBytes.Length()))
     {
         result.Outcome = SourceSaveOutcome::Failed;
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, result.Current.SourcePath,
-            TEXT("Cannot durably write authored source staging bytes."));
+            TEXT("Cannot write authored source staging bytes."));
     }
     if (IsInjected(failureInjector, SourceSaveFailurePoint::AfterStagingWrite))
     {
@@ -339,7 +338,7 @@ bool SourceSaveTransaction::Commit(const SourceSaveRequest& request, SourceSaveR
     {
         result.Outcome = SourceSaveOutcome::Conflict;
         Fail(diagnostic, AssetPipelineDiagnosticCode::SourceBusy, request.Expected.SourcePath,
-            TEXT("Authored source changed after durable staging and will not be replaced."));
+            TEXT("Authored source changed after staging and will not be replaced."));
         diagnostic.AssetGuid = request.Expected.SourceAssetID;
         return true;
     }
@@ -349,37 +348,11 @@ bool SourceSaveTransaction::Commit(const SourceSaveRequest& request, SourceSaveR
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, result.Current.SourcePath,
             TEXT("Authored source became read-only before replace."));
     }
-    if (DurableAssetFileSystem::Replace(result.Current.SourcePath, staging))
+    if (FileSystem::MoveFile(result.Current.SourcePath, staging, true))
     {
-        Array<byte> activatedBytes;
-        if (!FileSystem::FileExists(staging) &&
-            !File::ReadAllBytes(result.Current.SourcePath, activatedBytes) &&
-            IsSameBytes(activatedBytes, request.CanonicalBytes))
-        {
-            result.Outcome = SourceSaveOutcome::ActivatedDurabilityUncertain;
-            result.Current.Exists = true;
-            result.Current.SourceHash = ContentHash::Compute(request.CanonicalBytes.Get(), request.CanonicalBytes.Length());
-            result.SelfWrite.TransactionID = result.TransactionID;
-            result.SelfWrite.Path = result.Current.SourcePath;
-            result.SelfWrite.Content = result.Current.SourceHash;
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, result.Current.SourcePath,
-                TEXT("Authored source bytes were activated but replacement durability is uncertain."));
-        }
         result.Outcome = SourceSaveOutcome::Failed;
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, result.Current.SourcePath,
             TEXT("Cannot atomically replace authored source."));
-    }
-
-    if (IsInjected(failureInjector, SourceSaveFailurePoint::AfterReplaceActivation))
-    {
-        result.Outcome = SourceSaveOutcome::ActivatedDurabilityUncertain;
-        result.Current.Exists = true;
-        result.Current.SourceHash = ContentHash::Compute(request.CanonicalBytes.Get(), request.CanonicalBytes.Length());
-        result.SelfWrite.TransactionID = result.TransactionID;
-        result.SelfWrite.Path = result.Current.SourcePath;
-        result.SelfWrite.Content = result.Current.SourceHash;
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, result.Current.SourcePath,
-            TEXT("Injected uncertainty after authored source activation."));
     }
 
     result.Outcome = SourceSaveOutcome::Committed;

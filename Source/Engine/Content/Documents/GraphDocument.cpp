@@ -2564,8 +2564,7 @@ bool AssetDocumentService::SaveGraphSource(const StringView& path, const BytesCo
 {
     const AssetDocumentSaveResult result = SaveGraphSourceDetailed(path, surface, expectedSourceHash,
         propertiesJson, false, false);
-    const bool failed = (!result.SourceCommitted && !result.SourceUnchanged) ||
-        result.SourceDurabilityUncertain || result.RefreshFailed;
+    const bool failed = (!result.SourceCommitted && !result.SourceUnchanged) || result.RefreshFailed;
     if (failed)
         LOG(Error, "Cannot save graph source '{0}': {1}", path, result.Diagnostic);
     return failed;
@@ -2629,7 +2628,6 @@ AssetDocumentSaveResult AssetDocumentService::SaveGraphSourceDetailed(const Stri
 
     result.SourceCommitted = saveResult.Source.Outcome == SourceSaveOutcome::Committed;
     result.SourceUnchanged = saveResult.Source.Outcome == SourceSaveOutcome::Unchanged;
-    result.SourceDurabilityUncertain = saveResult.Source.Outcome == SourceSaveOutcome::ActivatedDurabilityUncertain;
     result.Conflict = saveResult.Source.Outcome == SourceSaveOutcome::Conflict;
     result.RefreshFailed = saveResult.Refresh == AssetSaveRefreshOutcome::Failed;
     result.ImportRequested = importAfterSave;

@@ -165,7 +165,6 @@ API_STRUCT() struct FLAXENGINE_API AssetDocumentSaveResult
 
     API_FIELD() bool SourceCommitted = false;
     API_FIELD() bool SourceUnchanged = false;
-    API_FIELD() bool SourceDurabilityUncertain = false;
     API_FIELD() bool Conflict = false;
     API_FIELD() bool RefreshFailed = false;
     API_FIELD() bool ImportRequested = false;

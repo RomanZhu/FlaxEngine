@@ -232,41 +232,6 @@ TEST_CASE("Asset save service preserves committed source across follow-up failur
     }
 }
 
-TEST_CASE("Asset save service preserves activation uncertainty across successful refresh")
-{
-    const String path = MakeAssetSaveTestPath();
-    SCOPE_EXIT { FileSystem::DeleteFile(path); };
-    const StringAnsi initial("{\"value\":1}\n");
-    const StringAnsi replacement("{\"value\":2}\n");
-    REQUIRE_FALSE(File::WriteAllBytes(path, initial.Get(), initial.Length()));
-    TestAssetSaveRevisionProvider provider;
-    ConfigureTracked(provider, path, initial);
-    TestAssetSavePipeline pipeline;
-    DirtySourceRegistry dirty;
-    const uint64 revision = dirty.MarkDirty(path, provider.Tracked.DurableSourceHash);
-    AssetSaveService service(&provider, &pipeline, &dirty);
-    AssetSaveRequest request = MakeTrackedRequest(path, replacement);
-    request.EditRevision = revision;
-    request.ImportMode = AssetSaveImportMode::Synchronous;
-    AssetSaveResult result;
-    AssetPipelineDiagnostic diagnostic;
-    TestAssetSaveFailureInjector injector(SourceSaveFailurePoint::AfterReplaceActivation);
-
-    CHECK(service.Save(request, result, diagnostic, nullptr, &injector));
-    CHECK(result.Source.Outcome == SourceSaveOutcome::ActivatedDurabilityUncertain);
-    CHECK(result.Refresh == AssetSaveRefreshOutcome::Succeeded);
-    CHECK(result.Import == AssetSaveImportOutcome::Blocked);
-    CHECK_FALSE(result.IsSourceCommitted());
-    CHECK_FALSE(result.IsSuccessful());
-    CHECK_FALSE(result.DirtyCleared);
-    CHECK(dirty.Count() == 1);
-    CHECK(pipeline.RefreshCalls == 1);
-    CHECK(pipeline.ImportCalls == 0);
-    CHECK(pipeline.SelfWriteCalls == 1);
-    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated);
-    CHECK(diagnostic.Message.Contains(TEXT("uncertainty"), StringSearchCase::IgnoreCase));
-}
-
 TEST_CASE("Asset save service never adopts another session dirty revision")
 {
     const String path = MakeAssetSaveTestPath();

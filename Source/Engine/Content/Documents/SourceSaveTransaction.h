@@ -20,7 +20,6 @@ enum class SourceSaveOutcome : byte
     None,
     Unchanged,
     Committed,
-    ActivatedDurabilityUncertain,
     Conflict,
     Rejected,
     Failed,
@@ -32,7 +31,6 @@ enum class SourceSaveFailurePoint : byte
     BeforeStagingWrite,
     AfterStagingWrite,
     BeforeReplace,
-    AfterReplaceActivation,
 };
 
 /// <summary>How a save handles disk bytes that have advanced beyond durable database observation.</summary>
@@ -119,7 +117,7 @@ public:
     virtual bool ShouldFail(SourceSaveFailurePoint point) = 0;
 };
 
-/// <summary>Optimistic authored-source transaction with exact revalidation and durable atomic replace.</summary>
+/// <summary>Optimistic authored-source transaction with exact revalidation and atomic replace.</summary>
 class FLAXENGINE_API SourceSaveTransaction
 {
 private:

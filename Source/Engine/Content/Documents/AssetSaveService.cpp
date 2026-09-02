@@ -128,8 +128,7 @@ bool AssetSaveService::Save(const AssetSaveRequest& request, AssetSaveResult& re
         request.ConflictPolicy == SourceSaveConflictPolicy::AdoptCurrent && result.Source.Current.IsTracked &&
         result.Source.Current.SourceHash != result.Source.Current.DurableSourceHash;
     const bool activatedTracked = result.Source.Current.IsTracked &&
-        (result.Source.Outcome == SourceSaveOutcome::Committed ||
-            result.Source.Outcome == SourceSaveOutcome::ActivatedDurabilityUncertain);
+        result.Source.Outcome == SourceSaveOutcome::Committed;
     const bool shouldRefresh = request.RefreshMode == AssetSaveRefreshMode::TrackedSource &&
         (activatedTracked || adoptedUnchanged);
 

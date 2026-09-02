@@ -431,37 +431,6 @@ TEST_CASE("Source save failure injection preserves old bytes and removes staging
     CHECK_FALSE(FileSystem::FileExists(staging));
 }
 
-TEST_CASE("Source save reports activation with uncertain durability explicitly")
-{
-    const String path = MakeSourceSaveTestPath();
-    SCOPE_EXIT { FileSystem::DeleteFile(path); };
-    const StringAnsi initial("{\n  \"value\": 1\n}\n");
-    const StringAnsi desired("{\n  \"value\": 2\n}\n");
-    REQUIRE_FALSE(File::WriteAllBytes(path, initial.Get(), initial.Length()));
-
-    TestSourceSaveRevisionProvider provider;
-    provider.HasTracked = false;
-    SourceSaveTransaction transaction(&provider);
-    SourceSaveRequest request;
-    request.RegistrationMode = SourceSaveRegistrationMode::AllowUnregistered;
-    AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(transaction.Capture(path, request.RegistrationMode, request.Expected, diagnostic));
-    request.CanonicalBytes = desired;
-    SinglePointSourceSaveFailure injector(SourceSaveFailurePoint::AfterReplaceActivation);
-    SourceSaveResult result;
-    CHECK(transaction.Commit(request, result, diagnostic, nullptr, &injector));
-    CHECK(result.Outcome == SourceSaveOutcome::ActivatedDurabilityUncertain);
-    CHECK(result.SelfWrite.TransactionID == result.TransactionID);
-    CHECK(result.SelfWrite.Content == ContentHash::Compute(desired.Get(), desired.Length()));
-
-    Array<byte> saved;
-    REQUIRE_FALSE(File::ReadAllBytes(path, saved));
-    REQUIRE(saved.Count() == desired.Length());
-    CHECK(Platform::MemoryCompare(saved.Get(), desired.Get(), saved.Count()) == 0);
-    const String staging = path + TEXT(".stage-") + result.TransactionID.ToString(Guid::FormatType::N);
-    CHECK_FALSE(FileSystem::FileExists(staging));
-}
-
 TEST_CASE("Source save transactions explicitly create unregistered sources")
 {
     const String path = MakeSourceSaveTestPath();

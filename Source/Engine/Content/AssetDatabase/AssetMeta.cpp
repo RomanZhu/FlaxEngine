@@ -1,7 +1,6 @@
 // Copyright (c) Wojciech Figat. All rights reserved.
 
 #include "AssetMeta.h"
-#include "DurableAssetFileSystem.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Platform/File.h"
@@ -439,9 +438,9 @@ bool AssetMeta::SaveAtomic(const StringView& path, const AssetMeta& value, Asset
     if (value.ToJson(json, diagnostic))
         return true;
     const String staging = String(path) + TEXT(".stage-") + Guid::New().ToString(Guid::FormatType::N);
-    SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
-    if (File::WriteAllBytes(staging, json.Get(), json.Length()) || DurableAssetFileSystem::FlushFile(staging))
-        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Cannot write or flush metadata staging file."));
+    SCOPE_EXIT { FileSystem::DeleteFile(staging); };
+    if (File::WriteAllBytes(staging, json.Get(), json.Length()))
+        return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Cannot write metadata staging file."));
     if (failurePoint == AssetMetaWriteFailurePoint::AfterWrite)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Injected metadata failure after write."));
 
@@ -452,7 +451,7 @@ bool AssetMeta::SaveAtomic(const StringView& path, const AssetMeta& value, Asset
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Injected metadata failure before replace."));
     if (FileSystem::FileExists(path) && FileSystem::IsReadOnly(path))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Metadata sidecar is read-only."));
-    if (DurableAssetFileSystem::Replace(path, staging))
+    if (FileSystem::MoveFile(path, staging, true))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidMeta, path, TEXT("Cannot atomically replace metadata sidecar."));
     if (selfWriteHash)
         *selfWriteHash = Crc::MemCrc32(json.Get(), json.Length());
