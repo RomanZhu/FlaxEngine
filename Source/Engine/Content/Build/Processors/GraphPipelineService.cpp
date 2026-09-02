@@ -17,6 +17,7 @@
 #include "Engine/Content/AssetDatabase/AssetSourceRoots.h"
 #include "Engine/Content/BinaryAsset.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/JsonAsset.h"
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/AssetProcessorRegistry.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
@@ -104,7 +105,8 @@ namespace
         {
             Asset* asset = Content::GetRuntimeObject(assetID);
             auto* binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
-            if (binary && binary->GetTypeName() == artifact.TypeName && binary->IsLoading() && !binary->IsLoaded() && !binary->LastLoadFailed())
+            auto* json = asset ? ScriptingObject::Cast<JsonAssetBase>(asset) : nullptr;
+            if ((binary || json) && asset->GetTypeName() == artifact.TypeName && asset->IsLoading() && !asset->IsLoaded() && !asset->LastLoadFailed())
             {
                 Scripting::InvokeOnUpdate([assetID, artifact, hasRuntime]()
                 {
@@ -119,6 +121,11 @@ namespace
                 const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
                 if (result != BinaryAssetStorageSwitchResult::Success)
                     LOG(Error, "Failed to hot-swap graph artifact. Asset: {0}, result: {1}.", artifact.AssetID, static_cast<int32>(result));
+            }
+            else if (json && json->GetTypeName() == artifact.TypeName && (json->IsLoaded() || json->LastLoadFailed()))
+            {
+                json->SetStoragePath(artifact.StoragePath.Get());
+                json->Reload();
             }
         }
         AssetPipelineService::NotifyArtifactPublished(assetID);

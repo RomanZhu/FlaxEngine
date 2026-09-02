@@ -2147,7 +2147,9 @@ bool ReloadSavedSceneAsset(const Guid& sceneId, const StringView& path)
     if (!asset)
         return false;
 #if COMPILE_WITH_ASSETS_IMPORTER
-    if (BinaryAsset* binary = ScriptingObject::Cast<BinaryAsset>(asset))
+    BinaryAsset* binary = ScriptingObject::Cast<BinaryAsset>(asset);
+    JsonAssetBase* json = ScriptingObject::Cast<JsonAssetBase>(asset);
+    if (binary || json)
     {
         ArtifactRequest request;
         request.Object = AssetObjectId::Main(AssetGuid(sceneId));
@@ -2161,10 +2163,21 @@ bool ReloadSavedSceneAsset(const Guid& sceneId, const StringView& path)
             LOG(Error, "Cannot resolve published scene artifact '{0}': {1}", path, diagnostic.Message);
             return true;
         }
-        const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
-        if (result != BinaryAssetStorageSwitchResult::Success)
+        if (binary)
         {
-            LOG(Error, "Cannot switch to published scene artifact '{0}'. Result: {1}", path, static_cast<int32>(result));
+            const BinaryAssetStorageSwitchResult result = binary->SwitchStorage(artifact);
+            if (result != BinaryAssetStorageSwitchResult::Success)
+            {
+                LOG(Error, "Cannot switch to published scene artifact '{0}'. Result: {1}", path, static_cast<int32>(result));
+                return true;
+            }
+            return false;
+        }
+        json->SetStoragePath(artifact.StoragePath.Get());
+        json->Reload();
+        if (json->WaitForLoaded())
+        {
+            LOG(Error, "Cannot load published scene artifact '{0}'.", path);
             return true;
         }
         return false;

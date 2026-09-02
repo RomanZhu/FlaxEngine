@@ -2335,8 +2335,10 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(Level.LoadScene(sourceRecord.ID));
                 sourceScene = Level.FindScene(sourceRecord.ID);
                 Assert.NotNull(sourceScene, "Saved source scene was not loaded for reopen.");
-                var reopenedModel = sourceScene.FindActor<StaticModel>(placedName);
-                Assert.NotNull(reopenedModel, "Project-panel model actor was missing after same-scene reopen.");
+                var reopenedActor = sourceScene.FindActor(placedName);
+                Assert.NotNull(reopenedActor, "Project-panel actor name was missing from the reloaded scene hierarchy.");
+                Assert.IsInstanceOf<StaticModel>(reopenedActor, "Reloaded Project-panel actor had the wrong concrete type.");
+                var reopenedModel = (StaticModel)reopenedActor;
                 Assert.AreEqual(modelId, reopenedModel.Model.ID, "Reopened actor did not retain the dropped model identity.");
 
                 var sourceItem = FlaxEditor.Editor.Instance.ContentDatabase.FindAsset(sourceRecord.ID) as AssetItem;
