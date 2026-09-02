@@ -203,10 +203,16 @@ namespace FlaxEditor.Content
         private float _highlightScale;
         private static ContentItem _lastHighlightedItem;
         private readonly List<IContentItemOwner> _references = new List<IContentItemOwner>(4);
-        private readonly List<IContentItemOwner> _thumbnailReferences = new List<IContentItemOwner>(2);
+        private readonly Dictionary<IContentItemOwner, ulong> _thumbnailReferences = new Dictionary<IContentItemOwner, ulong>(2);
+        private readonly List<IContentItemOwner> _expiredThumbnailReferences = new List<IContentItemOwner>(2);
 
         private SpriteHandle _thumbnail;
         private SpriteHandle _shadowIcon;
+        private bool _thumbnailStale;
+        private bool _thumbnailRequestQueued;
+        private bool _thumbnailRequestFailed;
+        private bool _thumbnailForceRetry;
+        private DateTime _thumbnailRetryUtc;
 
         /// <summary>
         /// Gets the type of the item.
@@ -308,7 +314,15 @@ namespace FlaxEditor.Content
         public SpriteHandle Thumbnail
         {
             get => _thumbnail;
-            set => _thumbnail = value;
+            set
+            {
+                _thumbnail = value;
+                _thumbnailStale = false;
+                _thumbnailRequestQueued = false;
+                _thumbnailRequestFailed = false;
+                _thumbnailForceRetry = false;
+                _thumbnailRetryUtc = default;
+            }
         }
 
         private SpriteHandle PresentationIcon => _thumbnail.IsValid ? _thumbnail : DefaultThumbnail.IsValid ? DefaultThumbnail : Editor.Instance.Icons.Document128;
@@ -484,6 +498,7 @@ namespace FlaxEditor.Content
             else
                 Render2D.FillRectangle(rectangle, Color.Black);
 
+            DrawThumbnailState(ref rectangle);
             DrawThumbnailAccent(ref rectangle);
         }
 
@@ -511,7 +526,14 @@ namespace FlaxEditor.Content
             else
                 Render2D.FillRectangle(rectangle, Color.Black);
 
+            DrawThumbnailState(ref rectangle);
             DrawThumbnailAccent(ref rectangle);
+        }
+
+        private void DrawThumbnailState(ref Rectangle rectangle)
+        {
+            if (_thumbnailStale)
+                Render2D.DrawRectangle(rectangle, _thumbnailRequestFailed ? Color.Red : new Color(1.0f, 0.55f, 0.0f), 2.0f);
         }
 
         private void DrawThumbnailAccent(ref Rectangle rectangle)
@@ -530,7 +552,7 @@ namespace FlaxEditor.Content
         public virtual void RefreshThumbnail()
         {
             if (_thumbnailReferences.Count != 0)
-                Editor.Instance.Thumbnails.RequestPreview(this, true, true);
+                RequestThumbnail(true);
         }
 
         private void ReleaseThumbnail()
@@ -538,9 +560,34 @@ namespace FlaxEditor.Content
             _thumbnail = SpriteHandle.Invalid;
         }
 
-        private void RequestThumbnail()
+        private void RequestThumbnail(bool forceRegenerate = false)
         {
-            Editor.Instance.Thumbnails.RequestPreview(this, false, true);
+            _thumbnailRequestQueued = true;
+            _thumbnailForceRetry = forceRegenerate;
+            Editor.Instance.Thumbnails.RequestPreview(this, forceRegenerate, true);
+        }
+
+        internal void SetStaleThumbnail(SpriteHandle thumbnail)
+        {
+            _thumbnail = thumbnail;
+            _thumbnailStale = thumbnail.IsValid;
+            _thumbnailRequestFailed = false;
+        }
+
+        internal void NotifyThumbnailRequestFailed(bool forceRegenerate = false)
+        {
+            _thumbnailRequestQueued = false;
+            _thumbnailStale = true;
+            _thumbnailRequestFailed = true;
+            _thumbnailForceRetry |= forceRegenerate;
+            _thumbnailRetryUtc = DateTime.UtcNow.AddSeconds(1);
+        }
+
+        internal void NotifyThumbnailRequestCancelled()
+        {
+            _thumbnailRequestQueued = false;
+            _thumbnailStale = true;
+            _thumbnailRetryUtc = DateTime.UtcNow.AddMilliseconds(250);
         }
 
         /// <summary>
@@ -577,12 +624,11 @@ namespace FlaxEditor.Content
         {
             Assert.IsNotNull(obj);
             Assert.IsTrue(_references.Contains(obj));
-            if (_thumbnailReferences.Contains(obj))
-                return;
-
-            _thumbnailReferences.Add(obj);
-            if (_thumbnailReferences.Count == 1 && !_thumbnail.IsValid)
-                RequestThumbnail();
+            var firstDemand = _thumbnailReferences.Count == 0;
+            _thumbnailReferences[obj] = FlaxEngine.Engine.FrameCount;
+            Editor.Instance.Thumbnails.TrackThumbnailDemand(this);
+            if (!_thumbnailRequestQueued && (firstDemand && !_thumbnail.IsValid || _thumbnailStale && DateTime.UtcNow >= _thumbnailRetryUtc))
+                RequestThumbnail(_thumbnailForceRetry);
         }
 
         /// <summary>
@@ -593,14 +639,32 @@ namespace FlaxEditor.Content
         {
             if (_references.Remove(obj))
             {
-                _thumbnailReferences.Remove(obj);
-                if (_thumbnailReferences.Count == 0)
-                {
-                    Editor.Instance.Thumbnails.CancelPreviewRequest(this);
-                    if (_thumbnail.IsValid)
-                        ReleaseThumbnail();
-                }
+                var removedThumbnailDemand = _thumbnailReferences.Remove(obj);
+                if (removedThumbnailDemand && _thumbnailReferences.Count == 0)
+                    ReleaseThumbnailDemand();
             }
+        }
+
+        internal bool ExpireThumbnailDemand(ulong frame)
+        {
+            _expiredThumbnailReferences.Clear();
+            foreach (var reference in _thumbnailReferences)
+            {
+                if (reference.Value + 1 < frame)
+                    _expiredThumbnailReferences.Add(reference.Key);
+            }
+            for (int i = 0; i < _expiredThumbnailReferences.Count; i++)
+                _thumbnailReferences.Remove(_expiredThumbnailReferences[i]);
+            if (_thumbnailReferences.Count == 0)
+                ReleaseThumbnailDemand();
+            return _thumbnailReferences.Count != 0;
+        }
+
+        private void ReleaseThumbnailDemand()
+        {
+            Editor.Instance.Thumbnails.CancelPreviewRequest(this);
+            if (_thumbnail.IsValid)
+                ReleaseThumbnail();
         }
 
         /// <summary>

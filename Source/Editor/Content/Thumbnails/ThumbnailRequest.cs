@@ -77,7 +77,12 @@ namespace FlaxEditor.Content.Thumbnails
         /// <summary>
         /// Immutable artifact version represented by this request.
         /// </summary>
-        public Guid CacheVersion;
+        public readonly Guid CacheVersion;
+
+        /// <summary>
+        /// Whether this request represents a live forced regeneration.
+        /// </summary>
+        public readonly bool ForceRegenerate;
 
         private DateTime _nextThumbnailLoadAttemptUtc;
         private DateTime _publishedPreviewDeadlineUtc;
@@ -100,19 +105,26 @@ namespace FlaxEditor.Content.Thumbnails
         /// <param name="item">The item.</param>
         /// <param name="proxy">The proxy.</param>
         /// <param name="cacheVersion">The immutable artifact version represented by the thumbnail.</param>
-        public ThumbnailRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion)
+        public ThumbnailRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion, bool forceRegenerate)
         {
             Item = item;
             Proxy = proxy;
             CacheVersion = cacheVersion;
+            ForceRegenerate = forceRegenerate;
         }
 
         internal void Update()
         {
             if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
             {
-                CacheVersion = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(Item.ID);
-                Asset = CacheVersion != Guid.Empty ? AssetDatabaseQueryService.LoadAssetPreview(Item.ID) : null;
+                var currentVersion = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(Item.ID);
+                if (CacheVersion != Guid.Empty && currentVersion != Guid.Empty && currentVersion != CacheVersion)
+                {
+                    FailureMessage = "The requested runtime artifact was superseded before its thumbnail could be loaded.";
+                    State = States.Failed;
+                    return;
+                }
+                Asset = CacheVersion != Guid.Empty && currentVersion == CacheVersion ? AssetDatabaseQueryService.LoadAssetPreview(Item.ID) : null;
                 if (Asset && CacheVersion != Guid.Empty)
                 {
                     Proxy.OnThumbnailDrawPrepare(this);
@@ -161,8 +173,14 @@ namespace FlaxEditor.Content.Thumbnails
                 throw new InvalidOperationException();
             if (Item.IsCanonicalSource)
             {
-                CacheVersion = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(Item.ID);
-                Asset = CacheVersion != Guid.Empty ? AssetDatabaseQueryService.LoadAssetPreview(Item.ID) : null;
+                var currentVersion = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(Item.ID);
+                if (CacheVersion != Guid.Empty && currentVersion != Guid.Empty && currentVersion != CacheVersion)
+                {
+                    FailureMessage = "The requested runtime artifact was superseded before thumbnail preparation.";
+                    State = States.Failed;
+                    return;
+                }
+                Asset = CacheVersion != Guid.Empty && currentVersion == CacheVersion ? AssetDatabaseQueryService.LoadAssetPreview(Item.ID) : null;
                 if (!Asset || CacheVersion == Guid.Empty)
                 {
                     BeginArtifactBuild();

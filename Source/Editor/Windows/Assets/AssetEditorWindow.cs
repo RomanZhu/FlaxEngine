@@ -389,6 +389,9 @@ namespace FlaxEditor.Windows.Assets
         /// <inheritdoc />
         public void MarkAsEdited()
         {
+            if (_item?.HasThumbnailReference == true)
+                _item.RefreshThumbnail();
+
             // Check if state will change
             if (_isEdited == false)
             {

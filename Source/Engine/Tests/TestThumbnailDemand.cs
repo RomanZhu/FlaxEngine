@@ -46,6 +46,10 @@ namespace FlaxEngine.Tests
             item.RemoveReference(ordinaryOwner);
             Assert.IsTrue(item.HasThumbnailReference);
 
+            Assert.IsFalse(item.ExpireThumbnailDemand(Engine.FrameCount + 2));
+            Assert.IsFalse(item.HasThumbnailReference);
+            Assert.AreEqual(1, item.ReferencesCount, "Visibility expiry must not remove ordinary ownership.");
+
             item.RemoveReference(visibleOwner);
             Assert.IsFalse(item.HasThumbnailReference);
             Assert.AreEqual(0, item.ReferencesCount);

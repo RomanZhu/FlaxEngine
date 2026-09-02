@@ -21,6 +21,8 @@ namespace FlaxEditor.Content.Thumbnails
         private const int PrepareChecksPerUpdate = 32;
         private const int ReadyChecksPerRender = 64;
         private const int MaxRendersPerFrame = 4;
+        private const int MaxQueuedRequests = 256;
+        private const int MaxPendingRequests = 256;
         private const int MaxFlushesPerInterval = 2;
         private const double RenderBudgetMilliseconds = 3.0;
         private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
@@ -36,6 +38,8 @@ namespace FlaxEditor.Content.Thumbnails
         private readonly HashSet<ContentItem> _pendingRequests = new HashSet<ContentItem>();
         private readonly HashSet<ContentItem> _pendingForcedRequests = new HashSet<ContentItem>();
         private readonly HashSet<ContentItem> _pendingHighPriorityRequests = new HashSet<ContentItem>();
+        private readonly HashSet<ContentItem> _demandItems = new HashSet<ContentItem>();
+        private readonly List<ContentItem> _expiredDemandItems = new List<ContentItem>();
         private readonly PreviewRoot _guiRoot = new PreviewRoot();
         private DateTime _lastFlushTime;
         private int _prepareCursor;
@@ -64,6 +68,8 @@ namespace FlaxEditor.Content.Thumbnails
                 throw new ArgumentNullException();
             if (_task == null)
             {
+                if (!_pendingRequests.Contains(item) && _pendingRequests.Count >= MaxPendingRequests)
+                    EvictPendingRequest();
                 _pendingRequests.Add(item);
                 if (forceRegenerate)
                     _pendingForcedRequests.Add(item);
@@ -83,13 +89,17 @@ namespace FlaxEditor.Content.Thumbnails
             // We cache previews only for items with 'ID', for now we support only AssetItems
             var assetItem = item as AssetItem;
             if (assetItem == null)
+            {
+                item.NotifyThumbnailRequestFailed();
                 return;
+            }
 
             // Ensure that there is valid proxy for that item
             var proxy = Editor.ContentDatabase.GetProxy(item) as AssetProxy;
             if (proxy == null)
             {
                 Editor.LogWarning($"Cannot generate preview for item {item.Path}. Cannot find proxy for it.");
+                item.NotifyThumbnailRequestFailed();
                 return;
             }
             var cacheVersion = GetCacheVersion(assetItem);
@@ -125,9 +135,11 @@ namespace FlaxEditor.Content.Thumbnails
                         staleThumbnail = _cache[i].FindSlot(assetItem.ID);
                 }
 
+                if (!staleThumbnail.IsValid && forceRegenerate && item.Thumbnail.IsValid)
+                    staleThumbnail = item.Thumbnail;
                 if (staleThumbnail.IsValid)
-                    item.Thumbnail = staleThumbnail;
-                AddRequest(assetItem, proxy, cacheVersion, forceRegenerate || highPriority);
+                    item.SetStaleThumbnail(staleThumbnail);
+                AddRequest(assetItem, proxy, cacheVersion, forceRegenerate, forceRegenerate || highPriority);
             }
         }
 
@@ -136,6 +148,27 @@ namespace FlaxEditor.Content.Thumbnails
             if (!item.IsCanonicalSource)
                 return Guid.Empty;
             return AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(item.ID);
+        }
+
+        internal void TrackThumbnailDemand(ContentItem item)
+        {
+            _demandItems.Add(item);
+        }
+
+        private void EvictPendingRequest()
+        {
+            ContentItem evicted = null;
+            foreach (var item in _pendingRequests)
+            {
+                evicted = item;
+                break;
+            }
+            if (evicted == null)
+                return;
+            _pendingRequests.Remove(evicted);
+            _pendingForcedRequests.Remove(evicted);
+            _pendingHighPriorityRequests.Remove(evicted);
+            evicted.NotifyThumbnailRequestCancelled();
         }
 
         /// <summary>
@@ -330,6 +363,7 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         void IContentItemOwner.OnItemDeleted(ContentItem item)
         {
+            _demandItems.Remove(item);
             DeletePreview(item);
         }
 
@@ -346,6 +380,7 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         void IContentItemOwner.OnItemDispose(ContentItem item)
         {
+            _demandItems.Remove(item);
             if (item is AssetItem assetItem)
             {
                 lock (_requests)
@@ -505,6 +540,7 @@ namespace FlaxEditor.Content.Thumbnails
                 Editor.LogError("Failed to render thumbnail icon for asset: " + request.Item);
                 Editor.LogWarning(ex);
                 request.FinishRender(ref SpriteHandle.Invalid);
+                request.Item.NotifyThumbnailRequestFailed(request.ForceRegenerate);
                 RemoveRequest(request);
                 return true;
             }
@@ -549,9 +585,15 @@ namespace FlaxEditor.Content.Thumbnails
             return null;
         }
 
-        private void AddRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion, bool highPriority)
+        private void AddRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion, bool forceRegenerate, bool highPriority)
         {
-            var request = new ThumbnailRequest(item, proxy, cacheVersion);
+            if (_requests.Count >= MaxQueuedRequests)
+            {
+                var evicted = _requests[_requests.Count - 1].Item;
+                RemoveRequest(_requests[_requests.Count - 1]);
+                evicted.NotifyThumbnailRequestCancelled();
+            }
+            var request = new ThumbnailRequest(item, proxy, cacheVersion, forceRegenerate);
             if (highPriority)
             {
                 _requests.Insert(0, request);
@@ -633,6 +675,7 @@ namespace FlaxEditor.Content.Thumbnails
                 {
                     Editor.LogWarning($"Failed to prepare thumbnail rendering for {request.Item.ShortName}.");
                     Editor.LogWarning(ex);
+                    request.Item.NotifyThumbnailRequestFailed(request.ForceRegenerate);
                     RemoveRequest(request);
                 }
             }
@@ -740,6 +783,16 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         public override void OnUpdate()
         {
+            _expiredDemandItems.Clear();
+            var frame = FlaxEngine.Engine.FrameCount;
+            foreach (var item in _demandItems)
+            {
+                if (item.IsDisposing || !item.ExpireThumbnailDemand(frame))
+                    _expiredDemandItems.Add(item);
+            }
+            for (int i = 0; i < _expiredDemandItems.Count; i++)
+                _demandItems.Remove(_expiredDemandItems[i]);
+
             // Wait some frames before start generating previews (late init feature)
             if (_task == null || Time.TimeSinceStartup < 1.0f || HasAllAtlasesLoaded() == false)
                 return;
@@ -766,6 +819,7 @@ namespace FlaxEditor.Content.Thumbnails
                         else if (request.State == ThumbnailRequest.States.Failed)
                         {
                             Editor.LogWarning($"Failed to generate thumbnail for '{request.Item.Path}': {request.FailureMessage ?? "asset could not be loaded"}");
+                            request.Item.NotifyThumbnailRequestFailed(request.ForceRegenerate);
                             RemoveRequest(request);
                             removed = true;
                         }
@@ -774,6 +828,7 @@ namespace FlaxEditor.Content.Thumbnails
                     {
                         Editor.LogWarning($"Failed to prepare thumbnail rendering for {request.Item.ShortName}.");
                         Editor.LogWarning(ex);
+                        request.Item.NotifyThumbnailRequestFailed(request.ForceRegenerate);
                         RemoveRequest(request);
                         removed = true;
                     }
@@ -811,6 +866,8 @@ namespace FlaxEditor.Content.Thumbnails
                 _pendingRequests.Clear();
                 _pendingForcedRequests.Clear();
                 _pendingHighPriorityRequests.Clear();
+                _demandItems.Clear();
+                _expiredDemandItems.Clear();
             }
 
             _guiRoot.Dispose();

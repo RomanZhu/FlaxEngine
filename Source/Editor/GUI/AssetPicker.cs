@@ -277,6 +277,7 @@ namespace FlaxEditor.GUI
             var selectedItem = GetSelectedContentItem();
             if (selectedItem != null)
             {
+                selectedItem.RequestThumbnail(Validator);
                 var thumbnailRect = new Rectangle(previewRect.X + 2, previewRect.Y + 2, previewRect.Width - 4, previewRect.Height - 4);
                 selectedItem.DrawThumbnail(ref thumbnailRect, false);
             }
@@ -356,6 +357,7 @@ namespace FlaxEditor.GUI
             else if (Validator.SelectedItem != null)
             {
                 // Draw item preview
+                Validator.SelectedItem.RequestThumbnail(Validator);
                 Validator.SelectedItem.DrawThumbnail(ref iconRect);
 
                 // Draw buttons
