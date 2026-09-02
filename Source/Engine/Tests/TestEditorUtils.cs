@@ -1429,6 +1429,9 @@ namespace FlaxEngine.Tests
             Assert.Greater(game.ChildrenIndent, 0.0f);
             Assert.AreSame(game, game.Content.ParentNode);
             Assert.AreSame(game, game.Source.ParentNode);
+            var genericJson = new GenericJsonAssetProxy();
+            Assert.IsTrue(genericJson.AcceptsAsset(typeof(JsonAsset).FullName, "ProjectSettingsIndex.settings"));
+            Assert.IsFalse(genericJson.AcceptsAsset("Example.Settings", "GameSettings.settings"));
             return 0;
         }
 

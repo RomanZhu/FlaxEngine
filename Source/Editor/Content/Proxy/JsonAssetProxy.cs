@@ -189,7 +189,8 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override bool AcceptsAsset(string typeName, string path)
         {
-            return path.EndsWith(FileExtension, StringComparison.OrdinalIgnoreCase);
+            return path.EndsWith(FileExtension, StringComparison.OrdinalIgnoreCase) ||
+                   typeName == TypeName && path.EndsWith(".settings", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />
