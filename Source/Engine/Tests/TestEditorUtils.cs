@@ -562,6 +562,17 @@ namespace FlaxEngine.Tests
             string[] presentedPaths = null;
             ContentItemFilesystemAction folderDeleteAction = null;
             var lifecycleTimer = System.Diagnostics.Stopwatch.StartNew();
+            var lifecycleStage = "setup";
+            var consoleDiagnostics = new List<string>();
+            LogMessageDelegate captureConsoleDiagnostic = (level, message, stackTrace, threadId) =>
+            {
+                if (level == LogType.Warning || level == LogType.Error || level == LogType.Fatal)
+                {
+                    lock (consoleDiagnostics)
+                        consoleDiagnostics.Add("[" + lifecycleStage + "] " + level + ": " + message);
+                }
+            };
+            Debug.LogMessageReceived += captureConsoleDiagnostic;
             try
             {
                 Directory.CreateDirectory(nestedFolderPath);
@@ -579,6 +590,7 @@ namespace FlaxEngine.Tests
                 AssetWorkspaceModule.NativePresentationObserver = (_, paths) => presentedPaths = paths.ToArray();
 
                 var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
+                lifecycleStage = "copy";
                 var result = workspace.Copy(sourceFolder, destinationFolderPath);
 
                 Assert.IsTrue(result.Succeeded, result.Message);
@@ -632,6 +644,7 @@ namespace FlaxEngine.Tests
                 contentWindow.Select(destinationFolder, true);
                 var movedFolderPath = destinationFolderPath + " Moved";
                 var movedAssetPath = Path.Combine(movedFolderPath, "Canonical.txt");
+                lifecycleStage = "move";
                 var moveResult = workspace.TryMove(new[] { (Item: (ContentItem)destinationFolder, Destination: movedFolderPath) });
                 Assert.IsTrue(moveResult.Succeeded, moveResult.Message);
                 Assert.IsFalse(Directory.Exists(destinationFolderPath));
@@ -645,12 +658,14 @@ namespace FlaxEngine.Tests
                 Assert.AreEqual(1, contentWindow.Selection.Count);
                 Assert.AreEqual(Path.GetFullPath(movedFolderPath), Path.GetFullPath(contentWindow.Selection[0].Path));
 
+                lifecycleStage = "delete";
                 folderDeleteAction = ContentItemFilesystemAction.Delete(FlaxEditor.Editor.Instance,
                     new List<ContentItem> { destinationFolder });
                 Assert.NotNull(folderDeleteAction);
                 Assert.IsFalse(Directory.Exists(movedFolderPath));
                 Assert.IsFalse(File.Exists(movedAssetPath));
                 Assert.IsFalse(File.Exists(movedAssetPath + ".meta"));
+                lifecycleStage = "restore";
                 Assert.IsTrue(folderDeleteAction.TryUndo());
                 Assert.IsTrue(Directory.Exists(movedFolderPath));
                 Assert.IsTrue(File.Exists(movedAssetPath));
@@ -665,6 +680,7 @@ namespace FlaxEngine.Tests
                     lifecycleDiagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message)));
                 Assert.Less(lifecycleTimer.ElapsedMilliseconds, 5000,
                     "UI-backed mixed folder lifecycle exceeded its responsiveness budget.");
+                Assert.IsEmpty(consoleDiagnostics, string.Join(Environment.NewLine, consoleDiagnostics));
 
                 Assert.IsFalse(AssetDatabaseQueryService.TryGetMainRecordAtPath(destinationAssetPath, out _));
                 Assert.IsTrue(File.Exists(sourceAssetPath));
@@ -674,6 +690,7 @@ namespace FlaxEngine.Tests
             {
                 AssetWorkspaceModule.NativeCopyBatchObserver = null;
                 AssetWorkspaceModule.NativePresentationObserver = null;
+                Debug.LogMessageReceived -= captureConsoleDiagnostic;
                 folderDeleteAction?.Dispose();
                 CleanupCanonicalCopyAsset(destinationAssetPath);
                 CleanupCanonicalCopyAsset(sourceAssetPath);

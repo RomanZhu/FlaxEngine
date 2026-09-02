@@ -2854,7 +2854,8 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
         commit.AssetGuid = entry.AssetGuid;
         commit.SourcePath = entry.TrashPath;
         commit.DestinationPath = entry.OriginalPath;
-        AddSelfWrite(commit, entry.OriginalPath);
+        if (!entry.IsFolder)
+            AddSelfWrite(commit, entry.OriginalPath);
         if (entry.OriginalMetaPath.HasChars())
             AddSelfWrite(commit, entry.OriginalMetaPath);
         commits.Add(MoveTemp(commit));
