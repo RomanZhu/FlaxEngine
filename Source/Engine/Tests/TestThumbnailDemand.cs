@@ -157,6 +157,26 @@ namespace FlaxEngine.Tests
             item.Dispose();
         }
 
+        [Test]
+        public void TreeRowsDetachBeforeDeletedOrDisposedItemsCanDrawAgain()
+        {
+            var deletedItem = new FileItem(Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")));
+            var deletedNode = new ContentItemTreeNode(deletedItem);
+            Assert.AreEqual(1, deletedItem.ReferencesCount);
+            ((IContentItemOwner)deletedNode).OnItemDeleted(deletedItem);
+            Assert.IsTrue(deletedNode.IsDisposing);
+            Assert.AreEqual(0, deletedItem.ReferencesCount);
+            deletedItem.Dispose();
+
+            var disposedItem = new FileItem(Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")));
+            var disposedNode = new ContentItemTreeNode(disposedItem);
+            Assert.AreEqual(1, disposedItem.ReferencesCount);
+            ((IContentItemOwner)disposedNode).OnItemDispose(disposedItem);
+            Assert.IsTrue(disposedNode.IsDisposing);
+            Assert.AreEqual(0, disposedItem.ReferencesCount);
+            disposedItem.Dispose();
+        }
+
         public static int RunOrdinaryOwnershipDoesNotCreateThumbnailDemand()
         {
             var tests = new TestThumbnailDemand();
@@ -167,6 +187,7 @@ namespace FlaxEngine.Tests
             tests.NewlyDuplicatedAssetRestartsWithItsPublishedExactVersion();
             tests.LoadedMaterialWaitsForRenderingShaderReadiness();
             tests.TreeRowsPreferGeneratedThumbnails();
+            tests.TreeRowsDetachBeforeDeletedOrDisposedItemsCanDrawAgain();
             return 0;
         }
     }

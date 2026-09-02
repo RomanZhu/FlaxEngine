@@ -260,6 +260,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     /// <inheritdoc />
     void IContentItemOwner.OnItemDeleted(ContentItem item)
     {
+        Dispose();
     }
 
     /// <inheritdoc />
@@ -276,6 +277,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     /// <inheritdoc />
     void IContentItemOwner.OnItemDispose(ContentItem item)
     {
+        Dispose();
     }
 
     /// <inheritdoc />
