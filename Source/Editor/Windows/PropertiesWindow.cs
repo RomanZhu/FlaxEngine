@@ -1346,12 +1346,29 @@ namespace FlaxEditor.Windows
             {
                 jsonAssetState.RequestSave();
             }
+
+            RefreshSelectedContentThumbnails();
         }
 
         private void OnUndoRedoContentProperties(IUndoAction action)
         {
-            if (_showContentSelection && _contentAssetState is ImportAssetPropertiesState importState)
+            if (!_showContentSelection || UndoActionMetadata.DoesNotModifyData(action))
+                return;
+
+            if (_contentAssetState is ImportAssetPropertiesState importState)
                 importState.ApplyModelUndoRedo();
+
+            RefreshSelectedContentThumbnails();
+        }
+
+        private void RefreshSelectedContentThumbnails()
+        {
+            var selection = Editor.Windows.ContentWin.Selection;
+            for (int i = 0; i < selection.Count; i++)
+            {
+                if (selection[i] is AssetItem item && item.HasThumbnailReference)
+                    item.RefreshThumbnail();
+            }
         }
 
         private void ApplySearchFilter()

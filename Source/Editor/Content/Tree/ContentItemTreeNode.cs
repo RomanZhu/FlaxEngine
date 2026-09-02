@@ -43,7 +43,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
         _useCanonicalSubAssetName = useCanonicalSubAssetName;
         UpdateDisplayedName();
         IconColor = Color.Transparent; // Reserve icon space but draw custom thumbnail.
-        Item.AddReference(this);
+        Item.AddReference(this, false);
     }
 
     private static SpriteHandle GetIcon(ContentItem item)
@@ -148,6 +148,7 @@ public sealed class ContentItemTreeNode : TreeNode, IContentItemOwner, ITooltipP
     /// <inheritdoc />
     public override void Draw()
     {
+        Item.RequestThumbnail(this);
         base.Draw();
 
         var style = Style.Current;

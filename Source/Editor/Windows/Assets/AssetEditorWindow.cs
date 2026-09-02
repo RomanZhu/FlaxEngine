@@ -14,7 +14,7 @@ namespace FlaxEditor.Windows.Assets
     /// Base class for assets editing/viewing windows.
     /// </summary>
     /// <seealso cref="FlaxEditor.Windows.EditorWindow" />
-    public abstract class AssetEditorWindow : EditorWindow, IEditable, IContentItemOwner
+    public abstract class AssetEditorWindow : EditorWindow, IEditable, IContentItemOwner, IUndoActionOwnerMetadata
     {
         private sealed class AssetDocumentNavigationAction : INavigationHistoryAction, INavigationHistoryDestination
         {
@@ -90,6 +90,11 @@ namespace FlaxEditor.Windows.Assets
         /// Gets the toolstrip UI.
         /// </summary>
         public ToolStrip ToolStrip => _toolstrip;
+
+        /// <inheritdoc />
+        public UndoActionInfo UndoOwnerActionInfo => _item != null
+            ? UndoActionInfo.ForContentOwner("Edit asset", _item, GetType(), replayPolicy: UndoActionReplayPolicy.LiveOwner)
+            : UndoActionInfo.Empty;
 
         /// <inheritdoc />
         public override string SerializationTypename => _item.ID.ToString();

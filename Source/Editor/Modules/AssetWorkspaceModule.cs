@@ -220,6 +220,15 @@ namespace FlaxEditor.Modules
             return AssetDatabaseQueryService.TryGetMainRecordAtPath(ContentMutationPathUtils.Normalize(path), out record);
         }
 
+        private void InvalidateThumbnail(Guid objectId, bool forceRegenerate)
+        {
+            var item = FindLoadedAsset(objectId);
+            if (item?.HasThumbnailReference == true)
+                Editor.Thumbnails.RequestPreview(item, forceRegenerate, true);
+            else
+                Editor.Thumbnails.DeletePreview(objectId);
+        }
+
         private static AssetDatabaseRecordInfo[] QueryDirectFolderRecords(string folderPath, bool mainAssets)
         {
             folderPath = ContentMutationPathUtils.Normalize(folderPath);
@@ -375,12 +384,18 @@ namespace FlaxEditor.Modules
                 return;
 
             var requiresBroadTreeReconcile = false;
-            void Visit(Guid[] ids, bool allowInPlace)
+            void Visit(Guid[] ids, bool allowInPlace, bool removed)
             {
                 if (ids == null)
                     return;
                 for (int i = 0; i < ids.Length; i++)
                 {
+                    if (removed)
+                    {
+                        Editor.Thumbnails.DeletePreview(ids[i]);
+                        continue;
+                    }
+                    InvalidateThumbnail(ids[i], true);
                     if (!TryGetMainRecord(ids[i], out var record))
                     {
                         requiresBroadTreeReconcile = true;
@@ -398,10 +413,10 @@ namespace FlaxEditor.Modules
             }
             for (int i = 0; i < changes.Length; i++)
             {
-                Visit(changes[i].Removed, false);
-                Visit(changes[i].Added, false);
-                Visit(changes[i].Changed, true);
-                Visit(changes[i].StatusChanged, true);
+                Visit(changes[i].Removed, false, true);
+                Visit(changes[i].Added, false, false);
+                Visit(changes[i].Changed, true, false);
+                Visit(changes[i].StatusChanged, true, false);
             }
             if (requiresBroadTreeReconcile)
                 MarkAllContentRootsDirty();
@@ -860,6 +875,28 @@ namespace FlaxEditor.Modules
                     if (result != null)
                         return result;
                 }
+            }
+            return null;
+        }
+
+        internal AssetItem FindLoadedAsset(Guid objectId)
+        {
+            foreach (var project in Projects)
+            {
+                var item = FindAssetObject(project.Content?.Folder, objectId);
+                if (item != null)
+                    return item;
+            }
+            return null;
+        }
+
+        internal AssetItem FindLoadedAsset(string path)
+        {
+            path = StringUtils.NormalizePath(path);
+            foreach (var project in Projects)
+            {
+                if (project.Folder.Find(path) is AssetItem item)
+                    return item;
             }
             return null;
         }
@@ -3628,6 +3665,8 @@ namespace FlaxEditor.Modules
             }
 
             var publishedAssets = AssetPipelineService.DrainArtifactPublications();
+            for (int i = 0; i < publishedAssets.Length; i++)
+                InvalidateThumbnail(publishedAssets[i], false);
             ScriptedImporterRegistry.OnAssetsPublished(publishedAssets);
 
             ProcessPendingAssetDiskChanges();

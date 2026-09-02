@@ -203,6 +203,7 @@ namespace FlaxEditor.Content
         private float _highlightScale;
         private static ContentItem _lastHighlightedItem;
         private readonly List<IContentItemOwner> _references = new List<IContentItemOwner>(4);
+        private readonly List<IContentItemOwner> _thumbnailReferences = new List<IContentItemOwner>(2);
 
         private SpriteHandle _thumbnail;
         private SpriteHandle _shadowIcon;
@@ -350,6 +351,7 @@ namespace FlaxEditor.Content
             {
                 _references[i].OnItemRenamed(this);
             }
+            RefreshThumbnail();
         }
 
         /// <summary>
@@ -523,20 +525,64 @@ namespace FlaxEditor.Content
         }
 
         /// <summary>
+        /// Regenerates the thumbnail for active visible consumers while retaining the current pixels.
+        /// </summary>
+        public virtual void RefreshThumbnail()
+        {
+            if (_thumbnailReferences.Count != 0)
+                Editor.Instance.Thumbnails.RequestPreview(this, true, true);
+        }
+
+        private void ReleaseThumbnail()
+        {
+            _thumbnail = SpriteHandle.Invalid;
+        }
+
+        private void RequestThumbnail()
+        {
+            Editor.Instance.Thumbnails.RequestPreview(this, false, true);
+        }
+
+        /// <summary>
         /// Gets the amount of references to that item.
         /// </summary>
         public int ReferencesCount => _references.Count;
 
         /// <summary>
+        /// Gets a value indicating whether any owner currently needs this item's thumbnail.
+        /// </summary>
+        public bool HasThumbnailReference => _thumbnailReferences.Count != 0;
+
+        /// <summary>
         /// Adds the reference to the item.
         /// </summary>
         /// <param name="obj">The object.</param>
-        public void AddReference(IContentItemOwner obj)
+        /// <param name="requestThumbnail">Whether this owner currently needs the item thumbnail.</param>
+        public void AddReference(IContentItemOwner obj, bool requestThumbnail = false)
         {
             Assert.IsNotNull(obj);
             Assert.IsFalse(_references.Contains(obj));
 
             _references.Add(obj);
+
+            if (requestThumbnail)
+                RequestThumbnail(obj);
+        }
+
+        /// <summary>
+        /// Marks a referencing owner as interested in this item's thumbnail.
+        /// </summary>
+        /// <param name="obj">The referencing owner.</param>
+        internal void RequestThumbnail(IContentItemOwner obj)
+        {
+            Assert.IsNotNull(obj);
+            Assert.IsTrue(_references.Contains(obj));
+            if (_thumbnailReferences.Contains(obj))
+                return;
+
+            _thumbnailReferences.Add(obj);
+            if (_thumbnailReferences.Count == 1 && !_thumbnail.IsValid)
+                RequestThumbnail();
         }
 
         /// <summary>
@@ -545,7 +591,16 @@ namespace FlaxEditor.Content
         /// <param name="obj">The object.</param>
         public void RemoveReference(IContentItemOwner obj)
         {
-            _references.Remove(obj);
+            if (_references.Remove(obj))
+            {
+                _thumbnailReferences.Remove(obj);
+                if (_thumbnailReferences.Count == 0)
+                {
+                    Editor.Instance.Thumbnails.CancelPreviewRequest(this);
+                    if (_thumbnail.IsValid)
+                        ReleaseThumbnail();
+                }
+            }
         }
 
         /// <summary>
@@ -568,6 +623,8 @@ namespace FlaxEditor.Content
         /// </summary>
         public virtual void OnDelete()
         {
+            Editor.Instance.Thumbnails.DeletePreview(this);
+
             // Fire event
             while (_references.Count > 0)
             {
@@ -640,6 +697,8 @@ namespace FlaxEditor.Content
         {
             for (int i = 0; i < _references.Count; i++)
                 _references[i].OnItemReimported(this);
+
+            RefreshThumbnail();
         }
 
         /// <summary>
@@ -724,6 +783,7 @@ namespace FlaxEditor.Content
             var size = Size;
             var style = Style.Current;
             var view = Parent as ContentView;
+            RequestThumbnail(view);
             var isSelected = view.IsSelected(this);
             var clientRect = new Rectangle(Float2.Zero, size);
             var textRect = TextRectangle;

@@ -34,6 +34,8 @@ namespace FlaxEditor.Content.Thumbnails
         private readonly string _cacheFolder;
         private readonly List<ThumbnailRequest> _requests = new List<ThumbnailRequest>(128);
         private readonly HashSet<ContentItem> _pendingRequests = new HashSet<ContentItem>();
+        private readonly HashSet<ContentItem> _pendingForcedRequests = new HashSet<ContentItem>();
+        private readonly HashSet<ContentItem> _pendingHighPriorityRequests = new HashSet<ContentItem>();
         private readonly PreviewRoot _guiRoot = new PreviewRoot();
         private DateTime _lastFlushTime;
         private int _prepareCursor;
@@ -53,14 +55,20 @@ namespace FlaxEditor.Content.Thumbnails
         /// Requests the item preview.
         /// </summary>
         /// <param name="item">The item.</param>
+        /// <param name="forceRegenerate">Whether to regenerate while retaining the current pixels.</param>
+        /// <param name="highPriority">Whether to move the request to the front of the queue.</param>
         /// <exception cref="System.ArgumentNullException"></exception>
-        public void RequestPreview(ContentItem item)
+        public void RequestPreview(ContentItem item, bool forceRegenerate = false, bool highPriority = false)
         {
             if (item == null)
                 throw new ArgumentNullException();
             if (_task == null)
             {
                 _pendingRequests.Add(item);
+                if (forceRegenerate)
+                    _pendingForcedRequests.Add(item);
+                if (highPriority)
+                    _pendingHighPriorityRequests.Add(item);
                 return;
             }
 
@@ -91,14 +99,19 @@ namespace FlaxEditor.Content.Thumbnails
                 var existingRequest = FindRequest(assetItem);
                 if (existingRequest != null)
                 {
-                    if (existingRequest.CacheVersion == cacheVersion || cacheVersion == Guid.Empty)
+                    if (!forceRegenerate && (existingRequest.CacheVersion == cacheVersion || cacheVersion == Guid.Empty))
+                    {
+                        if (highPriority)
+                            PrioritizeRequest(existingRequest);
                         return;
+                    }
                     RemoveRequest(existingRequest);
                 }
 
+                SpriteHandle staleThumbnail = SpriteHandle.Invalid;
                 for (int i = 0; i < _cache.Count; i++)
                 {
-                    if (!assetItem.IsCanonicalSource || cacheVersion != Guid.Empty)
+                    if (!forceRegenerate && (!assetItem.IsCanonicalSource || cacheVersion != Guid.Empty))
                     {
                         var sprite = _cache[i].FindSlotVersioned(assetItem.ID, cacheVersion);
                         if (sprite.IsValid)
@@ -107,8 +120,14 @@ namespace FlaxEditor.Content.Thumbnails
                             return;
                         }
                     }
+
+                    if (!staleThumbnail.IsValid)
+                        staleThumbnail = _cache[i].FindSlot(assetItem.ID);
                 }
-                AddRequest(assetItem, proxy, cacheVersion);
+
+                if (staleThumbnail.IsValid)
+                    item.Thumbnail = staleThumbnail;
+                AddRequest(assetItem, proxy, cacheVersion, forceRegenerate || highPriority);
             }
         }
 
@@ -117,6 +136,22 @@ namespace FlaxEditor.Content.Thumbnails
             if (!item.IsCanonicalSource)
                 return Guid.Empty;
             return AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(item.ID);
+        }
+
+        /// <summary>
+        /// Cancels queued work after the last visible consumer releases an item.
+        /// </summary>
+        /// <param name="item">The item.</param>
+        internal void CancelPreviewRequest(ContentItem item)
+        {
+            _pendingRequests.Remove(item);
+            _pendingForcedRequests.Remove(item);
+            _pendingHighPriorityRequests.Remove(item);
+            if (item is AssetItem assetItem)
+            {
+                lock (_requests)
+                    RemoveRequest(assetItem);
+            }
         }
 
         /// <summary>
@@ -135,6 +170,8 @@ namespace FlaxEditor.Content.Thumbnails
                 return;
 
             _pendingRequests.Remove(item);
+            _pendingForcedRequests.Remove(item);
+            _pendingHighPriorityRequests.Remove(item);
             DeletePreview(assetItem.ID);
             item.Thumbnail = SpriteHandle.Invalid;
         }
@@ -145,6 +182,9 @@ namespace FlaxEditor.Content.Thumbnails
         /// <param name="assetId">The asset identity.</param>
         public void DeletePreview(Guid assetId)
         {
+            _pendingRequests.RemoveWhere(item => item is AssetItem assetItem && assetItem.ID == assetId);
+            _pendingForcedRequests.RemoveWhere(item => item is AssetItem assetItem && assetItem.ID == assetId);
+            _pendingHighPriorityRequests.RemoveWhere(item => item is AssetItem assetItem && assetItem.ID == assetId);
             lock (_requests)
             {
                 // Cancel loading
@@ -368,6 +408,9 @@ namespace FlaxEditor.Content.Thumbnails
             _task.Enabled = false;
             _task.Render += OnRender;
 
+            Editor.Undo.UndoDone += OnUndoRedo;
+            Editor.Undo.RedoDone += OnUndoRedo;
+
             if (_pendingRequests.Count != 0)
             {
                 var pendingRequests = new List<ContentItem>(_pendingRequests);
@@ -375,9 +418,32 @@ namespace FlaxEditor.Content.Thumbnails
                 for (int i = 0; i < pendingRequests.Count; i++)
                 {
                     if (!pendingRequests[i].IsDisposing)
-                        RequestPreview(pendingRequests[i]);
+                        RequestPreview(pendingRequests[i], _pendingForcedRequests.Remove(pendingRequests[i]),
+                            _pendingHighPriorityRequests.Remove(pendingRequests[i]));
                 }
+                _pendingForcedRequests.Clear();
+                _pendingHighPriorityRequests.Clear();
             }
+        }
+
+        private void OnUndoRedo(IUndoAction action)
+        {
+            if (UndoActionMetadata.DoesNotModifyData(action))
+                return;
+
+            var info = UndoActionMetadata.GetActionInfo(action);
+            AssetItem item = null;
+            if (info.OwnerId != Guid.Empty)
+                item = Editor.ContentDatabase.FindLoadedAsset(info.OwnerId);
+            else if (info.TargetType == UndoActionTargetType.Asset && info.TargetId != Guid.Empty)
+                item = Editor.ContentDatabase.FindLoadedAsset(info.TargetId);
+
+            var path = !string.IsNullOrEmpty(info.OwnerPath) ? info.OwnerPath : info.TargetPath;
+            if (item == null && !string.IsNullOrEmpty(path))
+                item = Editor.ContentDatabase.FindLoadedAsset(path);
+
+            if (item?.HasThumbnailReference == true)
+                item.RefreshThumbnail();
         }
 
         private void OnRender(RenderTask task, GPUContext context)
@@ -483,11 +549,31 @@ namespace FlaxEditor.Content.Thumbnails
             return null;
         }
 
-        private void AddRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion)
+        private void AddRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion, bool highPriority)
         {
             var request = new ThumbnailRequest(item, proxy, cacheVersion);
-            _requests.Add(request);
-            item.AddReference(this);
+            if (highPriority)
+            {
+                _requests.Insert(0, request);
+                _prepareCursor = 0;
+                _renderCursor = 0;
+            }
+            else
+            {
+                _requests.Add(request);
+            }
+            item.AddReference(this, false);
+        }
+
+        private void PrioritizeRequest(ThumbnailRequest request)
+        {
+            var index = _requests.IndexOf(request);
+            if (index <= 0)
+                return;
+            _requests.RemoveAt(index);
+            _requests.Insert(0, request);
+            _prepareCursor = 0;
+            _renderCursor = 0;
         }
 
         private void RemoveRequest(ThumbnailRequest request)
@@ -711,6 +797,9 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         public override void OnExit()
         {
+            Editor.Undo.UndoDone -= OnUndoRedo;
+            Editor.Undo.RedoDone -= OnUndoRedo;
+
             if (_task)
                 _task.Enabled = false;
 
@@ -720,6 +809,8 @@ namespace FlaxEditor.Content.Thumbnails
                 ClearRequests();
                 _cache.Clear();
                 _pendingRequests.Clear();
+                _pendingForcedRequests.Clear();
+                _pendingHighPriorityRequests.Clear();
             }
 
             _guiRoot.Dispose();
