@@ -937,6 +937,23 @@ TEST_CASE("Editor-facing imports remain concurrent responsive cancellable and ca
 #endif
 }
 
+TEST_CASE("Project model drop persists through save reopen and scene copy")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestEditorUtils");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunProjectModelDropPersistsAcrossSaveReopenAndSceneCopy", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestEditorUtils"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
+}
+
 TEST_CASE("Reduced production validation fixture stages every representative family")
 {
 #if USE_CSHARP && USE_NETCORE
@@ -1210,6 +1227,92 @@ TEST_CASE("Asset operations atomically remap external-actors scene copies")
     CHECK(failedFragmentDirectories.Count() == expectedFragmentDirectories.Count());
     for (const String& directory : expectedFragmentDirectories)
         CHECK(failedFragmentDirectories.Contains(directory));
+}
+
+TEST_CASE("Asset operations remap inline scene references to the copied scene")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("InlineSceneCopy-") + Guid::New().ToString(Guid::FormatType::N));
+    const String content = root / TEXT("Content");
+    const String library = root / TEXT("Library");
+    REQUIRE_FALSE(FileSystem::CreateDirectory(content));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+
+    OperationProcessor processor;
+    OperationDatabase database;
+    AssetOperations operations(root, content, library, processor, database);
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(operations.Initialize(diagnostic));
+
+    AssetMeta sourceMeta = MakeOperationMeta();
+    sourceMeta.AssetType = TEXT("FlaxEngine.SceneAsset");
+    sourceMeta.SourceKind = AssetSourceKind::TextDocument;
+    sourceMeta.Processor.ID = TEXT("Flax.JsonDocument");
+    const String sourceGuid = sourceMeta.ID.ToString(Guid::FormatType::N).ToLower();
+    const StringAnsi sourceGuidAnsi(sourceGuid);
+    rapidjson_flax::StringBuffer sourceBuffer;
+    PrettyJsonWriter writer(sourceBuffer);
+    writer.StartObject();
+    writer.JKEY("sceneVersion");
+    writer.Int(4);
+    writer.JKEY("objects");
+    writer.StartArray();
+    writer.StartObject();
+    writer.JKEY("fileId");
+    writer.Int64(1);
+    writer.JKEY("type");
+    writer.String("FlaxEngine.Scene");
+    writer.EndObject();
+    writer.StartObject();
+    writer.JKEY("fileId");
+    writer.Int64(2);
+    writer.JKEY("type");
+    writer.String("FlaxEngine.Sky");
+    writer.JKEY("parentFileId");
+    writer.Int64(1);
+    writer.JKEY("Sun");
+    writer.StartObject();
+    writer.JKEY("kind");
+    writer.Int(1);
+    writer.JKEY("guid");
+    writer.String(sourceGuidAnsi.Get(), sourceGuidAnsi.Length());
+    writer.JKEY("fileId");
+    writer.Int64(3);
+    writer.JKEY("prefabInstanceFileId");
+    writer.Int64(0);
+    writer.EndObject();
+    writer.EndObject();
+    writer.StartObject();
+    writer.JKEY("fileId");
+    writer.Int64(3);
+    writer.JKEY("type");
+    writer.String("FlaxEngine.DirectionalLight");
+    writer.JKEY("parentFileId");
+    writer.Int64(1);
+    writer.EndObject();
+    writer.EndArray(3);
+    writer.EndObject();
+
+    const String source = content / TEXT("Source.scene");
+    REQUIRE_FALSE(operations.CreateAsset(source,
+        Span<byte>(reinterpret_cast<byte*>(const_cast<char*>(sourceBuffer.GetString())),
+            static_cast<int32>(sourceBuffer.GetSize())), sourceMeta, diagnostic));
+    AssetOperationTarget target;
+    target.SourcePath = source;
+    target.ExpectedGuid = sourceMeta.ID;
+    const String copied = content / TEXT("Copied.scene");
+    Guid copiedGuid;
+    REQUIRE_FALSE(operations.CopyAsset(target, copied, copiedGuid, diagnostic));
+
+    rapidjson_flax::Document copiedDocument;
+    ParseJsonFile(copiedDocument, copied);
+    const auto objects = copiedDocument.FindMember("objects");
+    REQUIRE(objects != copiedDocument.MemberEnd());
+    REQUIRE(objects->value.IsArray());
+    REQUIRE(objects->value.Size() == 3);
+    const auto sun = objects->value[1].FindMember("Sun");
+    REQUIRE(sun != objects->value[1].MemberEnd());
+    CHECK(JsonTools::GetGuid(sun->value, "guid") == copiedGuid);
+    CHECK(sun->value["fileId"].GetInt64() == 3);
 }
 
 TEST_CASE("Default metadata batches roll back failed native staged publication")

@@ -2111,6 +2111,33 @@ bool LevelImpl::saveScene(Scene* scene)
 #endif
 }
 
+#if USE_EDITOR
+bool PublishSavedSceneSource(Scene* scene, const StringView& path)
+{
+    Array<String> paths;
+    paths.Add(String(path));
+    AssetPipelineDiagnostic diagnostic;
+    if (AssetPipelineService::RefreshSources(paths, false, diagnostic))
+    {
+        LOG(Error, "Cannot refresh saved scene source '{0}': {1}", path, diagnostic.Message);
+        return true;
+    }
+    AssetDatabaseRecordInfo record;
+    if (!AssetDatabaseQueryService::TryGetRecord(scene->GetID(), record) || !record.IsMain)
+    {
+        LOG(Error, "Saved scene source '{0}' was not published under scene ID {1}.", path, scene->GetID());
+        return true;
+    }
+    if (AssetPipelineService::BuildAsset(scene->GetID(), false, true))
+    {
+        diagnostic = AssetPipelineService::GetBuildDiagnostic(scene->GetID());
+        LOG(Error, "Cannot publish saved scene artifact '{0}': {1}", path, diagnostic.Message);
+        return true;
+    }
+    return false;
+}
+#endif
+
 bool LevelImpl::saveScene(Scene* scene, const String& path)
 {
     PROFILE_CPU_NAMED("Level.SaveScene");
@@ -2152,6 +2179,11 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
         expectedSource, fragmentPlan, fragmentError))
     {
         LOG(Error, "Cannot commit scene and private fragments for '{0}': {1}", path, fragmentError);
+        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+        return true;
+    }
+    if (PublishSavedSceneSource(scene, path))
+    {
         CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
         return true;
     }
@@ -2227,6 +2259,11 @@ bool LevelImpl::saveScenes(const Array<Scene*>& scenes)
 
     if (SceneFragmentStore::CommitSceneSaves(saves, error))
         return failBatch(error);
+    for (int32 i = 0; i < scenes.Count(); i++)
+    {
+        if (PublishSavedSceneSource(scenes[i], saves[i].SourcePath))
+            return failBatch(TEXT("A saved scene artifact could not be published."));
+    }
 
     stopwatch.Stop();
     LOG(Info, "Saved {0} scenes atomically. Time {1}ms", scenes.Count(), stopwatch.GetMilliseconds());

@@ -2247,6 +2247,112 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestProjectModelDropPersistsAcrossSaveReopenAndSceneCopy()
+        {
+            var token = Guid.NewGuid().ToString("N");
+            var scenePath = Path.Combine(Globals.ProjectContentFolder, "__ModelDropScene_" + token + ".scene");
+            var copyPath = Path.Combine(Globals.ProjectContentFolder, "__ModelDropSceneCopy_" + token + ".scene");
+            var diagnostics = new List<string>();
+            Scene sourceScene = null;
+            Scene copiedScene = null;
+            LogMessageDelegate capture = (level, message, stackTrace, threadId) =>
+            {
+                if (level == LogType.Warning || level == LogType.Error || level == LogType.Fatal)
+                    diagnostics.Add(level + ": " + message);
+            };
+            Debug.LogMessageReceived += capture;
+            try
+            {
+                CliAuthoringCommands.CreateScene(scenePath);
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(scenePath, out var sourceRecord));
+                Assert.IsFalse(AssetPipelineService.RebuildAsset(sourceRecord.ID, true));
+                Assert.IsFalse(Level.LoadScene(sourceRecord.ID));
+                sourceScene = Level.FindScene(sourceRecord.ID);
+                Assert.NotNull(sourceScene);
+                FlaxEditor.Editor.Instance.Scene.SetActiveScene(sourceScene);
+
+                var model = FlaxEngine.Content.LoadAsyncInternal<Model>("Editor/Primitives/Cube");
+                Assert.NotNull(model);
+                Assert.IsFalse(model.WaitForLoaded());
+                var modelId = model.ID;
+                var modelItem = new ModelItem(model.Path, ref modelId, typeof(Model).FullName, typeof(Model));
+                Assert.IsTrue(SceneTreeWindow.PlaceAssetItems(new AssetItem[] { modelItem }, null, out var placedNodes));
+                Assert.AreEqual(1, placedNodes.Count);
+                var placed = placedNodes[0].Actor as StaticModel;
+                Assert.NotNull(placed);
+                var placedName = placed.Name;
+                Assert.AreSame(model, placed.Model);
+                Assert.IsTrue(FlaxEditor.Editor.Instance.Scene.IsEdited(sourceScene));
+
+                Assert.IsTrue(FlaxEditor.Editor.Instance.Scene.SaveSceneSynchronously(sourceScene));
+                Assert.IsFalse(FlaxEditor.Editor.Instance.Scene.IsEdited(sourceScene));
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(sourceRecord.ID));
+                Assert.IsFalse(Level.UnloadScene(sourceScene));
+                sourceScene = null;
+                Scripting.FlushRemovedObjects();
+                Assert.IsFalse(Level.LoadScene(sourceRecord.ID));
+                sourceScene = Level.FindScene(sourceRecord.ID);
+                Assert.NotNull(sourceScene?.FindActor<StaticModel>(placedName));
+                Assert.AreEqual(modelId, sourceScene.FindActor<StaticModel>(placedName).Model.ID);
+
+                var sourceItem = FlaxEditor.Editor.Instance.ContentDatabase.FindAsset(sourceRecord.ID) as AssetItem;
+                if (sourceItem == null)
+                {
+                    sourceItem = new SceneItem(scenePath, sourceRecord.ID);
+                    sourceItem.SetAssetDatabaseRecord(sourceRecord);
+                }
+                var copyResult = FlaxEditor.Editor.Instance.ContentDatabase.Copy(sourceItem, copyPath);
+                Assert.IsTrue(copyResult.Succeeded, copyResult.Message);
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(copyPath, out var copyRecord));
+                Assert.AreNotEqual(sourceRecord.ID, copyRecord.ID);
+                Assert.IsFalse(AssetPipelineService.RebuildAsset(copyRecord.ID, true));
+                Assert.IsFalse(Level.LoadScene(copyRecord.ID));
+                copiedScene = Level.FindScene(copyRecord.ID);
+                Assert.NotNull(copiedScene?.FindActor<StaticModel>(placedName));
+                var copiedSky = copiedScene.FindActor<Sky>("Sky");
+                var copiedSun = copiedScene.FindActor<DirectionalLight>("Sun");
+                Assert.NotNull(copiedSky);
+                Assert.NotNull(copiedSun);
+                Assert.AreSame(copiedSun, copiedSky.SunLight);
+                Assert.AreNotSame(sourceScene.FindActor<DirectionalLight>("Sun"), copiedSky.SunLight);
+
+                Assert.IsFalse(Level.UnloadScene(sourceScene));
+                Assert.IsFalse(Level.UnloadScene(copiedScene));
+                sourceScene = null;
+                copiedScene = null;
+                Scripting.FlushRemovedObjects();
+                Assert.IsFalse(AssetPipelineService.Shutdown());
+                Assert.IsFalse(AssetPipelineService.Initialize());
+                Assert.IsFalse(AssetPipelineService.LoadOrScan());
+                Assert.IsFalse(Level.LoadScene(copyRecord.ID));
+                copiedScene = Level.FindScene(copyRecord.ID);
+                Assert.NotNull(copiedScene?.FindActor<StaticModel>(placedName));
+                Assert.AreSame(copiedScene.FindActor<DirectionalLight>("Sun"), copiedScene.FindActor<Sky>("Sky").SunLight);
+                Assert.IsEmpty(diagnostics, string.Join(Environment.NewLine, diagnostics));
+            }
+            finally
+            {
+                Debug.LogMessageReceived -= capture;
+                if (sourceScene != null)
+                    Level.UnloadScene(sourceScene);
+                if (copiedScene != null)
+                    Level.UnloadScene(copiedScene);
+                Scripting.FlushRemovedObjects();
+                if (File.Exists(copyPath))
+                    AssetOperationService.DeleteAsset(copyPath);
+                if (File.Exists(scenePath))
+                    AssetOperationService.DeleteAsset(scenePath);
+                AssetPipelineService.RefreshSources(new[] { scenePath, copyPath }, false);
+            }
+        }
+
+        public static int RunProjectModelDropPersistsAcrossSaveReopenAndSceneCopy()
+        {
+            new TestEditorUtils().TestProjectModelDropPersistsAcrossSaveReopenAndSceneCopy();
+            return 0;
+        }
+
+        [Test]
         public void TestModelItemRejectsUnavailableExactArtifact()
         {
             var id = Guid.NewGuid();

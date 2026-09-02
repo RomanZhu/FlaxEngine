@@ -110,12 +110,12 @@ namespace
     }
 
     bool PrepareRemappedSceneSource(const StringView& sourcePath, const StringView& stagingPath,
-        const Guid& sourceSceneGuid, const Guid& destinationSceneGuid, String& error)
+        const Guid& sourceSceneGuid, const Guid& destinationSceneGuid, bool requireExternalActors, String& error)
     {
         BytesContainer sourceBytes;
         if (File::ReadAllBytes(sourcePath, sourceBytes))
         {
-            error = TEXT("Cannot read the external-actors scene source for cloning.");
+            error = TEXT("Cannot read the scene source for cloning.");
             return true;
         }
         rapidjson_flax::Document document;
@@ -123,14 +123,16 @@ namespace
         CanonicalJsonError jsonError;
         if (document.HasParseError() || !document.IsObject())
         {
-            error = TEXT("External-actors scene source is malformed or does not declare external actor storage.");
+            error = TEXT("Scene source is malformed.");
             return true;
         }
         const auto externalActors = document.FindMember("externalActors");
-        if (externalActors == document.MemberEnd() || !externalActors->value.IsBool() ||
-            !externalActors->value.GetBool() || CanonicalJsonWriter::Validate(document, jsonError))
+        if ((requireExternalActors && (externalActors == document.MemberEnd() || !externalActors->value.IsBool() ||
+            !externalActors->value.GetBool())) || CanonicalJsonWriter::Validate(document, jsonError))
         {
-            error = TEXT("External-actors scene source is malformed or does not declare external actor storage.");
+            error = requireExternalActors
+                ? TEXT("Scene source is malformed or does not declare external actor storage.")
+                : TEXT("Scene source is malformed.");
             return true;
         }
 
@@ -139,7 +141,7 @@ namespace
         JsonTools::ChangeIds(document, remap);
         if (CanonicalJsonWriter::Validate(document, jsonError))
         {
-            error = TEXT("Remapped external-actors scene source failed JSON validation.");
+            error = TEXT("Remapped scene source failed JSON validation.");
             return true;
         }
         rapidjson_flax::StringBuffer buffer;
@@ -147,7 +149,7 @@ namespace
         document.Accept(writer.GetWriter());
         if (File::WriteAllBytes(stagingPath, buffer.GetString(), static_cast<int32>(buffer.GetSize())))
         {
-            error = TEXT("Cannot write the remapped external-actors scene source staging file.");
+            error = TEXT("Cannot write the remapped scene source staging file.");
             return true;
         }
         return false;
@@ -1104,6 +1106,7 @@ bool AssetOperations::CopyAssetInternal(const AssetOperationTarget& target, cons
         _modificationProcessor.ValidateOperation(AssetOperationKind::Copy, target, destination, diagnostic))
         return true;
     const Guid copiedAssetGuid = requestedCopiedGuid.IsValid() ? requestedCopiedGuid : Guid::New();
+    const bool isScene = sourceMeta.AssetType == TEXT("FlaxEngine.SceneAsset");
     const String sourceFragments = SceneFragmentStore::GetScenePath(_projectRoot, sourceMeta.ID);
     const bool hasFragments = FileSystem::DirectoryExists(sourceFragments);
     const String destinationFragments = hasFragments
@@ -1157,9 +1160,9 @@ bool AssetOperations::CopyAssetInternal(const AssetOperationTarget& target, cons
     if (PrepareOperationScratch(transactionDirectory, diagnostic) ||
         (hasFragments && SceneFragmentStore::PrepareCloneDirectory(_projectRoot, currentMeta.ID, copiedMeta.ID,
             plan.StageFragmentsPath, fragmentError)) ||
-        (hasFragments
+        (isScene
             ? PrepareRemappedSceneSource(source.AbsolutePath, plan.StageSourcePath, currentMeta.ID,
-                copiedMeta.ID, fragmentError)
+                copiedMeta.ID, hasFragments, fragmentError)
             : FileSystem::CopyFile(plan.StageSourcePath, source.AbsolutePath)) ||
         AssetMeta::SaveAtomic(plan.StageMetaPath, copiedMeta, diagnostic) ||
         MovePath(destinationPath.AbsolutePath, plan.StageSourcePath, false) ||
