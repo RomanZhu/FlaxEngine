@@ -672,8 +672,9 @@ namespace Flax.Build.Bindings
                     moduleBuildInfo.SourceFiles.Add(bindings.GeneratedCSharpFilePath);
             }
 
-            // Skip if module is cached (no scripting API changed)
-            if (moduleInfo.IsFromCache)
+            // Cached API metadata is only reusable together with its target-specific generated outputs.
+            // Project generation may recreate an empty C# placeholder after the bindings cache was written.
+            if (moduleInfo.IsFromCache && (!bindings.UseBindings || HasGeneratedBindingsOutputs(bindings, EngineConfiguration.WithCSharp(buildData.TargetOptions))))
                 return;
 
             // Initialize parsed API
@@ -695,6 +696,17 @@ namespace Flax.Build.Bindings
                 }
                 GenerateBinaryModuleBindings?.Invoke(buildData, moduleInfo, ref bindings);
             }
+        }
+
+        internal static bool HasGeneratedBindingsOutputs(BindingsResult bindings, bool withCSharp)
+        {
+            return HasGeneratedBindingsOutput(bindings.GeneratedCppFilePath) &&
+                   (!withCSharp || HasGeneratedBindingsOutput(bindings.GeneratedCSharpFilePath));
+        }
+
+        private static bool HasGeneratedBindingsOutput(string path)
+        {
+            return !string.IsNullOrEmpty(path) && File.Exists(path) && new System.IO.FileInfo(path).Length != 0;
         }
 
         /// <summary>
