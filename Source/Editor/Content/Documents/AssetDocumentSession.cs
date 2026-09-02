@@ -130,12 +130,6 @@ namespace FlaxEditor.Content.Documents
                     : result.Diagnostic;
                 Changed?.Invoke(this);
             }
-            else if (committed && result.ImportSucceeded)
-            {
-                // The synchronous import can replace the runtime artifact after the live edit preview was
-                // rendered. Renew visible demand against that published artifact and retain the last-good pixels.
-                item.RefreshThumbnail();
-            }
             if (!committed && HasExternalConflict)
                 Editor.LogError("Cannot save graph source because it changed externally: " + SourcePath);
             return !committed;

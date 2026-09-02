@@ -37,6 +37,7 @@
 #include "Engine/Serialization/JsonWriters.h"
 #include "Engine/Serialization/MemoryReadStream.h"
 #include "Engine/Serialization/MemoryWriteStream.h"
+#include "Engine/Scripting/Scripting.h"
 #include "Engine/Threading/Threading.h"
 #include "Engine/Utilities/Crc.h"
 #include "Engine/Core/Collections/HashSet.h"
@@ -109,6 +110,13 @@ void AssetPipelineService::NotifyArtifactPublished(const Guid& assetID)
     std::lock_guard<std::mutex> lock(ArtifactPublicationLocker);
     PendingArtifactPublications.Add(assetID);
 }
+
+#if FLAX_TESTS
+void AssetPipelineService::DispatchArtifactUpdatesForTesting()
+{
+    Scripting::DispatchUpdateActionsForTesting();
+}
+#endif
 
 Array<Guid> AssetPipelineService::DrainArtifactPublications()
 {
@@ -2266,6 +2274,21 @@ Guid AssetDatabaseQueryService::GetCurrentRuntimeArtifactCacheID(const Guid& obj
     AssetPipelineDiagnostic diagnostic;
     ArtifactKey key;
     if (resolver.Resolve(request, artifact, diagnostic) || !artifact.IsExact || ArtifactKey::Parse(artifact.Key, key))
+        return Guid::Empty;
+    return Guid(key.Digest.Values[0], key.Digest.Values[1], key.Digest.Values[2], key.Digest.Values[3]);
+#else
+    return Guid::Empty;
+#endif
+}
+
+Guid AssetDatabaseQueryService::GetLoadedRuntimeArtifactCacheID(Asset* asset)
+{
+#if USE_EDITOR
+    const auto binary = asset ? ScriptingObject::Cast<BinaryAsset>(asset) : nullptr;
+    if (!binary || !binary->IsLoaded() || !binary->IsUsingExactArtifact())
+        return Guid::Empty;
+    ArtifactKey key;
+    if (ArtifactKey::Parse(binary->GetArtifactKey(), key))
         return Guid::Empty;
     return Guid(key.Digest.Values[0], key.Digest.Values[1], key.Digest.Values[2], key.Digest.Values[3]);
 #else

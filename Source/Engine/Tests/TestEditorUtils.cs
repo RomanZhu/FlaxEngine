@@ -14,6 +14,7 @@ using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Import;
 using FlaxEditor.GUI.ContextMenu;
 using FlaxEditor.Modules;
+using FlaxEditor.Surface;
 using FlaxEditor.Windows;
 using FlaxEditor.Windows.Assets;
 using NUnit.Framework;
@@ -33,6 +34,19 @@ namespace FlaxEngine.Tests
             public void OnItemRenamed(ContentItem item) { }
             public void OnItemReimported(ContentItem item) { }
             public void OnItemDispose(ContentItem item) { }
+        }
+
+        private sealed class ParticleSurfaceOwner : IVisjectSurfaceOwner
+        {
+            public Asset SurfaceAsset => null;
+            public string SurfaceName => "Particle Emitter test";
+            public FlaxEditor.Undo Undo => null;
+            public byte[] SurfaceData { get; set; }
+            public VisjectSurfaceContext ParentContext => null;
+            public void OnContextCreated(VisjectSurfaceContext context) { }
+            public void OnSurfaceEditedChanged() { }
+            public void OnSurfaceGraphEdited() { }
+            public void OnSurfaceClose() { }
         }
 
         private static ContentFolder CreateCanonicalTextFolder(string folderPath, out string assetPath, out Guid assetId)
@@ -1612,6 +1626,61 @@ namespace FlaxEngine.Tests
             }
         }
 
+        private static byte[] MoveParticleGraphNode(byte[] data, Float2 delta)
+        {
+            var owner = new ParticleSurfaceOwner { SurfaceData = (byte[])data.Clone() };
+            var surface = new ParticleEmitterSurface(owner, null, null);
+            try
+            {
+                Assert.IsFalse(surface.Load(), "Particle test surface failed to load.");
+                var node = surface.Nodes.FirstOrDefault(x => x != surface.RootNode);
+                Assert.NotNull(node, "Particle template has no movable graph node.");
+                node.Location += delta;
+                Assert.IsFalse(surface.Save(), "Particle test surface failed to save after moving a node.");
+                return owner.SurfaceData;
+            }
+            finally
+            {
+                surface.Dispose();
+            }
+        }
+
+        private static byte[] MoveMaterialGraphNode(byte[] data, Float2 delta)
+        {
+            var owner = new ParticleSurfaceOwner { SurfaceData = (byte[])data.Clone() };
+            var surface = new MaterialSurface(owner);
+            try
+            {
+                Assert.IsFalse(surface.Load(), "Material test surface failed to load.");
+                var node = surface.Nodes.FirstOrDefault();
+                Assert.NotNull(node, "Material graph has no movable node.");
+                node.Location += delta;
+                Assert.IsFalse(surface.Save(), "Material test surface failed to save after moving a node.");
+                return owner.SurfaceData;
+            }
+            finally
+            {
+                surface.Dispose();
+            }
+        }
+
+        private static void ApplyPublishedArtifact(Guid objectId)
+        {
+            var expected = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(objectId);
+            Assert.AreNotEqual(Guid.Empty, expected, "Published artifact has no exact cache identity.");
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (true)
+            {
+                AssetPipelineService.DispatchArtifactUpdatesForTesting();
+                var asset = AssetDatabaseQueryService.LoadAssetPreview(objectId);
+                if (AssetDatabaseQueryService.GetLoadedRuntimeArtifactCacheID(asset) == expected)
+                    break;
+                Assert.Less(timer.Elapsed, TimeSpan.FromSeconds(30), "Artifact hot-swap did not finish.");
+                Thread.Sleep(1);
+            }
+            FlaxEditor.Editor.Instance.ContentDatabase.OnUpdate();
+        }
+
         [Test]
         public void TestParticleAndCollisionAuthoredTextLifecycle()
         {
@@ -1664,30 +1733,43 @@ namespace FlaxEngine.Tests
                 lifecycleStage = "emitter edit";
                 var thumbnailOwner = new ThumbnailOwner();
                 var stableEmitterId = emitterItem.ObjectID;
-                emitterItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Document128;
-                emitterItem.AddReference(thumbnailOwner, true);
                 var emitter = AssetDocumentRegistry.OpenGraph<ParticleEmitter>(emitterItem, out var emitterSession);
                 try
                 {
                     Assert.NotNull(emitter);
                     Assert.IsFalse(emitter.WaitForLoaded());
-                    emitterSession.SetGraphSurface((byte[])emitterSession.GetGraphSurface().Clone());
+                    var template = FlaxEngine.Content.LoadAsyncInternal<ParticleEmitter>("Editor/Particles/Constant Burst");
+                    Assert.NotNull(template);
+                    Assert.IsFalse(template.WaitForLoaded(), "Particle thumbnail template failed to load.");
+                    emitterSession.SetGraphSurface(template.LoadSurface(false));
                     Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
+                    ApplyPublishedArtifact(emitterId);
+
+                    emitterItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Document128;
+                    emitterItem.AddReference(thumbnailOwner, true);
+                    var movedSurface = MoveParticleGraphNode(emitterSession.GetGraphSurface(), new Float2(11, 7));
+                    emitterSession.SetGraphSurface(movedSurface);
+                    Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
+                    Assert.IsFalse(emitterItem.IsThumbnailRequestQueuedForTesting,
+                        "Save queued a thumbnail before the published runtime artifact was hot-swapped.");
+                    ApplyPublishedArtifact(emitterId);
                     Assert.IsTrue(emitterItem.IsThumbnailRequestQueuedForTesting,
-                        "Saving the emitter graph did not renew visible thumbnail demand.");
-                    Assert.IsTrue(emitterItem.IsThumbnailForceRetryForTesting,
-                        "Saving the emitter graph did not request the newly published artifact preview.");
+                        "Published particle artifact did not renew visible thumbnail demand.");
                     Assert.IsTrue(emitterItem.Thumbnail.IsValid,
-                        "Saving the emitter graph discarded the last-good thumbnail while replacement was queued.");
-                    emitterItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Folder128;
-                    emitterSession.SetGraphSurface((byte[])emitterSession.GetGraphSurface().Clone());
+                        "Publication discarded the last-good thumbnail before its replacement was ready.");
+                    emitterItem.RemoveReference(thumbnailOwner);
+
+                    emitterItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Document128;
+                    emitterItem.AddReference(thumbnailOwner, true);
+                    emitterSession.SetGraphSurface(MoveParticleGraphNode(emitterSession.GetGraphSurface(), new Float2(5, 3)));
                     Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
+                    Assert.IsFalse(emitterItem.IsThumbnailRequestQueuedForTesting,
+                        "Repeated save queued a thumbnail before its runtime artifact was hot-swapped.");
+                    ApplyPublishedArtifact(emitterId);
                     Assert.AreEqual(stableEmitterId, emitterItem.ObjectID,
                         "Repeated graph saves changed the emitter's persistent thumbnail identity.");
                     Assert.IsTrue(emitterItem.IsThumbnailRequestQueuedForTesting,
-                        "A repeated emitter graph save did not renew thumbnail demand.");
-                    Assert.IsTrue(emitterItem.Thumbnail.IsValid,
-                        "A repeated emitter graph save discarded the last-good thumbnail.");
+                        "Repeated publication did not renew visible thumbnail demand.");
                     Assert.IsFalse(emitterSession.IsDirty);
                     Assert.IsTrue(emitterSession.ReloadFromDisk(), "Emitter graph session did not reload from disk.");
                 }
@@ -1998,6 +2080,29 @@ namespace FlaxEngine.Tests
                     "Flax.SkeletonMask", "BinaryAssetItem", "SkeletonMaskProxy", typeof(SkeletonMaskWindow));
                 AssertAuthoredEditorRoute(sceneAnimationPath, sceneAnimationId, typeof(SceneAnimation).FullName,
                     "Flax.SceneAnimation", "SceneAnimationItem", "SceneAnimationProxy", typeof(SceneAnimationWindow));
+
+                lifecycleStage = "material thumbnail publication ordering";
+                var materialThumbnailOwner = new ThumbnailOwner();
+                materialItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Document128;
+                materialItem.AddReference(materialThumbnailOwner, true);
+                AssetDocumentRegistry.OpenGraph<Material>(materialItem, out var materialSession);
+                try
+                {
+                    materialSession.SetGraphSurface(MoveMaterialGraphNode(materialSession.GetGraphSurface(), new Float2(9, 4)));
+                    Assert.IsFalse(materialSession.SaveGraph(materialItem));
+                    Assert.IsFalse(materialItem.IsThumbnailRequestQueuedForTesting,
+                        "Material save queued a thumbnail before its runtime artifact was hot-swapped.");
+                    ApplyPublishedArtifact(materialId);
+                    Assert.IsTrue(materialItem.IsThumbnailRequestQueuedForTesting,
+                        "Published material artifact did not renew visible thumbnail demand.");
+                    Assert.IsTrue(materialItem.Thumbnail.IsValid,
+                        "Material publication discarded the last-good thumbnail before replacement.");
+                }
+                finally
+                {
+                    AssetDocumentRegistry.Close(materialItem, ref materialSession);
+                    materialItem.RemoveReference(materialThumbnailOwner);
+                }
 
                 lifecycleStage = "graph edit save reload";
                 RoundTripAuthoredGraph<Material>(materialItem);

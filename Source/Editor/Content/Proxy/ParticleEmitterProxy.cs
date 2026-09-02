@@ -198,6 +198,8 @@ namespace FlaxEditor.Content
             if (_warmupRequest == request)
             {
                 _warmupRequest = null;
+                _preview.Emitter = null;
+                _preview.Parent = null;
             }
         }
 

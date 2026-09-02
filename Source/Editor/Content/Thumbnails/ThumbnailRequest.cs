@@ -129,6 +129,28 @@ namespace FlaxEditor.Content.Thumbnails
             return requestedVersion == Guid.Empty && currentVersion != Guid.Empty;
         }
 
+        internal static bool IsLoadedArtifactCurrent(Guid requestedVersion, Guid loadedVersion)
+        {
+            return requestedVersion != Guid.Empty && requestedVersion == loadedVersion;
+        }
+
+        private bool TryPrepareCanonicalPreview()
+        {
+            Asset = AssetDatabaseQueryService.LoadAssetPreview(Item.ID);
+            if (!Asset)
+                return false;
+            if (Asset is BinaryAsset && !IsLoadedArtifactCurrent(CacheVersion,
+                    AssetDatabaseQueryService.GetLoadedRuntimeArtifactCacheID(Asset)))
+            {
+                Asset = null;
+                return false;
+            }
+            Proxy.OnThumbnailDrawPrepare(this);
+            _proxyPrepared = true;
+            State = States.Prepared;
+            return true;
+        }
+
         internal void Update()
         {
             if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
@@ -145,14 +167,7 @@ namespace FlaxEditor.Content.Thumbnails
                     State = States.Failed;
                     return;
                 }
-                Asset = CacheVersion != Guid.Empty && currentVersion == CacheVersion ? AssetDatabaseQueryService.LoadAssetPreview(Item.ID) : null;
-                if (Asset && CacheVersion != Guid.Empty)
-                {
-                    Proxy.OnThumbnailDrawPrepare(this);
-                    _proxyPrepared = true;
-                    State = States.Prepared;
-                }
-                else
+                if (CacheVersion == Guid.Empty || currentVersion != CacheVersion || !TryPrepareCanonicalPreview())
                 {
                     var status = AssetPipelineService.GetBuildStatus(_buildAssetId);
                     var terminalFailure = status == "Failed" || status == "Cancelled" || status == "NotBuilt";
@@ -201,12 +216,19 @@ namespace FlaxEditor.Content.Thumbnails
                     State = States.Failed;
                     return;
                 }
-                Asset = CacheVersion != Guid.Empty && currentVersion == CacheVersion ? AssetDatabaseQueryService.LoadAssetPreview(Item.ID) : null;
-                if (!Asset || CacheVersion == Guid.Empty)
+                if (CacheVersion == Guid.Empty)
                 {
                     BeginArtifactBuild();
                     return;
                 }
+                if (!TryPrepareCanonicalPreview())
+                {
+                    _buildAssetId = AssetDatabaseQueryService.GetBuildOwnerID(Item.ID);
+                    _nextThumbnailLoadAttemptUtc = DateTime.UtcNow.AddMilliseconds(100);
+                    State = States.Waiting;
+                    return;
+                }
+                return;
             }
             else
             {

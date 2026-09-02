@@ -224,6 +224,8 @@ public:
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
     /// <summary>Gets the current default-target runtime artifact digest projected to a cache identifier.</summary>
     API_FUNCTION() static Guid GetCurrentRuntimeArtifactCacheID(const Guid& objectID);
+    /// <summary>Gets the exact runtime artifact digest currently loaded by a binary asset, or an empty value.</summary>
+    API_FUNCTION() static Guid GetLoadedRuntimeArtifactCacheID(Asset* asset);
     API_FUNCTION() static Asset* LoadAssetPreview(const Guid& objectID);
 };
 
@@ -248,6 +250,8 @@ public:
     API_FUNCTION() static bool CancelBuild(const Guid& assetID);
 #if FLAX_TESTS
     API_FUNCTION() static void SetBuildPausedForTesting(const Guid& assetID, bool paused);
+    /// <summary>Dispatches deferred artifact hot-swaps for focused lifecycle tests.</summary>
+    API_FUNCTION() static void DispatchArtifactUpdatesForTesting();
 #endif
     API_FUNCTION() static bool RebuildAsset(const Guid& assetID, bool synchronous = false);
     API_FUNCTION() static bool IsArtifactCurrent(const Guid& assetID);

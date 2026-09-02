@@ -140,6 +140,18 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void PublishedThumbnailWaitsForLoadedExactArtifact()
+        {
+            var oldVersion = Guid.NewGuid();
+            var publishedVersion = Guid.NewGuid();
+
+            Assert.IsFalse(ThumbnailRequest.IsLoadedArtifactCurrent(publishedVersion, Guid.Empty));
+            Assert.IsFalse(ThumbnailRequest.IsLoadedArtifactCurrent(publishedVersion, oldVersion),
+                "A request must not cache the pre-save runtime object under the published digest.");
+            Assert.IsTrue(ThumbnailRequest.IsLoadedArtifactCurrent(publishedVersion, publishedVersion));
+        }
+
+        [Test]
         public void LoadedMaterialWaitsForRenderingShaderReadiness()
         {
             Assert.IsFalse(ThumbnailsModule.HasMaterialRenderingQuality(false, false));
@@ -245,6 +257,7 @@ namespace FlaxEngine.Tests
             tests.ForcedUndoReplacementCannotPublishLaterPixels();
             tests.ExactArtifactVersionIsImmutableAndRejectsSupersession();
             tests.NewlyDuplicatedAssetRestartsWithItsPublishedExactVersion();
+            tests.PublishedThumbnailWaitsForLoadedExactArtifact();
             tests.LoadedMaterialWaitsForRenderingShaderReadiness();
             tests.TreeRowsPreferGeneratedThumbnails();
             tests.RestoredVisibleTreeRowsRenewDemandWithoutDraw();
