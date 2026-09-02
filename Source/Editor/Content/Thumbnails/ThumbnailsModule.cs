@@ -67,7 +67,7 @@ namespace FlaxEditor.Content.Thumbnails
             if (item == null)
                 throw new ArgumentNullException();
             item.NotifyThumbnailRequestQueued(forceRegenerate);
-            if (_task == null)
+            if (ShouldDeferRequest(_task != null, HasAllAtlasesLoaded()))
             {
                 if (!_pendingRequests.Contains(item) && _pendingRequests.Count >= MaxPendingRequests)
                     EvictPendingRequest();
@@ -149,6 +149,11 @@ namespace FlaxEditor.Content.Thumbnails
             if (!item.IsCanonicalSource)
                 return Guid.Empty;
             return AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(item.ID);
+        }
+
+        internal static bool ShouldDeferRequest(bool renderTaskAvailable, bool cacheAtlasesLoaded)
+        {
+            return !renderTaskAvailable || !cacheAtlasesLoaded;
         }
 
         internal void TrackThumbnailDemand(ContentItem item)
@@ -452,6 +457,10 @@ namespace FlaxEditor.Content.Thumbnails
             Editor.Undo.UndoDone += OnUndoRedo;
             Editor.Undo.RedoDone += OnUndoRedo;
 
+        }
+
+        private void DrainPendingRequests()
+        {
             if (_pendingRequests.Count != 0)
             {
                 var pendingRequests = new List<ContentItem>(_pendingRequests);
@@ -802,6 +811,10 @@ namespace FlaxEditor.Content.Thumbnails
             // Wait some frames before start generating previews (late init feature)
             if (_task == null || Time.TimeSinceStartup < 1.0f || HasAllAtlasesLoaded() == false)
                 return;
+
+            // Initial Project rows can demand previews while persisted cache atlases are still loading.
+            // Resolve those requests only now so the first lookup can reuse their exact cached slots.
+            DrainPendingRequests();
 
             lock (_requests)
             {

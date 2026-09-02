@@ -177,6 +177,17 @@ namespace FlaxEngine.Tests
             disposedItem.Dispose();
         }
 
+        [Test]
+        public void InitialTreeDemandWaitsForThumbnailCacheReadiness()
+        {
+            Assert.IsTrue(ThumbnailsModule.ShouldDeferRequest(false, false));
+            Assert.IsTrue(ThumbnailsModule.ShouldDeferRequest(false, true));
+            Assert.IsTrue(ThumbnailsModule.ShouldDeferRequest(true, false),
+                "Initial visible rows must not miss cached slots while atlases are loading.");
+            Assert.IsFalse(ThumbnailsModule.ShouldDeferRequest(true, true),
+                "Initial demand must resume automatically once rendering and cache lookup are ready.");
+        }
+
         public static int RunOrdinaryOwnershipDoesNotCreateThumbnailDemand()
         {
             var tests = new TestThumbnailDemand();
@@ -188,6 +199,7 @@ namespace FlaxEngine.Tests
             tests.LoadedMaterialWaitsForRenderingShaderReadiness();
             tests.TreeRowsPreferGeneratedThumbnails();
             tests.TreeRowsDetachBeforeDeletedOrDisposedItemsCanDrawAgain();
+            tests.InitialTreeDemandWaitsForThumbnailCacheReadiness();
             return 0;
         }
     }
