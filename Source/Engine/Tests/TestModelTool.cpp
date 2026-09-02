@@ -74,12 +74,15 @@ TEST_CASE("Model processor declares owned material texture runtime dependencies"
     usedTexture.SourceIndex = 1;
 
     Array<String> keys;
-    ModelProcessor::CollectRuntimeReferenceKeys(analysis, &material, keys);
+    ModelProcessor::CollectRuntimeReferenceKeys(analysis, &analysis.SubAssets[0], keys);
     REQUIRE(keys.Count() == 1);
     CHECK(keys[0] == TEXT("texture:Body"));
     ModelProcessor::CollectRuntimeReferenceKeys(analysis, nullptr, keys);
     REQUIRE(keys.Count() == 1);
     CHECK(keys[0] == TEXT("material:Body"));
+    analysis.ParsedSource.reset();
+    ModelProcessor::CollectRuntimeReferenceKeys(analysis, &analysis.SubAssets[0], keys);
+    CHECK(keys.IsEmpty());
 }
 
 TEST_CASE("Model processor analyzes one source into deterministic family records")

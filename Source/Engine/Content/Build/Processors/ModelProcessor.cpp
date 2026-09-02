@@ -746,6 +746,8 @@ void ModelProcessor::CollectRuntimeReferenceKeys(const ModelSourceAnalysis& anal
     Array<String>& keys)
 {
     keys.Clear();
+    if (!analysis.ParsedSource)
+        return;
     HashSet<int32> sourceIndices;
     ModelSubAssetKind referencedKind;
     if (selected && selected->Kind == ModelSubAssetKind::Material)
@@ -832,7 +834,7 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
 
     std::shared_ptr<const ModelSourceAnalysis> analysis;
     const StringAnsi analysisKey = analysisKeyBuilder.Finalize().ToString();
-    if (GetCachedSourceAnalysis(analysisKey, context.GetRecord().SourcePath.Get(), settings, analysis, diagnostic))
+    if (GetCachedSourceAnalysis(analysisKey, context.GetRecord().SourcePath.Get(), settings, analysis, diagnostic, true))
     {
         diagnostic.AssetGuid = context.GetRecord().ID;
         return true;
