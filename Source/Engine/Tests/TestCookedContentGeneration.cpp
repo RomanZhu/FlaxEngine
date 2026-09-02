@@ -4,11 +4,14 @@
 
 #include "Engine/Content/Build/CookedContentGeneration.h"
 #include "Engine/Content/Build/RuntimeAssetCatalog.h"
+#include "Engine/Content/AssetObjectRegistry.h"
+#include "Engine/Core/Config/GameSettings.h"
 #include "Engine/Core/ScopeExit.h"
 #include "Engine/Engine/Globals.h"
 #include "Engine/Platform/File.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Editor/Cooker/Steps/CookAssetsStep.h"
+#include "Editor/Cooker/Steps/DeployDataStep.h"
 #include <ThirdParty/catch2/catch.hpp>
 
 namespace
@@ -64,6 +67,52 @@ TEST_CASE("Cooked content staging creates the package Content parent")
     AssetPipelineDiagnostic diagnostic;
     REQUIRE_FALSE(CookedContentGeneration::CreateStaging(root, Guid::New(), staging, diagnostic));
     CHECK(FileSystem::DirectoryExists(staging / TEXT("Content")));
+}
+
+TEST_CASE("Cooker roots scalar GameSettings references for the target platform")
+{
+    GameSettings settings;
+    settings.Icon = Guid(1, 0, 0, 0);
+    settings.SplashScreen = settings.Icon;
+    settings.Time = Guid(2, 0, 0, 0);
+    settings.Audio = Guid(3, 0, 0, 0);
+    settings.LayersAndTags = Guid(4, 0, 0, 0);
+    settings.Physics = Guid(5, 0, 0, 0);
+    settings.Input = Guid(6, 0, 0, 0);
+    settings.Graphics = Guid(7, 0, 0, 0);
+    settings.Network = Guid(8, 0, 0, 0);
+    settings.Navigation = Guid(9, 0, 0, 0);
+    settings.Localization = Guid(10, 0, 0, 0);
+    settings.GameCooking = Guid(11, 0, 0, 0);
+    settings.Streaming = Guid(12, 0, 0, 0);
+    settings.AssetPipeline = Guid(13, 0, 0, 0);
+    settings.WindowsPlatform = Guid(14, 0, 0, 0);
+    settings.LinuxPlatform = Guid(15, 0, 0, 0);
+    const Guid custom(16, 0, 0, 0);
+    settings.CustomSettings[TEXT("plugin")] = custom;
+
+    Array<Guid> roots;
+    DeployDataStep::CollectGameSettingsRoots(settings, BuildPlatform::Windows64, roots);
+    CHECK(roots.Count() == 15);
+    CHECK(roots.Contains(settings.Icon));
+    CHECK(roots.Contains(settings.Time));
+    CHECK(roots.Contains(settings.AssetPipeline));
+    CHECK(roots.Contains(settings.WindowsPlatform));
+    CHECK(roots.Contains(custom));
+    CHECK_FALSE(roots.Contains(settings.LinuxPlatform));
+    CHECK_FALSE(roots.Contains(Guid::Empty));
+}
+
+TEST_CASE("Cooked generation paths use stable logical Content aliases")
+{
+    const String startup = TEXT("C:/Game");
+    const String content = startup / TEXT("Content/Generations/0123456789abcdef/Content");
+    CHECK(AssetObjectRegistry::NormalizeRuntimePathAlias(
+        content / TEXT("Shaders/GUI.flax"), startup, content) == TEXT("Content/Shaders/GUI.flax"));
+    CHECK(AssetObjectRegistry::NormalizeRuntimePathAlias(
+        content / TEXT("Editor/Fonts/Roboto-Regular.flax"), startup, content) == TEXT("Content/Editor/Fonts/Roboto-Regular.flax"));
+    CHECK(AssetObjectRegistry::NormalizeRuntimePathAlias(
+        startup / TEXT("Content/Legacy.flax"), startup, content) == TEXT("Content/Legacy.flax"));
 }
 
 TEST_CASE("Cooked streaming freshness copies only missing or older output")

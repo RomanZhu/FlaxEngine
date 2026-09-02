@@ -59,6 +59,10 @@ public:
     /// <summary>Finds an object by a registered transient package path or cooked path alias.</summary>
     bool FindObject(const StringView& path, AssetInfo& info);
 
+    /// <summary>Normalizes an absolute cooked path to its generation-independent catalog alias.</summary>
+    static String NormalizeRuntimePathAlias(const StringView& path, const StringView& startupFolder,
+        const StringView& projectContentFolder);
+
     /// <summary>Gets an editor-private package path for one exact object.</summary>
     StringView GetEditorObjectPath(const Guid& objectId) const;
 

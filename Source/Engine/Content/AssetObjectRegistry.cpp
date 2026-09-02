@@ -39,6 +39,19 @@ int32 AssetObjectRegistry::Size() const
 #endif
 }
 
+String AssetObjectRegistry::NormalizeRuntimePathAlias(const StringView& path, const StringView& startupFolder,
+    const StringView& projectContentFolder)
+{
+    String aliasPath = NormalizeObjectPath(path);
+    const String contentPath = NormalizeObjectPath(projectContentFolder);
+    if (aliasPath.StartsWith(contentPath) && aliasPath.Length() > contentPath.Length() && aliasPath[contentPath.Length()] == '/')
+        return TEXT("Content/") + aliasPath.Right(aliasPath.Length() - contentPath.Length() - 1);
+    const String startupPath = NormalizeObjectPath(startupFolder);
+    if (aliasPath.StartsWith(startupPath) && aliasPath.Length() > startupPath.Length() && aliasPath[startupPath.Length()] == '/')
+        aliasPath = aliasPath.Right(aliasPath.Length() - startupPath.Length() - 1);
+    return aliasPath;
+}
+
 Guid AssetObjectRegistry::GetGameSettingsObject() const
 {
 #if USE_EDITOR
@@ -145,10 +158,7 @@ bool AssetObjectRegistry::FindObject(const StringView& path, AssetInfo& info)
     }
     return foundObject.IsValid() && FindObject(foundObject, info);
 #else
-    String aliasPath = NormalizeObjectPath(path);
-    const String startupPath = NormalizeObjectPath(Globals::StartupFolder);
-    if (aliasPath.StartsWith(startupPath) && aliasPath.Length() > startupPath.Length() && aliasPath[startupPath.Length()] == '/')
-        aliasPath = aliasPath.Right(aliasPath.Length() - startupPath.Length() - 1);
+    const String aliasPath = AssetObjectRegistry::NormalizeRuntimePathAlias(path, Globals::StartupFolder, Globals::ProjectContentFolder);
     ContentHash aliasHash;
     Guid objectId;
     return !RuntimeAssetCatalog::HashPathAlias(aliasPath, aliasHash) &&

@@ -14,6 +14,77 @@
 #include "Editor/Cooker/PlatformTools.h"
 #include "Editor/Utilities/EditorUtilities.h"
 
+void DeployDataStep::CollectGameSettingsRoots(const GameSettings& settings, const BuildPlatform platform, Array<Guid>& roots)
+{
+    roots.Clear();
+    const auto add = [&roots](const Guid& id)
+    {
+        if (id.IsValid() && !roots.Contains(id))
+            roots.Add(id);
+    };
+    add(settings.Icon);
+    add(settings.SplashScreen);
+    add(settings.Time);
+    add(settings.Audio);
+    add(settings.LayersAndTags);
+    add(settings.Physics);
+    add(settings.Input);
+    add(settings.Graphics);
+    add(settings.Network);
+    add(settings.Navigation);
+    add(settings.Localization);
+    add(settings.GameCooking);
+    add(settings.Streaming);
+    add(settings.AssetPipeline);
+    for (auto i = settings.CustomSettings.Begin(); i.IsNotEnd(); ++i)
+        add(i->Value);
+    switch (platform)
+    {
+    case BuildPlatform::Windows32:
+    case BuildPlatform::Windows64:
+    case BuildPlatform::WindowsARM64:
+        add(settings.WindowsPlatform);
+        break;
+    case BuildPlatform::UWPx86:
+    case BuildPlatform::UWPx64:
+        add(settings.UWPPlatform);
+        break;
+    case BuildPlatform::LinuxX64:
+        add(settings.LinuxPlatform);
+        break;
+    case BuildPlatform::PS4:
+        add(settings.PS4Platform);
+        break;
+    case BuildPlatform::PS5:
+        add(settings.PS5Platform);
+        break;
+    case BuildPlatform::XboxOne:
+        add(settings.XboxOnePlatform);
+        break;
+    case BuildPlatform::XboxScarlett:
+        add(settings.XboxScarlettPlatform);
+        break;
+    case BuildPlatform::AndroidARM64:
+        add(settings.AndroidPlatform);
+        break;
+    case BuildPlatform::Switch:
+        add(settings.SwitchPlatform);
+        break;
+    case BuildPlatform::MacOSx64:
+    case BuildPlatform::MacOSARM64:
+        add(settings.MacPlatform);
+        break;
+    case BuildPlatform::iOSARM64:
+        add(settings.iOSPlatform);
+        break;
+    case BuildPlatform::Web:
+        add(settings.WebPlatform);
+        break;
+    default:
+        break;
+    }
+}
+
 bool DeployDataStep::Perform(CookingData& data)
 {
     data.StepProgress(TEXT("Deploying engine data"), 0);
@@ -487,6 +558,11 @@ bool DeployDataStep::Perform(CookingData& data)
     data.AddRootEngineAsset(SMAA_SEARCH_TEX);
     if (!buildSettings.SkipDefaultFonts)
         data.AddRootEngineAsset(TEXT("Editor/Fonts/Roboto-Regular"));
+
+    Array<Guid> settingsRoots;
+    CollectGameSettingsRoots(gameSettings, data.Platform, settingsRoots);
+    for (const Guid& settingsRoot : settingsRoots)
+        data.AddRootAsset(settingsRoot);
 
     // Register custom assets (eg. plugins)
     data.StepProgress(TEXT("Deploying custom data"), 0.3f);
