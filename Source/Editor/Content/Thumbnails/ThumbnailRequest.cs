@@ -159,7 +159,7 @@ namespace FlaxEditor.Content.Thumbnails
             }
             else
             {
-                Asset = FlaxEngine.Content.LoadAsync<Asset>(Item.ID);
+                Asset = Item.LoadAsync();
             }
             Proxy.OnThumbnailDrawPrepare(this);
             _proxyPrepared = true;

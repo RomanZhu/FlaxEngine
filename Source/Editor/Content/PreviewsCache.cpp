@@ -7,7 +7,7 @@
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
-#include "Engine/ContentImporters/AssetsImportingManager.h"
+#include "Engine/ContentImporters/GeneratedAssetBuilder.h"
 #include "Engine/Content/Upgraders/TextureAssetUpgrader.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Graphics/GPUDevice.h"
@@ -269,7 +269,8 @@ void PreviewsCache::Flush()
 bool PreviewsCache::Create(const StringView& outputPath)
 {
     LOG(Info, "Creating new atlas '{0}' for assets previews cache. Size: {1}, capacity: {2}", outputPath, ASSETS_ICONS_ATLAS_SIZE, ASSETS_ICONS_PER_ATLAS);
-    return AssetsImportingManager::Create(&create, outputPath);
+    Guid id = Guid::New();
+    return GeneratedAssetBuilder::Build(&create, outputPath, PreviewsCache::TypeName, id);
 }
 
 CreateAssetResult PreviewsCache::create(CreateAssetContext& context)
