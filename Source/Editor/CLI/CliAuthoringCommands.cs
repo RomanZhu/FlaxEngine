@@ -177,11 +177,11 @@ namespace FlaxEditor
         {
             var outputPath = ResolveAuthoringPath(path, ".scene", true);
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-            Editor.Instance.Scene.CreateSceneFile(outputPath);
-            CreateCanonicalJsonMetadata(outputPath);
+            var sceneId = Guid.NewGuid();
+            Editor.Instance.Scene.CreateSceneFile(outputPath, sceneId);
+            CreateCanonicalJsonMetadata(outputPath, sceneId);
             RefreshCreatedContent(outputPath);
 
-            Guid sceneId = Guid.Empty;
             if (FlaxEngine.Content.GetAssetInfo(outputPath, out var info))
                 sceneId = info.ID;
             if (open && sceneId != Guid.Empty)
@@ -2035,9 +2035,12 @@ namespace FlaxEditor
             database.RefreshFolder(contentRoot, true);
         }
 
-        private static void CreateCanonicalJsonMetadata(string path)
+        private static void CreateCanonicalJsonMetadata(string path, Guid id = default)
         {
-            if (AuthoredAssetDocumentService.CreateMetadata(path) == Guid.Empty)
+            var metadataId = id == Guid.Empty
+                ? AuthoredAssetDocumentService.CreateMetadata(path)
+                : AuthoredAssetDocumentService.CreateMetadata(path, id);
+            if (metadataId == Guid.Empty)
                 throw new IOException($"Failed to create canonical metadata for '{path}'.");
         }
 

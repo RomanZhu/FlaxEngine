@@ -110,6 +110,21 @@ namespace FlaxEngine
         }
 
         /// <summary>
+        /// Creates the new instance of the Object with the specified persistent identifier.
+        /// All unused objects should be released using <see cref="Destroy"/>.
+        /// </summary>
+        /// <typeparam name="T">Type of the object.</typeparam>
+        /// <param name="id">Persistent object identifier.</param>
+        /// <returns>Created object.</returns>
+        [HideInEditor]
+        public static T New<T>(Guid id) where T : Object
+        {
+            if (id == Guid.Empty)
+                throw new ArgumentException("Object identifier cannot be empty.", nameof(id));
+            return Internal_CreateWithId(typeof(T), ref id) as T;
+        }
+
+        /// <summary>
         /// Creates the new instance of the Object.
         /// All unused objects should be released using <see cref="Destroy"/>.
         /// </summary>
@@ -317,6 +332,9 @@ namespace FlaxEngine
 
         [LibraryImport("FlaxEngine", EntryPoint = "ObjectInternal_Create1", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(Interop.StringMarshaller))]
         internal static partial Object Internal_Create1([MarshalUsing(typeof(Interop.SystemTypeMarshaller))] Type type);
+
+        [LibraryImport("FlaxEngine", EntryPoint = "ObjectInternal_CreateWithId", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(Interop.StringMarshaller))]
+        internal static partial Object Internal_CreateWithId([MarshalUsing(typeof(Interop.SystemTypeMarshaller))] Type type, ref Guid id);
 
         [LibraryImport("FlaxEngine", EntryPoint = "ObjectInternal_Create2", StringMarshalling = StringMarshalling.Custom, StringMarshallingCustomType = typeof(Interop.StringMarshaller))]
         internal static partial Object Internal_Create2(string typeName);

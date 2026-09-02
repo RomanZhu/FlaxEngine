@@ -235,11 +235,19 @@ namespace FlaxEditor.Modules
         /// <param name="path">The path.</param>
         public void CreateSceneFile(string path)
         {
+            CreateSceneFile(path, Guid.NewGuid());
+        }
+
+        /// <summary>
+        /// Creates the new scene file with a persistent source identifier.
+        /// </summary>
+        /// <param name="path">The path.</param>
+        /// <param name="sceneId">The scene source identifier.</param>
+        public void CreateSceneFile(string path, Guid sceneId)
+        {
             // Create a sample scene
-            var scene = new Scene
-            {
-                StaticFlags = StaticFlags.FullyStatic
-            };
+            var scene = Object.New<Scene>(sceneId);
+            scene.StaticFlags = StaticFlags.FullyStatic;
 
             //
             var sun = scene.AddChild<DirectionalLight>();

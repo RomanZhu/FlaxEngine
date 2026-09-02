@@ -4504,6 +4504,11 @@ Guid ModelImporterService::CreateMetadata(const StringView& sourcePath, const Mo
 
 Guid AuthoredAssetDocumentService::CreateMetadata(const StringView& sourcePath)
 {
+    return CreateMetadata(sourcePath, Guid::Empty);
+}
+
+Guid AuthoredAssetDocumentService::CreateMetadata(const StringView& sourcePath, const Guid& id)
+{
 #if USE_EDITOR
     AssetPipelineDiagnostic diagnostic;
     auto fail = [&diagnostic]()
@@ -4527,7 +4532,16 @@ Guid AuthoredAssetDocumentService::CreateMetadata(const StringView& sourcePath)
     }
     else
     {
-        meta.ID = Guid::New();
+        meta.ID = id.IsValid() ? id : Guid::New();
+    }
+    if (id.IsValid() && meta.ID != id)
+    {
+        diagnostic.Code = AssetPipelineDiagnosticCode::InvalidMeta;
+        diagnostic.Stage = AssetPipelineDiagnosticStage::Publication;
+        diagnostic.SourcePath = sourcePath;
+        diagnostic.AssetGuid = meta.ID;
+        diagnostic.Message = TEXT("Existing metadata GUID does not match the requested persistent object GUID.");
+        return fail();
     }
     if (FileSystem::GetExtension(sourcePath).ToLower() == TEXT("settings"))
         ConfigureSettingsMetadata(meta);

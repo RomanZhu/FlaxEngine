@@ -553,7 +553,7 @@ PersistentScriptingObject::PersistentScriptingObject(const SpawnParams& params)
 
 #if USE_CSHARP
 
-DEFINE_INTERNAL_CALL(MObject*) ObjectInternal_Create1(MTypeObject* type)
+MObject* ObjectInternal_Create(MTypeObject* type, const Guid& id)
 {
     // Peek class for that type (handle generic class cases)
     if (!type)
@@ -590,7 +590,7 @@ DEFINE_INTERNAL_CALL(MObject*) ObjectInternal_Create1(MTypeObject* type)
     const ScriptingType& scriptingType = module->Types[typeIndex];
 
     // Create unmanaged object
-    const ScriptingObjectSpawnParams params(Guid::New(), ScriptingTypeHandle(module, typeIndex));
+    const ScriptingObjectSpawnParams params(id, ScriptingTypeHandle(module, typeIndex));
     ScriptingObject* obj = scriptingType.Script.Spawn(params);
     if (obj == nullptr)
     {
@@ -613,6 +613,26 @@ DEFINE_INTERNAL_CALL(MObject*) ObjectInternal_Create1(MTypeObject* type)
     }
 
     return managedInstance;
+}
+
+DEFINE_INTERNAL_CALL(MObject*) ObjectInternal_Create1(MTypeObject* type)
+{
+    return ObjectInternal_Create(type, Guid::New());
+}
+
+DEFINE_INTERNAL_CALL(MObject*) ObjectInternal_CreateWithId(MTypeObject* type, Guid* id)
+{
+    if (!id || !id->IsValid())
+    {
+        DebugLog::ThrowArgument("id", "Object identifier cannot be empty.");
+        return nullptr;
+    }
+    if (Scripting::TryFindObject(*id))
+    {
+        DebugLog::ThrowArgument("id", "Object identifier is already in use.");
+        return nullptr;
+    }
+    return ObjectInternal_Create(type, *id);
 }
 
 DEFINE_INTERNAL_CALL(MObject*) ObjectInternal_Create2(MString* typeNameObj)
@@ -820,6 +840,7 @@ public:
     static void InitRuntime()
     {
         ADD_INTERNAL_CALL("FlaxEngine.Object::Internal_Create1", &ObjectInternal_Create1);
+        ADD_INTERNAL_CALL("FlaxEngine.Object::Internal_CreateWithId", &ObjectInternal_CreateWithId);
         ADD_INTERNAL_CALL("FlaxEngine.Object::Internal_Create2", &ObjectInternal_Create2);
         ADD_INTERNAL_CALL("FlaxEngine.Object::Internal_ManagedInstanceCreated", &ObjectInternal_ManagedInstanceCreated);
         ADD_INTERNAL_CALL("FlaxEngine.Object::Internal_ManagedInstanceDeleted", &ObjectInternal_ManagedInstanceDeleted);

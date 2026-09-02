@@ -350,5 +350,6 @@ public:
         uint32 materialSlotsMask, ConvexMeshGenerationFlags convexFlags, int32 convexVertexLimit);
     static bool LoadCollisionData(const StringView& path, CollisionData::SerializedOptions& options);
     API_FUNCTION() static Guid CreateMetadata(const StringView& sourcePath);
+    API_FUNCTION() static Guid CreateMetadata(const StringView& sourcePath, const Guid& id);
     API_FUNCTION() static bool EnsureSidecars();
 };
