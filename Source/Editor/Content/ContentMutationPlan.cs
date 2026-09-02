@@ -15,7 +15,6 @@ namespace FlaxEditor.Content
         Delete,
         ImportOutput,
         Restore,
-        Cleanup,
     }
 
     internal enum ContentMutationPathRole
@@ -27,16 +26,6 @@ namespace FlaxEditor.Content
         Temporary,
         UndoTrash,
         ReplacementBackup,
-    }
-
-    internal enum ContentMutationJournalState
-    {
-        Prepared,
-        Committing,
-        Committed,
-        RollingBack,
-        RolledBack,
-        RecoveryRequired,
     }
 
     internal enum ContentMutationEntryState

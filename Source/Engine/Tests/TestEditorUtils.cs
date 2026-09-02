@@ -841,7 +841,6 @@ namespace FlaxEngine.Tests
                 Assert.AreEqual(ContentMutationFailure.DestinationCollision, crossTypeResult.Failure);
                 Assert.AreEqual(Path.GetFullPath(sourceFolderPath), Path.GetFullPath(folderResult.SourcePath));
                 Assert.AreEqual(Path.GetFullPath(destinationFolderPath), Path.GetFullPath(folderResult.DestinationPath));
-                Assert.IsFalse(folderResult.RequiresRecovery);
                 Assert.IsEmpty(folderResult.CompletedPaths);
                 Assert.IsEmpty(folderResult.RolledBackPaths);
                 Assert.AreEqual("existing", File.ReadAllText(Path.Combine(destinationFolderPath, "Existing.txt")));
@@ -995,10 +994,9 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
-        public void TestContentTransactionInjectedFailureRollsBackAndRemovesJournal()
+        public void TestContentTransactionInjectedFailureRollsBackImmediately()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
             var source = Path.Combine(root, "Source.txt");
             var destination = Path.Combine(root, "Destination.txt");
             Directory.CreateDirectory(root);
@@ -1007,7 +1005,7 @@ namespace FlaxEngine.Tests
             {
                 var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
                 plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
-                var transaction = new ContentMutationTransaction(plan, journalRoot);
+                var transaction = new ContentMutationTransaction(plan);
                 ContentMutationTransaction.FaultInjector = point => point == "after-main-move" ? new IOException("Injected failure") : null;
 
                 var result = transaction.Execute(new[]
@@ -1029,10 +1027,8 @@ namespace FlaxEngine.Tests
                 });
 
                 Assert.IsFalse(result.Succeeded);
-                Assert.IsFalse(result.RequiresRecovery);
                 Assert.IsTrue(File.Exists(source));
                 Assert.IsFalse(File.Exists(destination));
-                Assert.IsFalse(Directory.Exists(journalRoot) && Directory.EnumerateFiles(journalRoot, "*.json").Any());
             }
             finally
             {
@@ -1042,10 +1038,9 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
-        public void TestContentTransactionStartupRecoveryRestoresInterruptedMove()
+        public void TestContentTransactionRollbackFailureIsStructured()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
             var source = Path.Combine(root, "Source.txt");
             var destination = Path.Combine(root, "Destination.txt");
             Directory.CreateDirectory(root);
@@ -1054,33 +1049,21 @@ namespace FlaxEngine.Tests
             {
                 var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
                 plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
-                var transaction = new ContentMutationTransaction(plan, journalRoot);
-                ContentMutationTransaction.FaultInjector = point => point == "after-main-move" ? new IOException("Injected process interruption") : null;
+                ContentMutationTransaction.FaultInjector = point => point == "after-main-move" ? new IOException("Injected failure") : null;
 
-                var result = transaction.Execute(new[]
+                var result = new ContentMutationTransaction(plan).Execute(new[]
                 {
-                    new ContentMutationStep(
-                        "main-move",
-                        new[] { 0 },
-                        () =>
-                        {
-                            File.Move(source, destination);
-                            return ContentMutationResult.Success(source, destination);
-                        },
-                        () => false)
+                    new ContentMutationStep("main-move", new[] { 0 }, () =>
+                    {
+                        File.Move(source, destination);
+                        return ContentMutationResult.Success(source, destination);
+                    }, () => false)
                 });
 
                 Assert.IsFalse(result.Succeeded);
-                Assert.IsTrue(result.RequiresRecovery);
+                Assert.AreEqual(ContentMutationFailure.RollbackFailure, result.Failure);
                 Assert.IsFalse(File.Exists(source));
                 Assert.IsTrue(File.Exists(destination));
-                Assert.IsTrue(Directory.EnumerateFiles(journalRoot, "*.json").Any());
-
-                ContentMutationTransaction.FaultInjector = null;
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
-                Assert.IsTrue(File.Exists(source));
-                Assert.IsFalse(File.Exists(destination));
-                Assert.IsFalse(Directory.EnumerateFiles(journalRoot, "*.json").Any());
             }
             finally
             {
@@ -1093,7 +1076,6 @@ namespace FlaxEngine.Tests
         public void TestContentTransactionRejectsSourceChangedAfterPreflight()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
             var source = Path.Combine(root, "Source.txt");
             var destination = Path.Combine(root, "Destination.txt");
             Directory.CreateDirectory(root);
@@ -1102,7 +1084,7 @@ namespace FlaxEngine.Tests
             {
                 var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
                 plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
-                var transaction = new ContentMutationTransaction(plan, journalRoot);
+                var transaction = new ContentMutationTransaction(plan);
                 ContentMutationTransaction.FaultInjector = point =>
                 {
                     if (point == "before-main-move")
@@ -1136,318 +1118,9 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
-        public void TestContentTransactionStartupRecoverySkipsFolderDescendantEntries()
-        {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
-            var source = Path.Combine(root, "Source");
-            var destination = Path.Combine(root, "Destination");
-            var sourceChild = Path.Combine(source, "Child.txt");
-            var destinationChild = Path.Combine(destination, "Child.txt");
-            Directory.CreateDirectory(source);
-            File.WriteAllText(sourceChild, "child");
-            try
-            {
-                var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
-                plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, true));
-                plan.Entries.Add(new ContentMutationEntry(sourceChild, destinationChild, ContentMutationPathRole.Descendant, false)
-                {
-                    DestinationParentProducedByTransaction = true,
-                });
-                var transaction = new ContentMutationTransaction(plan, journalRoot);
-                ContentMutationTransaction.FaultInjector = point => point == "after-folder-move" ? new IOException("Injected process interruption") : null;
-
-                var result = transaction.Execute(new[]
-                {
-                    new ContentMutationStep(
-                        "folder-move",
-                        new[] { 0, 1 },
-                        () =>
-                        {
-                            Directory.Move(source, destination);
-                            return ContentMutationResult.Success(source, destination);
-                        },
-                        () => false)
-                });
-
-                Assert.IsFalse(result.Succeeded);
-                Assert.IsTrue(result.RequiresRecovery);
-                ContentMutationTransaction.FaultInjector = null;
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
-                Assert.IsTrue(File.Exists(sourceChild));
-                Assert.IsFalse(Directory.Exists(destination));
-            }
-            finally
-            {
-                ContentMutationTransaction.FaultInjector = null;
-                Directory.Delete(root, true);
-            }
-        }
-
-        [Test]
-        public void TestContentTransactionStartupRecoveryRemovesInterruptedCopy()
-        {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
-            var source = Path.Combine(root, "Source.txt");
-            var destination = Path.Combine(root, "Destination.txt");
-            Directory.CreateDirectory(root);
-            File.WriteAllText(source, "source");
-            try
-            {
-                var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
-                plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
-                var transaction = new ContentMutationTransaction(plan, journalRoot);
-                ContentMutationTransaction.FaultInjector = point => point == "after-copy" ? new IOException("Injected process interruption") : null;
-
-                var result = transaction.Execute(new[]
-                {
-                    new ContentMutationStep(
-                        "copy",
-                        new[] { 0 },
-                        () =>
-                        {
-                            File.Copy(source, destination);
-                            return ContentMutationResult.Success(source, destination);
-                        },
-                        () => false)
-                });
-
-                Assert.IsTrue(result.RequiresRecovery);
-                ContentMutationTransaction.FaultInjector = null;
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
-                Assert.AreEqual("source", File.ReadAllText(source));
-                Assert.IsFalse(File.Exists(destination));
-            }
-            finally
-            {
-                ContentMutationTransaction.FaultInjector = null;
-                Directory.Delete(root, true);
-            }
-        }
-
-        [Test]
-        public void TestContentTransactionStartupRecoveryRestoresInterruptedReplacement()
-        {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
-            var backupRoot = Path.Combine(root, "Backups");
-            var source = Path.Combine(root, "Import.txt");
-            var destination = Path.Combine(root, "Asset.txt");
-            var backup = Path.Combine(backupRoot, "Asset.txt");
-            Directory.CreateDirectory(root);
-            Directory.CreateDirectory(backupRoot);
-            File.WriteAllText(source, "replacement");
-            File.WriteAllText(destination, "original");
-            try
-            {
-                var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-                plan.Entries.Add(new ContentMutationEntry(destination, backup, ContentMutationPathRole.ReplacementBackup, false));
-                plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false)
-                {
-                    AllowExistingDestination = true,
-                });
-                var transaction = new ContentMutationTransaction(plan, journalRoot);
-                ContentMutationTransaction.FaultInjector = point => point == "after-import-output" ? new IOException("Injected process interruption") : null;
-
-                var result = transaction.Execute(new[]
-                {
-                    new ContentMutationStep(
-                        "import-backup",
-                        new[] { 0 },
-                        () =>
-                        {
-                            File.Copy(destination, backup);
-                            return ContentMutationResult.Success(destination, backup);
-                        },
-                        () => false),
-                    new ContentMutationStep(
-                        "import-output",
-                        new[] { 1 },
-                        () =>
-                        {
-                            File.Copy(source, destination, true);
-                            return ContentMutationResult.Success(source, destination);
-                        },
-                        () => false)
-                });
-
-                Assert.IsTrue(result.RequiresRecovery);
-                Assert.AreEqual("replacement", File.ReadAllText(destination));
-                ContentMutationTransaction.FaultInjector = null;
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
-                Assert.AreEqual("original", File.ReadAllText(destination));
-                Assert.IsFalse(File.Exists(backup));
-            }
-            finally
-            {
-                ContentMutationTransaction.FaultInjector = null;
-                Directory.Delete(root, true);
-            }
-        }
-
-        [Test]
-        public void TestContentTransactionStartupRecoveryRebuildsMetadataOnlyImport()
-        {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
-            var source = Path.Combine(root, "Model.glb");
-            var metadata = source + ".meta";
-            Directory.CreateDirectory(root);
-            File.WriteAllText(source, "source");
-            try
-            {
-                var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-                plan.Entries.Add(new ContentMutationEntry(source, metadata, ContentMutationPathRole.MetadataSidecar, false));
-                ContentMutationTransaction.FaultInjector = point => point == "after-register-in-place" ? new IOException("Injected process interruption") : null;
-                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
-                {
-                    new ContentMutationStep("register-in-place", new[] { 0 }, () =>
-                    {
-                        File.WriteAllText(metadata, "metadata");
-                        return ContentMutationResult.Success(source, metadata);
-                    }, () => false, () => File.Exists(metadata))
-                });
-
-                Assert.IsTrue(result.RequiresRecovery);
-                ContentMutationTransaction.FaultInjector = null;
-                var recoveredSources = new List<string>();
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(recoveredSources, journalRoot));
-                Assert.AreEqual(new[] { StringUtils.NormalizePath(source) }, recoveredSources);
-                Assert.AreEqual("source", File.ReadAllText(source));
-                Assert.AreEqual("metadata", File.ReadAllText(metadata));
-                Assert.IsFalse(Directory.EnumerateFiles(journalRoot, "*.json").Any());
-            }
-            finally
-            {
-                ContentMutationTransaction.FaultInjector = null;
-                Directory.Delete(root, true);
-            }
-        }
-
-        [Test]
-        public void TestContentTransactionStartupRecoveryCleansPartialMetadataBatch()
-        {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
-            var sourceA = Path.Combine(root, "A.glb");
-            var sourceB = Path.Combine(root, "B.glb");
-            var stagedA = Path.Combine(root, "A.staged.meta");
-            var stagedB = Path.Combine(root, "B.staged.meta");
-            Directory.CreateDirectory(root);
-            File.WriteAllText(sourceA, "a");
-            File.WriteAllText(sourceB, "b");
-            File.WriteAllText(stagedA, "meta-a");
-            File.WriteAllText(stagedB, "meta-b");
-            try
-            {
-                var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-                plan.Entries.Add(new ContentMutationEntry(stagedA, sourceA + ".meta", ContentMutationPathRole.MetadataSidecar, false));
-                plan.Entries.Add(new ContentMutationEntry(stagedB, sourceB + ".meta", ContentMutationPathRole.MetadataSidecar, false));
-                ContentMutationTransaction.FaultInjector = point => point == "after-commit-a" ? new IOException("Injected process interruption") : null;
-                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
-                {
-                    new ContentMutationStep("commit-a", new[] { 0 }, () =>
-                    {
-                        File.Move(stagedA, sourceA + ".meta");
-                        return ContentMutationResult.Success(stagedA, sourceA + ".meta");
-                    }, () => false),
-                    new ContentMutationStep("commit-b", new[] { 1 }, () => ContentMutationResult.Success(stagedB, sourceB + ".meta"), () => false)
-                });
-
-                Assert.IsTrue(result.RequiresRecovery);
-                ContentMutationTransaction.FaultInjector = null;
-                var recoveredSources = new List<string>();
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(recoveredSources, journalRoot));
-                Assert.AreEqual(new[] { StringUtils.NormalizePath(sourceA) }, recoveredSources);
-                Assert.IsTrue(File.Exists(sourceA + ".meta"));
-                Assert.IsFalse(File.Exists(stagedA));
-                Assert.IsFalse(File.Exists(stagedB));
-            }
-            finally
-            {
-                ContentMutationTransaction.FaultInjector = null;
-                Directory.Delete(root, true);
-            }
-        }
-
-        [Test]
-        public void TestContentTransactionStartupRecoveryRemovesInterruptedImportSidecar()
-        {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
-            var source = Path.Combine(root, "Source.glb");
-            var output = Path.Combine(root, "Imported.glb");
-            var metadata = output + ".meta";
-            Directory.CreateDirectory(root);
-            File.WriteAllText(source, "source");
-            try
-            {
-                var plan = new ContentMutationPlan(ContentMutationOperationKind.ImportOutput);
-                plan.Entries.Add(new ContentMutationEntry(source, output, ContentMutationPathRole.Main, false));
-                plan.Entries.Add(new ContentMutationEntry(output, metadata, ContentMutationPathRole.MetadataSidecar, false) { SourceProducedByTransaction = true });
-                ContentMutationTransaction.FaultInjector = point => point == "after-metadata" ? new IOException("Injected process interruption") : null;
-                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
-                {
-                    new ContentMutationStep("output", new[] { 0 }, () =>
-                    {
-                        File.Copy(source, output);
-                        return ContentMutationResult.Success(source, output);
-                    }, () => false),
-                    new ContentMutationStep("metadata", new[] { 1 }, () =>
-                    {
-                        File.WriteAllText(metadata, "metadata");
-                        return ContentMutationResult.Success(output, metadata);
-                    }, () => false)
-                });
-
-                Assert.IsTrue(result.RequiresRecovery);
-                ContentMutationTransaction.FaultInjector = null;
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
-                Assert.AreEqual("source", File.ReadAllText(source));
-                Assert.IsFalse(File.Exists(output));
-                Assert.IsFalse(File.Exists(metadata));
-            }
-            finally
-            {
-                ContentMutationTransaction.FaultInjector = null;
-                Directory.Delete(root, true);
-            }
-        }
-
-        [Test]
-        public void TestContentTransactionStartupRecoveryCompletesCleanupJournal()
-        {
-            var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
-            var staged = Path.Combine(root, "Trash", "Asset.flax");
-            var original = Path.Combine(root, "Content", "Asset.flax");
-            Directory.CreateDirectory(Path.GetDirectoryName(staged));
-            Directory.CreateDirectory(Path.GetDirectoryName(original));
-            File.WriteAllText(staged, "staged");
-            File.WriteAllText(original, "current");
-            try
-            {
-                var plan = new ContentMutationPlan(ContentMutationOperationKind.Cleanup);
-                plan.Entries.Add(new ContentMutationEntry(staged, original, ContentMutationPathRole.UndoTrash, false));
-                Assert.IsNotNull(ContentMutationTransaction.PreserveRecoveryRecord(plan, "Injected cleanup failure.", journalRoot));
-
-                Assert.AreEqual(0, ContentMutationTransaction.RecoverPendingTransactions(journalRoot));
-                Assert.IsFalse(File.Exists(staged));
-                Assert.AreEqual("current", File.ReadAllText(original));
-                Assert.IsFalse(Directory.EnumerateFiles(journalRoot, "*.json").Any());
-            }
-            finally
-            {
-                Directory.Delete(root, true);
-            }
-        }
-
-        [Test]
         public void TestContentCreateTransactionDoesNotRequireSourcePath()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
             var destination = Path.Combine(root, "Created.txt");
             Directory.CreateDirectory(root);
             try
@@ -1457,7 +1130,7 @@ namespace FlaxEngine.Tests
                 {
                     SourceRequired = false,
                 });
-                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                var result = new ContentMutationTransaction(plan).Execute(new[]
                 {
                     new ContentMutationStep("create", new[] { 0 }, () =>
                     {
@@ -1472,7 +1145,6 @@ namespace FlaxEngine.Tests
 
                 Assert.IsTrue(result.Succeeded);
                 Assert.AreEqual("created", File.ReadAllText(destination));
-                Assert.IsFalse(Directory.Exists(journalRoot) && Directory.EnumerateFiles(journalRoot, "*.json").Any());
             }
             finally
             {
@@ -1484,7 +1156,6 @@ namespace FlaxEngine.Tests
         public void TestContentTransactionFragmentFailureRollsBackMainPath()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
-            var journalRoot = Path.Combine(root, "Journal");
             var source = Path.Combine(root, "Scene.scene");
             var destination = Path.Combine(root, "Moved.scene");
             var sourceSidecar = Path.Combine(root, "ExternalActors", Guid.NewGuid().ToString("N"));
@@ -1497,7 +1168,7 @@ namespace FlaxEngine.Tests
                 var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
                 plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
                 plan.Entries.Add(new ContentMutationEntry(sourceSidecar, destinationSidecar, ContentMutationPathRole.SceneFragments, true));
-                var result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                var result = new ContentMutationTransaction(plan).Execute(new[]
                 {
                     new ContentMutationStep("main", new[] { 0 }, () =>
                     {
@@ -1514,7 +1185,6 @@ namespace FlaxEngine.Tests
                 });
 
                 Assert.IsFalse(result.Succeeded);
-                Assert.IsFalse(result.RequiresRecovery);
                 Assert.IsTrue(File.Exists(source));
                 Assert.IsFalse(File.Exists(destination));
                 Assert.IsTrue(File.Exists(Path.Combine(sourceSidecar, "Actor.sceneactor")));
@@ -1558,7 +1228,6 @@ namespace FlaxEngine.Tests
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentModelTests", Guid.NewGuid().ToString("N"));
             var contentRoot = Path.Combine(root, "Content");
             var trashRoot = Path.Combine(root, "Trash");
-            var journalRoot = Path.Combine(root, "Journal");
             Directory.CreateDirectory(contentRoot);
             Directory.CreateDirectory(trashRoot);
             var model = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1588,7 +1257,7 @@ namespace FlaxEngine.Tests
                         var plan = new ContentMutationPlan(ContentMutationOperationKind.Copy);
                         plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
                         ContentMutationTransaction.FaultInjector = point => injectFailure && point == "after-copy" ? new IOException("seeded fault") : null;
-                        result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                        result = new ContentMutationTransaction(plan).Execute(new[]
                         {
                             new ContentMutationStep("copy", new[] { 0 }, () =>
                             {
@@ -1608,7 +1277,7 @@ namespace FlaxEngine.Tests
                         var plan = new ContentMutationPlan(ContentMutationOperationKind.Move);
                         plan.Entries.Add(new ContentMutationEntry(source, destination, ContentMutationPathRole.Main, false));
                         ContentMutationTransaction.FaultInjector = point => injectFailure && point == "after-move" ? new IOException("seeded fault") : null;
-                        result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                        result = new ContentMutationTransaction(plan).Execute(new[]
                         {
                             new ContentMutationStep("move", new[] { 0 }, () =>
                             {
@@ -1633,7 +1302,7 @@ namespace FlaxEngine.Tests
                         var plan = new ContentMutationPlan(ContentMutationOperationKind.Delete);
                         plan.Entries.Add(new ContentMutationEntry(source, trash, ContentMutationPathRole.UndoTrash, false));
                         ContentMutationTransaction.FaultInjector = point => injectFailure && point == "after-delete-stage" ? new IOException("seeded fault") : null;
-                        result = new ContentMutationTransaction(plan, journalRoot).Execute(new[]
+                        result = new ContentMutationTransaction(plan).Execute(new[]
                         {
                             new ContentMutationStep("delete-stage", new[] { 0 }, () =>
                             {
@@ -1653,7 +1322,6 @@ namespace FlaxEngine.Tests
                     }
 
                     ContentMutationTransaction.FaultInjector = null;
-                    Assert.AreEqual(0, Directory.Exists(journalRoot) ? Directory.EnumerateFiles(journalRoot, "*.json").Count() : 0, $"Journal leak at seed {seed}, operation {operation}.");
                     var actual = Directory.EnumerateFiles(contentRoot, "*.txt").ToDictionary(Path.GetFileName, File.ReadAllText, StringComparer.OrdinalIgnoreCase);
                     Assert.AreEqual(model.Count, actual.Count, $"Path count divergence at seed {seed}, operation {operation}.");
                     foreach (var pair in model)

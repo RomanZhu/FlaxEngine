@@ -451,25 +451,6 @@ namespace FlaxEditor.Modules
             }
         }
 
-        private void QueueRecoveredCanonicalImports(List<string> sourcePaths)
-        {
-            for (int i = 0; i < sourcePaths.Count; i++)
-            {
-                var sourcePath = ContentMutationPathUtils.Normalize(sourcePaths[i]);
-                if (!TryGetMainRecord(sourcePath, out var record) || record.Status != AssetRecordStatus.Ready || !CanBuildCanonicalRecord(record))
-                {
-                    Editor.LogWarning($"Recovered imported source '{sourcePath}' requires metadata reconciliation before it can be rebuilt.");
-                    continue;
-                }
-
-                var failed = AssetPipelineService.BuildAsset(record.ID);
-                if (failed)
-                    Editor.LogError($"Cannot queue recovered canonical asset rebuild: {sourcePath}");
-                else
-                    Editor.Log($"Recovered interrupted import and queued exact artifact resolution: {sourcePath}");
-            }
-        }
-
         /// <summary>Gets the immutable canonical database record for an asset identity.</summary>
         public bool TryGetAssetDatabaseRecord(Guid id, out AssetDatabaseRecordInfo record)
         {
@@ -1028,7 +1009,7 @@ namespace FlaxEditor.Modules
                 () => allowDeferred && !ContentMutationPathUtils.Exists(destinationPath) ||
                       (isDirectory ? Directory.Exists(destinationPath) : File.Exists(destinationPath)));
             var result = new ContentMutationTransaction(plan).Execute(new[] { step });
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.create.transaction-committed" : "mutation.create.transaction-failed", $"transaction={plan.Id:N}; destination='{destinationPath}'; directory={isDirectory}; deferred={allowDeferred && !ContentMutationPathUtils.Exists(destinationPath)}; failure={result.Failure}; recovery={result.RequiresRecovery}");
+            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.create.transaction-committed" : "mutation.create.transaction-failed", $"transaction={plan.Id:N}; destination='{destinationPath}'; directory={isDirectory}; deferred={allowDeferred && !ContentMutationPathUtils.Exists(destinationPath)}; failure={result.Failure}");
             return result;
         }
 
@@ -1176,7 +1157,7 @@ namespace FlaxEditor.Modules
             }
             if (!result.Succeeded)
             {
-                ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={result.TransactionId:N}; native={useNativeTransaction}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
+                ContentMutationDiagnostics.Log("mutation.move.failed", $"transaction={result.TransactionId:N}; native={useNativeTransaction}; failure={result.Failure}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
                 return useNativeTransaction
                     ? PresentNativeMutationResult(result, moves.SelectMany(move => new[] { move.Source, move.Destination }))
                     : result;
@@ -1395,15 +1376,13 @@ namespace FlaxEditor.Modules
 
         private static void ShowMoveFailure(ContentMutationResult result)
         {
-            var message = result.RequiresRecovery
-                ? "Cannot move Content item. Recovery data was preserved; see the log for exact paths."
-                : result.Failure == ContentMutationFailure.DestinationCollision
-                    ? "Cannot move Content item because the target already exists."
-                    : result.Failure == ContentMutationFailure.PathCycle
-                        ? "Cannot move a folder into itself or one of its descendants."
-                        : result.Failure == ContentMutationFailure.InvalidDestination
-                            ? "Cannot move Content item because the target folder is missing."
-                            : "Cannot move Content item. See the log for details.";
+            var message = result.Failure == ContentMutationFailure.DestinationCollision
+                ? "Cannot move Content item because the target already exists."
+                : result.Failure == ContentMutationFailure.PathCycle
+                    ? "Cannot move a folder into itself or one of its descendants."
+                    : result.Failure == ContentMutationFailure.InvalidDestination
+                        ? "Cannot move Content item because the target folder is missing."
+                        : "Cannot move Content item. See the log for details.";
             MessageBox.Show(message);
         }
 
@@ -1605,7 +1584,7 @@ namespace FlaxEditor.Modules
                 ContentMutationDiagnostics.Log("mutation.copy.committed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}");
             }
             else
-                ContentMutationDiagnostics.Log("mutation.copy.failed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}; failure={result.Failure}; recovery={result.RequiresRecovery}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
+                ContentMutationDiagnostics.Log("mutation.copy.failed", $"transaction={result.TransactionId:N}; items={requests.Count}; entries={plan.Entries.Count}; failure={result.Failure}; message='{ContentMutationDiagnostics.Sanitize(result.Message)}'");
             return result;
         }
 
@@ -2835,17 +2814,10 @@ namespace FlaxEditor.Modules
             FlaxEngine.Content.AssetDisposing += OnContentAssetDisposing;
             AssetDatabaseQueryService.DatabaseChanged += OnAssetDatabaseRevisionPublished;
 
-            // Recover or surface any mutation that was interrupted before the previous Editor process exited.
-            var recoveredImportSources = new List<string>();
-            var recoveryRequired = ContentMutationTransaction.RecoverPendingTransactions(recoveredImportSources);
-            if (recoveryRequired != 0)
-                Editor.LogError($"{recoveryRequired} interrupted Content transaction(s) require manual recovery. See the log for exact paths.");
-
             if (AssetPipelineService.LoadOrScan(true))
                 Editor.LogError("Failed to initialize the canonical asset database. See asset pipeline diagnostics.");
             RefreshAssetDatabaseRecords(AssetDatabaseQueryService.Revision);
             QueueCanonicalStartupChecks();
-            QueueRecoveredCanonicalImports(recoveredImportSources);
             QueueMissingMetadataRegistrations();
 
             // Setup content proxies

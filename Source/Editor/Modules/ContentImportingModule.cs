@@ -1106,11 +1106,7 @@ namespace FlaxEditor.Modules
             if (result.Succeeded && backupPath != null)
             {
                 if (!DeleteImportPath(backupPath))
-                {
-                    var cleanupPlan = new ContentMutationPlan(ContentMutationOperationKind.Cleanup);
-                    cleanupPlan.Entries.Add(new ContentMutationEntry(backupPath, destinationPath, ContentMutationPathRole.ReplacementBackup, false));
-                    ContentMutationTransaction.PreserveRecoveryRecord(cleanupPlan, "A committed import left a replacement backup that could not be removed.");
-                }
+                    Editor.LogWarning($"A committed import left temporary backup '{backupPath}' that could not be removed.");
             }
             try
             {
@@ -1121,7 +1117,7 @@ namespace FlaxEditor.Modules
             {
                 Editor.LogWarning("Failed to clean import transaction backup folder: " + ex.Message);
             }
-            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.import.committed" : "mutation.import.failed", $"transaction={plan.Id:N}; source='{sourcePath}'; destination='{destinationPath}'; replaced={destinationExisted}; failure={result.Failure}; recovery={result.RequiresRecovery}");
+            ContentMutationDiagnostics.Log(result.Succeeded ? "mutation.import.committed" : "mutation.import.failed", $"transaction={plan.Id:N}; source='{sourcePath}'; destination='{destinationPath}'; replaced={destinationExisted}; failure={result.Failure}");
             return !result.Succeeded;
         }
 

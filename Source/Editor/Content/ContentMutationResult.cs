@@ -20,9 +20,7 @@ namespace FlaxEditor.Content
         MoveFailed,
         DeleteFailed,
         UnsupportedLink,
-        JournalFailure,
         RollbackFailure,
-        RecoveryRequired,
     }
 
     internal readonly struct ContentMutationResult
@@ -33,12 +31,11 @@ namespace FlaxEditor.Content
         public readonly string DestinationPath;
         public readonly string Message;
         public readonly bool CreatedDestination;
-        public readonly bool RequiresRecovery;
         public readonly Guid TransactionId;
         public readonly string[] CompletedPaths;
         public readonly string[] RolledBackPaths;
 
-        private ContentMutationResult(bool succeeded, ContentMutationFailure failure, string sourcePath, string destinationPath, string message, bool createdDestination, bool requiresRecovery, Guid transactionId, string[] completedPaths, string[] rolledBackPaths)
+        private ContentMutationResult(bool succeeded, ContentMutationFailure failure, string sourcePath, string destinationPath, string message, bool createdDestination, Guid transactionId, string[] completedPaths, string[] rolledBackPaths)
         {
             Succeeded = succeeded;
             Failure = failure;
@@ -46,7 +43,6 @@ namespace FlaxEditor.Content
             DestinationPath = destinationPath;
             Message = message;
             CreatedDestination = createdDestination;
-            RequiresRecovery = requiresRecovery;
             TransactionId = transactionId;
             CompletedPaths = completedPaths ?? Array.Empty<string>();
             RolledBackPaths = rolledBackPaths ?? Array.Empty<string>();
@@ -54,17 +50,17 @@ namespace FlaxEditor.Content
 
         public static ContentMutationResult Success(string sourcePath, string destinationPath, Guid transactionId = default, string[] completedPaths = null)
         {
-            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, true, false, transactionId, completedPaths, null);
+            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, true, transactionId, completedPaths, null);
         }
 
         public static ContentMutationResult Prepared(string sourcePath, string destinationPath, Guid transactionId = default)
         {
-            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, false, false, transactionId, null, null);
+            return new ContentMutationResult(true, ContentMutationFailure.None, sourcePath, destinationPath, null, false, transactionId, null, null);
         }
 
-        public static ContentMutationResult Fail(ContentMutationFailure failure, string sourcePath, string destinationPath, string message, bool requiresRecovery = false, Guid transactionId = default, string[] completedPaths = null, string[] rolledBackPaths = null)
+        public static ContentMutationResult Fail(ContentMutationFailure failure, string sourcePath, string destinationPath, string message, Guid transactionId = default, string[] completedPaths = null, string[] rolledBackPaths = null)
         {
-            return new ContentMutationResult(false, failure, sourcePath, destinationPath, message, false, requiresRecovery, transactionId, completedPaths, rolledBackPaths);
+            return new ContentMutationResult(false, failure, sourcePath, destinationPath, message, false, transactionId, completedPaths, rolledBackPaths);
         }
     }
 }
