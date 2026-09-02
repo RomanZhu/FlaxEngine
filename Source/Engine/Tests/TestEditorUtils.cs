@@ -1085,6 +1085,57 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void TestContentWorkspaceCreateReportsOrdinaryWriteFailuresWithoutJournals()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "FlaxContentWriteFailureTests", Guid.NewGuid().ToString("N"));
+            var successPath = Path.Combine(root, "Created.txt");
+            var deniedPath = Path.Combine(root, "Denied.txt");
+            var failedPath = Path.Combine(root, "Failed.txt");
+            Directory.CreateDirectory(root);
+            try
+            {
+                var workspace = new AssetWorkspaceModule(null);
+                var success = workspace.CreatePath(successPath, false, () => File.WriteAllText(successPath, "created"));
+                var denied = workspace.CreatePath(deniedPath, false, () => throw new UnauthorizedAccessException("Injected write denial."));
+                var failed = workspace.CreatePath(failedPath, false, () => throw new IOException("Injected disk write failure."));
+
+                Assert.IsTrue(success.Succeeded, success.Message);
+                Assert.AreEqual(ContentMutationFailure.None, success.Failure);
+                CollectionAssert.AreEqual(new[] { ContentMutationPathUtils.Normalize(successPath) }, success.CompletedPaths);
+                Assert.AreEqual("created", File.ReadAllText(successPath));
+
+                Assert.IsFalse(denied.Succeeded);
+                Assert.AreEqual(ContentMutationFailure.PermissionDenied, denied.Failure);
+                Assert.IsEmpty(denied.CompletedPaths);
+                Assert.IsEmpty(AssetWorkspaceModule.GetRetainedMutationPaths(denied));
+                Assert.IsFalse(File.Exists(deniedPath));
+                Assert.IsFalse(File.Exists(deniedPath + ".meta"));
+
+                Assert.IsFalse(failed.Succeeded);
+                Assert.AreEqual(ContentMutationFailure.LockedStorage, failed.Failure);
+                Assert.IsEmpty(failed.CompletedPaths);
+                Assert.IsEmpty(AssetWorkspaceModule.GetRetainedMutationPaths(failed));
+                Assert.IsFalse(File.Exists(failedPath));
+                Assert.IsFalse(File.Exists(failedPath + ".meta"));
+
+                var legacyJournalRoot = Path.Combine(Globals.ProjectCacheFolder, "ContentMutationRecovery");
+                Assert.IsFalse(File.Exists(Path.Combine(legacyJournalRoot, success.TransactionId.ToString("N") + ".json")));
+                Assert.IsFalse(File.Exists(Path.Combine(legacyJournalRoot, denied.TransactionId.ToString("N") + ".json")));
+                Assert.IsFalse(File.Exists(Path.Combine(legacyJournalRoot, failed.TransactionId.ToString("N") + ".json")));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        public static int RunContentMutationWriteFailureTests()
+        {
+            new TestEditorUtils().TestContentWorkspaceCreateReportsOrdinaryWriteFailuresWithoutJournals();
+            return 0;
+        }
+
+        [Test]
         public void TestContentTransactionRejectsSourceChangedAfterPreflight()
         {
             var root = Path.Combine(Path.GetTempPath(), "FlaxContentTransactionTests", Guid.NewGuid().ToString("N"));
