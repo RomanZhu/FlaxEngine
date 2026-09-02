@@ -2361,6 +2361,33 @@ bool AssetPipelineService::RefreshSources(const Array<String>& paths, bool ensur
         return false;
 
     Array<AssetPipelineDiagnostic> metadataDiagnostics;
+    // A watcher reports the sidecar path while its authoritative folder may not exist yet. Restore
+    // that folder before expanding and filtering the targeted input so both halves of the pair take
+    // the ordinary refresh/reconciliation path.
+    for (const String& requestedPath : paths)
+    {
+        const String metaPath = NormalizeAbsolutePath(requestedPath);
+        if (!IsMetaPath(metaPath))
+            continue;
+        const String sourcePath = metaPath.Left(metaPath.Length() - 5);
+        if (FileSystem::FileExists(sourcePath) || FileSystem::DirectoryExists(sourcePath) ||
+            IsV3MetadataExcluded(sourcePath) || !AssetPathPolicy::IsSameOrChild(sourcePath, Globals::ProjectContentFolder))
+            continue;
+        AssetMeta meta;
+        AssetPipelineDiagnostic diagnostic;
+        if (AssetMeta::Load(metaPath, meta, diagnostic) || !meta.FolderAsset)
+            continue;
+        if (FileSystem::CreateDirectory(sourcePath) && !FileSystem::DirectoryExists(sourcePath))
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            diagnostic.Code = AssetPipelineDiagnosticCode::SourceMissing;
+            diagnostic.Stage = AssetPipelineDiagnosticStage::DatabaseScan;
+            diagnostic.AssetGuid = meta.ID;
+            diagnostic.SourcePath = sourcePath;
+            diagnostic.Message = TEXT("Folder metadata sidecar could not materialize its adjacent directory.");
+            metadataDiagnostics.Add(MoveTemp(diagnostic));
+        }
+    }
     if (ensureDefaultMetadata)
     {
         for (const String& requestedPath : paths)

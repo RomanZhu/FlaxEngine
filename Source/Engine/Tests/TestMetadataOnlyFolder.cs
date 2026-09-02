@@ -37,7 +37,17 @@ namespace FlaxEngine.Tests
 
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { metadataPath }));
                 Assert.IsTrue(Directory.Exists(folderPath), "Metadata refresh did not materialize the folder.");
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(folderId, out var record), "Materialized folder was not published.");
+                var published = AssetDatabaseQueryService.GetRecords().Where(x =>
+                    ContentMutationPathUtils.Comparer.Equals(ContentMutationPathUtils.Normalize(folderPath),
+                        ContentMutationPathUtils.Normalize(x.SourcePath))).ToArray();
+                var scopedDiagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
+                    !string.IsNullOrEmpty(x.SourcePath) && ContentMutationPathUtils.Comparer.Equals(
+                        ContentMutationPathUtils.Normalize(folderPath), ContentMutationPathUtils.Normalize(x.SourcePath))).ToArray();
+                var publicationDetails = "Records: " + string.Join("; ", published.Select(x =>
+                    x.ID + " " + x.SourceKind + " " + x.Status + " " + x.SourcePath)) + Environment.NewLine +
+                    "Diagnostics: " + string.Join("; ", scopedDiagnostics.Select(x => x.Code + ": " + x.Message));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(folderId, out var record),
+                    "Materialized folder was not published. " + publicationDetails);
                 Assert.AreEqual(AssetRecordStatus.Ready, record.Status);
                 Assert.AreEqual(AssetSourceKind.Folder, record.SourceKind);
 
