@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using FlaxEditor.Actions;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Create;
 using FlaxEditor.Content.Documents;
 using FlaxEditor.Content.Import;
 using FlaxEditor.Content.Settings;
@@ -205,6 +206,11 @@ namespace FlaxEditor
             // Canonical publication already hot-swaps loaded assets. Reloading the same generated
             // storage again can race that swap and does not add persistence coverage.
             return !requiresArtifactBuild;
+        }
+
+        internal static bool UsesDirectHeadlessCreate(ContentProxy proxy)
+        {
+            return proxy is PrefabProxy || proxy is ParticleEmitterProxy;
         }
 
         /// <summary>
@@ -488,7 +494,13 @@ namespace FlaxEditor
                         throw new IOException($"Failed to create Visual Script asset '{path}'.");
                     return;
                 }
-                if (proxy is ParticleEmitterProxy && System.IO.Path.GetExtension(path).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
+                if (UsesDirectHeadlessCreate(proxy) && proxy is PrefabProxy)
+                {
+                    if (new PrefabCreateEntry(path).Create())
+                        throw new IOException($"Failed to create Prefab asset '{path}'.");
+                    return;
+                }
+                if (UsesDirectHeadlessCreate(proxy) && proxy is ParticleEmitterProxy && System.IO.Path.GetExtension(path).Equals(".particleemitter", StringComparison.OrdinalIgnoreCase))
                 {
                     if (AssetDocumentRegistry.CreateGraph(path, typeof(ParticleEmitter).FullName) == Guid.Empty)
                         throw new IOException($"Failed to create Particle Emitter asset '{path}'.");

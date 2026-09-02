@@ -2,6 +2,7 @@
 
 #if FLAX_TESTS
 using FlaxEditor;
+using FlaxEditor.Content;
 using NUnit.Framework;
 
 namespace FlaxEngine.Tests
@@ -31,6 +32,13 @@ namespace FlaxEngine.Tests
         public void TestReloadPolicy(bool requiresBuild, bool expected)
         {
             Assert.AreEqual(expected, CliAssetCommands.ShouldForceVerificationReload(requiresBuild));
+        }
+
+        [Test]
+        public void TestHeadlessCreateRouting()
+        {
+            Assert.IsTrue(CliAssetCommands.UsesDirectHeadlessCreate(new PrefabProxy()));
+            Assert.IsTrue(CliAssetCommands.UsesDirectHeadlessCreate(new ParticleEmitterProxy()));
         }
     }
 }
