@@ -8,6 +8,16 @@ namespace FlaxEngine.Tests
 {
     internal static class CurrentFormatCookerValidation
     {
+        public static void Stage(string caseName, string stage, System.Diagnostics.Stopwatch aggregateTimer,
+            TimeSpan aggregateDeadline)
+        {
+            Assert.Less(aggregateTimer.Elapsed, aggregateDeadline,
+                "Cook validation aggregate deadline expired before " + caseName + " / " + stage + ".");
+            Debug.Log("Cook validation stage: " + caseName + " / " + stage +
+                      ", elapsedMs=" + aggregateTimer.ElapsedMilliseconds +
+                      ", remainingMs=" + (long)(aggregateDeadline - aggregateTimer.Elapsed).TotalMilliseconds);
+        }
+
         public static void AssertCooks(Guid id, string caseName, System.Diagnostics.Stopwatch aggregateTimer,
             TimeSpan aggregateDeadline)
         {

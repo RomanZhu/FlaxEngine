@@ -2021,39 +2021,105 @@ namespace FlaxEngine.Tests
             return 0;
         }
 
+        private static void WriteCurrentJsonDocument(string path, Guid id, string typeName, string source)
+        {
+            File.WriteAllText(path, source);
+            File.WriteAllText(path + ".meta",
+                "{\n" +
+                "  \"fileFormatVersion\": 2,\n" +
+                "  \"guid\": \"" + id.ToString("N") + "\",\n" +
+                "  \"folderAsset\": false,\n" +
+                "  \"importer\": { \"id\": \"Flax.JsonDocument\", \"version\": 1, \"settings\": {} },\n" +
+                "  \"objectIds\": { \"main\": { \"fileId\": 1, \"type\": \"" + typeName + "\" } },\n" +
+                "  \"labels\": [],\n" +
+                "  \"userData\": {}\n" +
+                "}\n");
+        }
+
+        private static void WaitForCurrentArtifact(Guid id, string caseName,
+            System.Diagnostics.Stopwatch aggregateTimer, TimeSpan aggregateDeadline)
+        {
+            while (!AssetPipelineService.IsArtifactCurrent(id))
+            {
+                var status = AssetPipelineService.GetBuildStatus(id);
+                Assert.IsFalse(status == "Failed" || status == "Cancelled" || status == "NotBuilt",
+                    caseName + " build ended as " + status + ": " +
+                    AssetPipelineService.GetBuildDiagnostic(id).Message);
+                if (aggregateTimer.Elapsed >= aggregateDeadline)
+                {
+                    AssetPipelineService.CancelBuild(id);
+                    Assert.Fail(caseName + " exceeded the aggregate cooker-validation deadline with status " + status + ".");
+                }
+                Thread.Sleep(1);
+            }
+        }
+
         [Test]
         public void TestSceneAndPrefabCurrentFormatCookerPaths()
         {
-            ProductionValidationFixture fixture = null;
-            string root = null;
+            var aggregateTimer = System.Diagnostics.Stopwatch.StartNew();
+            var aggregateDeadline = TimeSpan.FromSeconds(30);
+            var root = Path.Combine(Globals.ProjectContentFolder,
+                "__ScenePrefabCook_" + Guid.NewGuid().ToString("N"));
+            var scenePath = Path.Combine(root, "Fixture.scene");
+            var prefabPath = Path.Combine(root, "Fixture.prefab");
+            var sceneId = Guid.NewGuid();
+            var prefabId = Guid.NewGuid();
+            var paths = new[] { scenePath, prefabPath };
+            var ids = new[] { sceneId, prefabId };
             var stage = "setup";
             try
             {
-                fixture = ProductionValidationFixture.Create();
-                root = fixture.RootPath;
-                var paths = new[] { fixture.ScenePath, fixture.PrefabPath };
-                var ids = new[] { fixture.SceneId, fixture.PrefabId };
+                CurrentFormatCookerValidation.Stage("scene/prefab", "source write begin", aggregateTimer,
+                    aggregateDeadline);
+                Directory.CreateDirectory(root);
+                WriteCurrentJsonDocument(scenePath, sceneId, typeof(SceneAsset).FullName,
+                    "{\"sceneVersion\":4,\"objects\":[{\"fileId\":1,\"type\":\"FlaxEngine.Scene\"},{\"fileId\":2,\"type\":\"FlaxEngine.EmptyActor\",\"parentFileId\":1}]}");
+                WriteCurrentJsonDocument(prefabPath, prefabId, typeof(Prefab).FullName,
+                    "{\"prefabVersion\":4,\"objects\":[{\"fileId\":1,\"type\":\"FlaxEngine.EmptyActor\"}]}");
+                CurrentFormatCookerValidation.Stage("scene/prefab", "source write end", aggregateTimer,
+                    aggregateDeadline);
                 stage = "registration";
+                CurrentFormatCookerValidation.Stage("scene/prefab", "registration begin", aggregateTimer,
+                    aggregateDeadline);
                 Assert.IsFalse(AssetPipelineService.RefreshSources(paths, false));
-                stage = "artifact builds";
-                foreach (var id in ids)
+                CurrentFormatCookerValidation.Stage("scene/prefab", "registration end", aggregateTimer,
+                    aggregateDeadline);
+                for (var i = 0; i < ids.Length; i++)
                 {
-                    Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
-                    WaitForCurrentArtifact(id);
+                    var registrationDiagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
+                        paths.Any(path => string.Equals(path, x.SourcePath, StringComparison.OrdinalIgnoreCase))).ToArray();
+                    Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(paths[i], out var record),
+                        "Current-format JSON document was not registered: " + paths[i] + Environment.NewLine +
+                        string.Join(Environment.NewLine, registrationDiagnostics.Select(x => x.Code + ": " + x.Message)));
+                    Assert.AreEqual("Flax.JsonDocument", record.ProcessorID);
+                    ids[i] = record.ID;
+                }
+                stage = "artifact builds";
+                for (var i = 0; i < ids.Length; i++)
+                {
+                    var caseName = i == 0 ? "current-format scene" : "current-format prefab";
+                    CurrentFormatCookerValidation.Stage("scene/prefab", caseName + " build request", aggregateTimer,
+                        aggregateDeadline);
+                    Assert.IsFalse(AssetPipelineService.BuildAssetForeground(ids[i]));
+                    Assert.AreNotEqual("NotBuilt", AssetPipelineService.GetBuildStatus(ids[i]),
+                        caseName + " foreground build was not dispatched to the registered JSON document processor: " +
+                        AssetPipelineService.GetBuildDiagnostic(ids[i]).Message);
+                    WaitForCurrentArtifact(ids[i], caseName, aggregateTimer, aggregateDeadline);
+                    CurrentFormatCookerValidation.Stage("scene/prefab", caseName + " build ready", aggregateTimer,
+                        aggregateDeadline);
                 }
 
-                var cookValidationTimer = System.Diagnostics.Stopwatch.StartNew();
-                var cookValidationDeadline = TimeSpan.FromSeconds(20);
                 stage = "scene cooker";
-                CurrentFormatCookerValidation.AssertCooks(fixture.SceneId, "current-format scene",
-                    cookValidationTimer, cookValidationDeadline);
+                CurrentFormatCookerValidation.AssertCooks(ids[0], "current-format scene", aggregateTimer,
+                    aggregateDeadline);
                 stage = "prefab cooker";
-                CurrentFormatCookerValidation.AssertCooks(fixture.PrefabId, "current-format prefab",
-                    cookValidationTimer, cookValidationDeadline);
+                CurrentFormatCookerValidation.AssertCooks(ids[1], "current-format prefab", aggregateTimer,
+                    aggregateDeadline);
 
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(fixture.SceneId, out var sceneRecord));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(ids[0], out var sceneRecord));
                 Assert.AreEqual(typeof(SceneAsset).FullName, sceneRecord.TypeName);
-                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(fixture.PrefabId, out var prefabRecord));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(ids[1], out var prefabRecord));
                 Assert.AreEqual(typeof(Prefab).FullName, prefabRecord.TypeName);
                 var diagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
                     x.Severity != AssetPipelineDiagnosticSeverity.Info &&
@@ -2068,9 +2134,9 @@ namespace FlaxEngine.Tests
             }
             finally
             {
-                fixture?.Dispose();
-                if (root != null)
-                    AssetPipelineService.RefreshSources(new[] { root });
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+                AssetPipelineService.RefreshSources(new[] { root });
             }
         }
 

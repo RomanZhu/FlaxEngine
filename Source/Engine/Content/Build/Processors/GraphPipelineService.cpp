@@ -174,38 +174,8 @@ bool GraphPipelineService::OwnsProcessor(const StringView& processorID)
         ImportedSourceProcessor::Owns(processorID);
 }
 
-bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
-{
-    GraphPipelineState& state = State();
-    std::lock_guard<std::mutex> lock(state.Locker);
-    if (state.Initialized)
-        return false;
-    AssetProcessorDescriptor implementation;
-    if (!AssetProcessorRegistry::Get().TryGetDescriptor(GraphDocumentProcessor::ProcessorID(), implementation))
-    {
-        implementation = GraphDocumentProcessor::CreateDescriptor();
-        if (AssetProcessorRegistry::Get().Register(implementation, state.GraphRegistration, diagnostic))
-            return true;
-    }
-    if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
-        [](const Guid& id, bool force, AssetBuildJobPriority priority, const Guid& refreshId, uint32 pass,
-            AssetPipelineDiagnostic& localDiagnostic)
-        {
-            return GraphPipelineService::RequestBuild(id, force, localDiagnostic, nullptr, refreshId, pass, priority);
-        },
-        [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
-        {
-            return GraphPipelineService::GetStatus(id, localDiagnostic);
-        }))
-        return true;
-    state.Initialized = true;
-    return false;
-}
-
 static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
 {
-    if (GraphPipelineService::EnsureInitialized(diagnostic))
-        return true;
     GraphPipelineState& state = State();
     std::lock_guard<std::mutex> lock(state.Locker);
     if (state.ExtraInitialized)
@@ -229,21 +199,21 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
 #endif
     for (const String& id : extraIds)
     {
-        AssetProcessorDescriptor existing;
-        if (AssetProcessorRegistry::Get().TryGetDescriptor(id, existing))
-            continue;
         AssetProcessorRegistration registration;
         AssetProcessorDescriptor descriptor;
-        if (id == SettingsProcessor::ProcessorID())
-            descriptor = SettingsProcessor::CreateDescriptor();
-        else if (id == JsonAssetProcessor::ProcessorID())
-            descriptor = JsonAssetProcessor::CreateDescriptor();
-        else if (AuthoredAssetProcessor::Owns(id))
-            descriptor = AuthoredAssetProcessor::CreateDescriptor(id);
-        else
-            descriptor = ImportedSourceProcessor::CreateDescriptor(id);
-        if (AssetProcessorRegistry::Get().Register(descriptor, registration, diagnostic))
-            return true;
+        if (!AssetProcessorRegistry::Get().TryGetDescriptor(id, descriptor))
+        {
+            if (id == SettingsProcessor::ProcessorID())
+                descriptor = SettingsProcessor::CreateDescriptor();
+            else if (id == JsonAssetProcessor::ProcessorID())
+                descriptor = JsonAssetProcessor::CreateDescriptor();
+            else if (AuthoredAssetProcessor::Owns(id))
+                descriptor = AuthoredAssetProcessor::CreateDescriptor(id);
+            else
+                descriptor = ImportedSourceProcessor::CreateDescriptor(id);
+            if (AssetProcessorRegistry::Get().Register(descriptor, registration, diagnostic))
+                return true;
+        }
         if (AssetImportService::RegisterBuiltIn(descriptor, diagnostic,
             [](const Guid& assetID, bool force, AssetBuildJobPriority priority, const Guid& refreshId, uint32 pass,
                 AssetPipelineDiagnostic& localDiagnostic)
@@ -259,6 +229,42 @@ static bool RegisterExtraProcessors(AssetPipelineDiagnostic& diagnostic)
     }
     state.ExtraInitialized = true;
     return false;
+}
+
+bool GraphPipelineService::EnsureInitialized(AssetPipelineDiagnostic& diagnostic)
+{
+    {
+        GraphPipelineState& state = State();
+        std::lock_guard<std::mutex> lock(state.Locker);
+        if (!state.Initialized)
+        {
+            AssetProcessorDescriptor implementation;
+            if (!AssetProcessorRegistry::Get().TryGetDescriptor(GraphDocumentProcessor::ProcessorID(), implementation))
+            {
+                implementation = GraphDocumentProcessor::CreateDescriptor();
+                if (AssetProcessorRegistry::Get().Register(implementation, state.GraphRegistration, diagnostic))
+                    return true;
+            }
+            if (AssetImportService::RegisterBuiltIn(implementation, diagnostic,
+                [](const Guid& id, bool force, AssetBuildJobPriority priority, const Guid& refreshId, uint32 pass,
+                    AssetPipelineDiagnostic& localDiagnostic)
+                {
+                    return GraphPipelineService::RequestBuild(id, force, localDiagnostic, nullptr, refreshId, pass, priority);
+                },
+                [](const Guid& id, AssetPipelineDiagnostic& localDiagnostic)
+                {
+                    return GraphPipelineService::GetStatus(id, localDiagnostic);
+                }))
+                return true;
+            state.Initialized = true;
+        }
+        if (state.ExtraInitialized)
+        {
+            diagnostic = AssetPipelineDiagnostic();
+            return false;
+        }
+    }
+    return RegisterExtraProcessors(diagnostic);
 }
 
 bool GraphPipelineService::CreatePlan(const AssetRecord& record, const ArtifactRequest& request,
