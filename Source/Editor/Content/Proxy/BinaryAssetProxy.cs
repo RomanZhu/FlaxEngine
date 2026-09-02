@@ -43,6 +43,11 @@ namespace FlaxEditor.Content
         /// <inheritdoc />
         public override AssetItem ConstructItem(string path, string typeName, ref Guid id)
         {
+            return ConstructBinaryItem(path, typeName, ref id);
+        }
+
+        internal static BinaryAssetItem ConstructBinaryItem(string path, string typeName, ref Guid id)
+        {
             var type = TypeUtils.GetType(typeName).Type;
 
             if (typeof(TextureBase).IsAssignableFrom(type))

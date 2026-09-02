@@ -625,7 +625,7 @@ namespace FlaxEditor.Modules
             {
                 var type = TypeUtils.GetType(itemType).Type;
                 if (type != null && typeof(Asset).IsAssignableFrom(type))
-                    item = new BinaryAssetItem(path, ref id, itemType, type, ContentItemSearchFilter.Other);
+                    item = BinaryAssetProxy.ConstructBinaryItem(path, itemType, ref id);
             }
             if (item == null && authoredSource)
                 Editor.LogWarning($"Missing type-specific authored asset proxy for '{path}' ({itemType}).");

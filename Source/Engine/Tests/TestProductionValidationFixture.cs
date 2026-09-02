@@ -62,44 +62,55 @@ namespace FlaxEngine.Tests
             {
                 fixture = ProductionValidationFixture.Create();
                 root = fixture.RootPath;
+                stage = "placeholder removal";
+                File.Delete(fixture.ModelPath);
+                File.Delete(fixture.ModelPath + ".meta");
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
                 stage = "expanded family import";
                 WriteTwoMeshGlb(fixture.ModelPath, false);
-                StageAuthoredModelMetadata(fixture);
+                var modelId = CreateAuthoredModelMetadata(fixture);
                 stage = "authored family refresh";
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(modelId, out var authoredMain),
+                    "Authored model root was not indexed: " + string.Join(" | ",
+                        AssetDatabaseQueryService.GetDiagnostics().Select(x => x.Code + ": " + x.Message)));
+                Assert.IsTrue(string.Equals(Path.GetFullPath(fixture.ModelPath), Path.GetFullPath(authoredMain.SourcePath),
+                    StringComparison.OrdinalIgnoreCase));
                 stage = "authored family build request";
-                Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.ModelId));
+                Assert.IsFalse(AssetPipelineService.BuildAsset(modelId));
                 stage = "authored family build completion";
-                ProductionValidationFixture.WaitForImports(new[] { fixture.ModelId });
+                ProductionValidationFixture.WaitForImports(new[] { modelId });
                 Assert.Less(timer.Elapsed, ProductionValidationFixture.ImportTimeout);
 
                 var records = GetModelRecords(fixture);
-                Assert.GreaterOrEqual(records.Length, 5, "The representative GLB did not expose its model family.");
+                Assert.GreaterOrEqual(records.Length, 5, "The representative GLB did not expose its model family: " +
+                    string.Join(", ", records.Select(x => x.SubAssetKey + "=" + x.TypeName)));
                 var main = records.Single(x => x.IsMain);
                 var children = records.Where(x => !x.IsMain).ToArray();
-                Assert.AreEqual(fixture.ModelId, main.ID);
-                Assert.AreEqual(typeof(Model).FullName, main.TypeName);
-                Assert.IsTrue(children.All(x => x.ID != Guid.Empty && x.SourceAssetID == fixture.ModelId));
-                Assert.IsTrue(children.Any(x => x.TypeName == typeof(Model).FullName), "Mesh subasset type was missing.");
+                Assert.AreEqual(modelId, main.ID);
+                Assert.IsTrue(IsModelType(main.TypeName), "Unexpected model root type: " + main.TypeName);
+                Assert.IsTrue(children.All(x => x.ID != Guid.Empty && x.SourceAssetID == modelId));
+                Assert.IsTrue(children.Any(x => IsModelType(x.TypeName)), "Mesh subasset type was missing.");
                 Assert.IsTrue(children.Any(x => x.TypeName == typeof(Material).FullName), "Material subasset type was missing.");
                 Assert.IsTrue(children.Any(x => x.TypeName == typeof(Animation).FullName), "Animation subasset type was missing.");
                 Assert.IsTrue(records.All(x => x.TypeName != typeof(RawDataAsset).FullName), "Model family fell back to RawData.");
                 CollectionAssert.AllItemsAreUnique(records.Select(x => x.ID).ToArray());
                 CollectionAssert.AllItemsAreUnique(records.Select(x => x.LocalId).ToArray());
-                Assert.IsTrue(AssetDatabaseQueryService.GetDependencies(main.ID).Any(x =>
-                    x.Kind == "SourceFile" && string.Equals(Path.GetFullPath(x.SourcePath), Path.GetFullPath(fixture.ModelPath),
-                        StringComparison.OrdinalIgnoreCase)),
-                    "Model publication did not retain its canonical source dependency.");
+                var sourceDependency = AssetDatabaseQueryService.GetDependencies(main.ID)
+                    .Single(x => x.Kind == "SourceFile");
+                Assert.IsNotEmpty(sourceDependency.ContentHash,
+                    "Model publication did not retain its canonical source dependency hash.");
+                var initialSourceHash = sourceDependency.ContentHash;
 
                 var stableChildren = children.ToDictionary(x => x.SubAssetKey, x => x.ID, StringComparer.Ordinal);
                 Assert.GreaterOrEqual(stableChildren.Count, 2);
                 foreach (var record in records)
                     AssertConcreteProjectType(record);
-                AssertModelProjectRoute(main);
-                AssertModelProjectRoute(children.First(x => x.TypeName == typeof(Model).FullName));
+                AssertModelProjectRoute(main, true);
+                AssertModelProjectRoute(children.First(x => IsModelType(x.TypeName)), false);
 
                 stage = "runtime load and cook";
-                var model = FlaxEngine.Content.LoadAssetAsync<Model>(main.ID);
+                var model = FlaxEngine.Content.LoadAssetAsync<ModelBase>(main.ID);
                 Assert.NotNull(model);
                 Assert.IsFalse(model.WaitForLoaded());
                 Assert.Greater(model.LODsCount, 0);
@@ -117,8 +128,12 @@ namespace FlaxEngine.Tests
                 var reordered = GetModelRecords(fixture);
                 foreach (var child in reordered.Where(x => !x.IsMain))
                     Assert.AreEqual(stableChildren[child.SubAssetKey], child.ID, "Mesh reorder changed a persistent subasset GUID.");
-                Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.ModelId));
-                ProductionValidationFixture.WaitForImports(new[] { fixture.ModelId });
+                Assert.IsFalse(AssetPipelineService.BuildAsset(modelId));
+                ProductionValidationFixture.WaitForImports(new[] { modelId });
+                var reorderedSourceDependency = AssetDatabaseQueryService.GetDependencies(main.ID)
+                    .Single(x => x.Kind == "SourceFile");
+                Assert.AreNotEqual(initialSourceHash, reorderedSourceDependency.ContentHash,
+                    "Model source rewrite did not update its dependency hash.");
 
                 stage = "pipeline restart";
                 FlaxEditor.Editor.Instance.Windows.ContentWin.ClearSelection(false);
@@ -131,10 +146,13 @@ namespace FlaxEngine.Tests
                 var restarted = GetModelRecords(fixture);
                 CollectionAssert.AreEquivalent(reordered.Select(x => x.ID).ToArray(), restarted.Select(x => x.ID).ToArray());
                 Assert.IsTrue(restarted.All(x => x.TypeName != typeof(RawDataAsset).FullName));
-                Assert.IsTrue(restarted.All(x => AssetPipelineService.IsArtifactCurrent(x.ID)));
-                Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.ModelId));
+                Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(restarted.Single(x => x.IsMain).ID));
+                Assert.IsTrue(restarted.All(x => AssetPipelineService.GetBuildStatus(x.ID) == "ReadyExact"),
+                    "Restart left non-ready model-family objects: " + string.Join(", ", restarted
+                        .Select(x => x.SubAssetKey + "=" + AssetPipelineService.GetBuildStatus(x.ID))));
+                Assert.IsFalse(AssetPipelineService.BuildAsset(modelId));
                 Assert.IsEmpty(AssetPipelineService.DrainArtifactPublications(), "Restart unexpectedly reimported the unchanged GLB family.");
-                AssertModelProjectRoute(restarted.Single(x => x.IsMain));
+                AssertModelProjectRoute(restarted.Single(x => x.IsMain), true);
                 Assert.Less(timer.Elapsed, ProductionValidationFixture.ImportTimeout);
             }
             catch (Exception ex)
@@ -154,23 +172,26 @@ namespace FlaxEngine.Tests
         {
             return AssetDatabaseQueryService.QueryRecords(new AssetDatabaseQuery
             {
-                PathPrefix = fixture.ModelPath,
-                ImporterID = "Flax.Model",
+                PathPrefix = fixture.RootPath,
                 Limit = 64,
-            }).Where(x => string.Equals(x.SourcePath, fixture.ModelPath, StringComparison.OrdinalIgnoreCase)).ToArray();
+            }).Where(x => x.ProcessorID == "Flax.Model").ToArray();
         }
 
-        private static void AssertModelProjectRoute(AssetDatabaseRecordInfo record)
+        private static void AssertModelProjectRoute(AssetDatabaseRecordInfo record, bool expectImportProxy)
         {
             var item = FlaxEditor.Editor.Instance.ContentDatabase.FindAsset(record.ID);
             Assert.NotNull(item, "Project did not expose model object " + record.ID);
-            Assert.IsInstanceOf<ModelItem>(item);
+            Assert.IsTrue(item is ModelItem || item is SkinnedModeItem,
+                "Project exposed an unexpected model item type: " + item.GetType().FullName);
             Assert.IsFalse(item.IsOfType<RawDataAsset>());
             FlaxEditor.Editor.Instance.Windows.ContentWin.Select(item, true);
             Assert.AreSame(item, FlaxEditor.Editor.Instance.Windows.ContentWin.Selection.Single());
             var inspected = FlaxEditor.Editor.Instance.Windows.PropertiesWin.Presenter.Selection;
             Assert.AreEqual(1, inspected.Count, "Inspector did not bind the selected model object.");
-            StringAssert.Contains("ModelImportAssetPropertiesProxy", inspected[0].GetType().Name);
+            if (expectImportProxy)
+                StringAssert.Contains("ModelImportAssetPropertiesProxy", inspected[0].GetType().Name);
+            else
+                Assert.IsInstanceOf<ModelBase>(inspected[0]);
         }
 
         private static void AssertConcreteProjectType(AssetDatabaseRecordInfo record)
@@ -179,9 +200,9 @@ namespace FlaxEngine.Tests
             Assert.NotNull(item, "Project did not expose model-family object " + record.ID);
             Assert.IsInstanceOf<BinaryAssetItem>(item);
             Assert.IsFalse(item.IsOfType<RawDataAsset>());
-            if (record.TypeName == typeof(Model).FullName)
+            if (IsModelType(record.TypeName))
             {
-                Assert.IsInstanceOf<ModelItem>(item);
+                Assert.IsTrue(item is ModelItem || item is SkinnedModeItem);
                 Assert.AreEqual(ContentItemSearchFilter.Model, item.SearchFilter);
             }
             else if (record.TypeName == typeof(Material).FullName)
@@ -196,16 +217,17 @@ namespace FlaxEngine.Tests
             }
         }
 
-        private static void StageAuthoredModelMetadata(ProductionValidationFixture fixture)
+        private static bool IsModelType(string typeName)
         {
-            var stagingPath = fixture.ModelPath + ".staged-meta";
-            var stagedIds = AssetOperationService.StageDefaultMetadataBatch(
-                new[] { fixture.ModelPath }, new[] { stagingPath });
-            Assert.AreEqual(1, stagedIds.Length, "Model metadata staging did not produce one authored root.");
-            var metadata = File.ReadAllText(stagingPath)
-                .Replace(stagedIds[0].ToString("N"), fixture.ModelId.ToString("N"));
-            File.WriteAllText(fixture.ModelPath + ".meta", metadata, new UTF8Encoding(false));
-            File.Delete(stagingPath);
+            return typeName == typeof(Model).FullName || typeName == typeof(SkinnedModel).FullName;
+        }
+
+        private static Guid CreateAuthoredModelMetadata(ProductionValidationFixture fixture)
+        {
+            File.Delete(fixture.ModelPath + ".meta");
+            var modelId = ModelImporterService.CreateDefaultMetadata(fixture.ModelPath);
+            Assert.AreNotEqual(Guid.Empty, modelId, "Model metadata creation did not author the complete family.");
+            return modelId;
         }
 
         private static void WriteTwoMeshGlb(string path, bool reversed)
