@@ -185,6 +185,15 @@ namespace
             directory, TEXT("Cannot create the batch asset operation staging directory."));
     }
 
+    bool HashFile(const StringView& path, ContentHash& hash)
+    {
+        BytesContainer bytes;
+        if (File::ReadAllBytes(path, bytes))
+            return true;
+        hash = ContentHash::Compute(bytes.Get(), bytes.Length());
+        return false;
+    }
+
 
     bool PathExists(const StringView& path)
     {
@@ -1624,21 +1633,12 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
             result->CompletedEntries = i + 1;
     }
 
-    {
-        const AssetPipelineDiagnostic failure = diagnostic;
-        return failAndRollback(failure);
-    }
     publicationAttempted = true;
     if (_databaseCallbacks.RefreshCommitted(commits, diagnostic))
     {
         const AssetPipelineDiagnostic failure = diagnostic;
         return failAndRollback(failure);
     }
-    {
-        const AssetPipelineDiagnostic failure = diagnostic;
-        return failAndRollback(failure);
-    }
-
     _stateLocker.Lock();
     for (const AssetOperationCommit& commit : commits)
         _selfWrites.Add(commit.SelfWrites);
@@ -2184,18 +2184,6 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
         if (result)
             result->CompletedEntries = i + 1;
     }
-    {
-        const bool rollbackFailed = RollbackBatch(plan);
-        if (!rollbackFailed)
-        {
-            CleanupEmptyTrashRoot(plan);
-            DeleteTree(transactionDirectory);
-        }
-        else
-            diagnostic.Related.Add(transactionDirectory);
-        return true;
-    }
-
     Array<AssetOperationCommit> commits;
     for (const AssetTrashEntry& entry : plan.Trash.Entries)
     {
@@ -2236,38 +2224,7 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    {
-        const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
-        bool rollbackFailed = RollbackBatch(plan);
-        if (result && !rollbackFailed)
-            result->RolledBackEntries = result->CompletedEntries;
-        if (!rollbackFailed)
-        {
-            Array<AssetOperationCommit> rollbackCommits;
-            for (const AssetTrashEntry& entry : plan.Trash.Entries)
-            {
-                AssetOperationCommit rollbackCommit;
-                rollbackCommit.TransactionId = transactionId;
-                rollbackCommit.Kind = AssetOperationKind::Restore;
-                rollbackCommit.AssetGuid = entry.AssetGuid;
-                rollbackCommit.SourcePath = entry.TrashPath;
-                rollbackCommit.DestinationPath = entry.OriginalPath;
-                rollbackCommits.Add(MoveTemp(rollbackCommit));
-            }
-            AssetPipelineDiagnostic rollbackDiagnostic;
-            rollbackFailed = _databaseCallbacks.RefreshCommitted(rollbackCommits, rollbackDiagnostic);
-        }
-        if (!rollbackFailed)
-        {
-            CleanupEmptyTrashRoot(plan);
-            DeleteTree(transactionDirectory);
-        }
-        diagnostic = commitDiagnostic;
-        if (rollbackFailed)
-            diagnostic.Related.Add(transactionDirectory);
-        return true;
-    }
-    // A committed plan makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
+    // The trash tree remains available for explicit restore/discard; only operation scratch is transient.
     DeleteTree(transactionDirectory);
     trash = MoveTemp(prepared);
     if (result)
@@ -2410,13 +2367,6 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
             return true;
         }
     }
-    {
-        if (!RollbackBatch(plan))
-            DeleteTree(transactionDirectory);
-        else
-            diagnostic.Related.Add(transactionDirectory);
-        return true;
-    }
     Array<AssetOperationCommit> commits;
     for (const AssetTrashEntry& entry : plan.Trash.Entries)
     {
@@ -2458,33 +2408,7 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    {
-        const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
-        bool rollbackFailed = RollbackBatch(plan);
-        if (!rollbackFailed)
-        {
-            Array<AssetOperationCommit> rollbackCommits;
-            for (const AssetTrashEntry& entry : plan.Trash.Entries)
-            {
-                AssetOperationCommit rollbackCommit;
-                rollbackCommit.TransactionId = plan.TransactionId;
-                rollbackCommit.Kind = AssetOperationKind::Trash;
-                rollbackCommit.AssetGuid = entry.AssetGuid;
-                rollbackCommit.SourcePath = entry.OriginalPath;
-                rollbackCommit.DestinationPath = entry.TrashPath;
-                rollbackCommits.Add(MoveTemp(rollbackCommit));
-            }
-            AssetPipelineDiagnostic rollbackDiagnostic;
-            rollbackFailed = _databaseCallbacks.RefreshCommitted(rollbackCommits, rollbackDiagnostic);
-        }
-        if (!rollbackFailed)
-            DeleteTree(transactionDirectory);
-        diagnostic = commitDiagnostic;
-        if (rollbackFailed)
-            diagnostic.Related.Add(transactionDirectory);
-        return true;
-    }
-    // A committed plan makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
+    // Restore is committed once the filesystem and database publication both succeed.
     DeleteTree(transactionDirectory);
     CleanupEmptyTrashRoot(plan);
     _stateLocker.Lock();
@@ -2495,7 +2419,8 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
     return false;
 }
 
-bool AssetOperations::DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic)
+bool AssetOperations::DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic,
+    AssetTrashDiscardFailurePoint failurePoint)
 {
     if (!trash.TransactionId.IsValid() || trash.Entries.IsEmpty() || trash.Entries.Count() > MaximumTrashEntries)
         return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, StringView::Empty,
@@ -2590,28 +2515,21 @@ bool AssetOperations::DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDi
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
+    const bool cleanupFailed = failurePoint == AssetTrashDiscardFailurePoint::BeforeFinalCleanup ||
+        DeleteTree(transactionDirectory);
+    if (cleanupFailed)
     {
-        const AssetPipelineDiagnostic appliedDiagnostic = diagnostic;
         const bool rollbackFailed = RollbackBatch(plan);
         if (!rollbackFailed)
             DeleteTree(transactionDirectory);
-        diagnostic = appliedDiagnostic;
+        Fail(diagnostic, rollbackFailed ? AssetPipelineDiagnosticCode::MigrationFailed :
+            AssetPipelineDiagnosticCode::LibraryCreationFailed, trashRoot,
+            rollbackFailed ? TEXT("Content trash cleanup failed and its staged data could not be restored.") :
+                TEXT("Content trash cleanup failed and was rolled back."));
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    {
-        const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
-        const bool rollbackFailed = RollbackBatch(plan);
-        if (!rollbackFailed)
-            DeleteTree(transactionDirectory);
-        diagnostic = commitDiagnostic;
-        if (rollbackFailed)
-            diagnostic.Related.Add(transactionDirectory);
-        return true;
-    }
-    // A committed discard owns the staged directory. Startup recovery retries cleanup if this delete is interrupted.
-    DeleteTree(transactionDirectory);
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }

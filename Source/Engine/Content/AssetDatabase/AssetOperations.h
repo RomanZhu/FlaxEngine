@@ -66,6 +66,12 @@ enum class AssetDefaultMetadataBatchFailurePoint : byte
     AfterFirstMetadata,
 };
 
+enum class AssetTrashDiscardFailurePoint : byte
+{
+    None,
+    BeforeFinalCleanup,
+};
+
 /// <summary>Recoverable trash location returned by delete/trash operations.</summary>
 API_STRUCT() struct FLAXENGINE_API AssetTrashRecord
 {
@@ -272,7 +278,8 @@ public:
         AssetPipelineDiagnostic& diagnostic, const AssetOperationBatchOptions* options = nullptr,
         AssetOperationBatchResult* result = nullptr);
     bool RestoreEntries(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic);
-    bool DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic);
+    bool DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDiagnostic& diagnostic,
+        AssetTrashDiscardFailurePoint failurePoint = AssetTrashDiscardFailurePoint::None);
 
     bool IsAssetEditing() const;
     void StartAssetEditing();

@@ -1309,8 +1309,17 @@ TEST_CASE("Asset operations batch trash restores folders and private scene fragm
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::PrepareInvalidated);
     CHECK(FileSystem::DirectoryExists(nativeTrashRoot));
     REQUIRE_FALSE(FileSystem::DeleteFile(note));
+    CHECK(operations.DiscardTrash(trash, diagnostic, AssetTrashDiscardFailurePoint::BeforeFinalCleanup));
+    CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::LibraryCreationFailed);
+    CHECK(FileSystem::DirectoryExists(nativeTrashRoot));
+    CHECK(FileSystem::DirectoryExists(trash.Entries[0].TrashPath));
+    CHECK(FileSystem::FileExists(trash.Entries[1].TrashPath));
     REQUIRE_FALSE(operations.DiscardTrash(trash, diagnostic));
     CHECK_FALSE(FileSystem::DirectoryExists(nativeTrashRoot));
+    Array<String> operationScratch;
+    const String operationScratchRoot = library / TEXT("Temp/AssetOperations");
+    REQUIRE_FALSE(FileSystem::GetChildDirectories(operationScratch, operationScratchRoot));
+    CHECK(operationScratch.IsEmpty());
 }
 
 TEST_CASE("Asset operations importer settings are revision-bound and atomic")
