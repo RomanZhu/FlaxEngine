@@ -1245,6 +1245,12 @@ bool CookAssetsStep::Perform(CookingData& data)
         data.Error(String::Format(TEXT("Failed to stage cooked content. {0}"), publicationDiagnostic.Message));
         return true;
     }
+    if (!FileSystem::DirectoryExists(stagingDataOutputPath / TEXT("Content")))
+    {
+        data.Error(TEXT("Failed to create the staged cooked content directory."));
+        FileSystem::DeleteDirectory(stagingDataOutputPath, true);
+        return true;
+    }
     data.DataOutputPath = stagingDataOutputPath;
     bool retainStagingForFinalization = false;
     SCOPE_EXIT

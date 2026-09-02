@@ -18,8 +18,6 @@ namespace
         if (CookedContentGeneration::CreateStaging(contentRoot, Guid::New(), staging, diagnostic))
             return true;
         const String content = staging / TEXT("Content");
-        if (FileSystem::CreateDirectory(content))
-            return true;
         const byte head[] = { value, 2, 3, 4 };
         const byte package[] = { value, 6, 7, 8, 9 };
         if (File::WriteAllBytes(content / TEXT("head"), head, ARRAY_COUNT(head)) ||
@@ -55,6 +53,17 @@ namespace
         Array<String> children;
         return !FileSystem::GetChildDirectories(children, CookedContentGeneration::GetGenerationsPath(contentRoot)) && children.IsEmpty();
     }
+}
+
+TEST_CASE("Cooked content staging creates the package Content parent")
+{
+    const String root = Globals::TemporaryFolder / (TEXT("CookedStageParent-") + Guid::New().ToString(Guid::FormatType::N));
+    SCOPE_EXIT { FileSystem::DeleteDirectory(root, true); };
+    REQUIRE_FALSE(FileSystem::CreateDirectory(root));
+    String staging;
+    AssetPipelineDiagnostic diagnostic;
+    REQUIRE_FALSE(CookedContentGeneration::CreateStaging(root, Guid::New(), staging, diagnostic));
+    CHECK(FileSystem::DirectoryExists(staging / TEXT("Content")));
 }
 
 TEST_CASE("Cooked streaming freshness copies only missing or older output")

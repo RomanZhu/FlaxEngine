@@ -204,7 +204,8 @@ bool CookedContentGeneration::CreateStaging(const StringView& contentRoot, const
     const String generationsPath = GetGenerationsPath(contentRoot);
     stagingDataRoot = generationsPath / (TEXT(".staging-") + jobID.ToString(Guid::FormatType::N));
     if (FileSystem::DirectoryExists(stagingDataRoot) || DurableAssetFileSystem::EnsureDirectory(generationsPath) ||
-        DurableAssetFileSystem::EnsureDirectory(stagingDataRoot))
+        DurableAssetFileSystem::EnsureDirectory(stagingDataRoot) ||
+        DurableAssetFileSystem::EnsureDirectory(stagingDataRoot / TEXT("Content")))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, stagingDataRoot, TEXT("Cannot create an isolated cooked-content staging directory."));
     return false;
 }

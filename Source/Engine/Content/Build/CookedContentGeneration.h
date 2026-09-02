@@ -38,7 +38,7 @@ public:
     static String GetGenerationsPath(const StringView& contentRoot);
     static String GetCurrentGenerationPath(const StringView& contentRoot);
 
-    /// <summary>Creates an isolated data-output root beneath the generation store. Returns true on failure.</summary>
+    /// <summary>Creates an isolated data-output root and its Content directory beneath the generation store. Returns true on failure.</summary>
     static bool CreateStaging(const StringView& contentRoot, const Guid& jobID, String& stagingDataRoot,
         AssetPipelineDiagnostic& diagnostic);
 
