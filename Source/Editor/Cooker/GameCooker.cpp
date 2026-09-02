@@ -649,13 +649,17 @@ void GameCooker::GetCurrentPlatform(PlatformType& platform, BuildPlatform& build
 }
 
 #if FLAX_TESTS
-bool GameCooker::ValidateAssetCookForTesting(const Guid& objectID)
+bool GameCooker::ValidateAssetCookForTesting(const Guid& objectID, double timeoutInMilliseconds)
 {
-    Asset* asset = Content::LoadAsset<Asset>(objectID, 300000.0);
+    LOG(Info, "Cook validation begin: object={0}, loadBudgetMs={1}", objectID, timeoutInMilliseconds);
+    if (timeoutInMilliseconds <= 0.0)
+        return true;
+    Asset* asset = Content::LoadAsset<Asset>(objectID, timeoutInMilliseconds);
     BinaryAsset* binaryAsset = dynamic_cast<BinaryAsset*>(asset);
     JsonAssetBase* jsonAsset = dynamic_cast<JsonAssetBase*>(asset);
     if (!asset || (!binaryAsset && !jsonAsset) || (binaryAsset && !binaryAsset->Storage))
         return true;
+    LOG(Info, "Cook validation dispatch: object={0}, type={1}", objectID, asset->GetTypeName());
 
     AssetInitData initData;
     if (binaryAsset)
@@ -688,13 +692,14 @@ bool GameCooker::ValidateAssetCookForTesting(const Guid& objectID)
                          !hasPayload;
     initData.Header.DeleteChunks();
     data->DeleteObject();
+    LOG(Info, "Cook validation end: object={0}, type={1}, failed={2}", objectID, asset->GetTypeName(), failed || invalid);
     return failed || invalid;
 }
 
 bool GameCooker::ValidateBinaryAssetCookForTesting(const Guid& objectID)
 {
-    Asset* asset = Content::LoadAsset<Asset>(objectID, 300000.0);
-    return !dynamic_cast<BinaryAsset*>(asset) || ValidateAssetCookForTesting(objectID);
+    Asset* asset = Content::LoadAsset<Asset>(objectID, 10000.0);
+    return !dynamic_cast<BinaryAsset*>(asset) || ValidateAssetCookForTesting(objectID, 10000.0);
 }
 #endif
 

@@ -320,7 +320,8 @@ namespace FlaxEditor.Content.Thumbnails
         /// <inheritdoc />
         public override void OnInit()
         {
-            if (Editor.IsHeadlessMode || (GPUDevice.Instance != null && GPUDevice.Instance.RendererType == RendererType.Null))
+            var gpuDevice = GPUDevice.Instance;
+            if (Editor.IsHeadlessMode || gpuDevice == null || gpuDevice.RendererType == RendererType.Null)
                 return;
 
             // Create cache folder
@@ -359,7 +360,7 @@ namespace FlaxEditor.Content.Thumbnails
             }
 
             // Create render task but disabled for now
-            _output = GPUDevice.Instance.CreateTexture("ThumbnailsOutput");
+            _output = gpuDevice.CreateTexture("ThumbnailsOutput");
             var desc = GPUTextureDescription.New2D(PreviewsCache.AssetIconSize, PreviewsCache.AssetIconSize, PreviewsCache.AssetIconsAtlasFormat);
             _output.Init(ref desc);
             _task = Object.New<RenderTask>();
@@ -494,11 +495,17 @@ namespace FlaxEditor.Content.Thumbnails
             var index = _requests.IndexOf(request);
             if (index == -1)
                 return;
-            request.Dispose();
-            _requests.RemoveAt(index);
-            AdjustCursorAfterRemove(ref _prepareCursor, index);
-            AdjustCursorAfterRemove(ref _renderCursor, index);
-            request.Item.RemoveReference(this);
+            try
+            {
+                request.Dispose();
+            }
+            finally
+            {
+                _requests.RemoveAt(index);
+                AdjustCursorAfterRemove(ref _prepareCursor, index);
+                AdjustCursorAfterRemove(ref _renderCursor, index);
+                request.Item.RemoveReference(this);
+            }
         }
 
         private void ClearRequests()
@@ -596,14 +603,24 @@ namespace FlaxEditor.Content.Thumbnails
 
         private bool HasAllAtlasesLoaded()
         {
-            for (int i = 0; i < _cache.Count; i++)
+            bool allLoaded = true;
+            for (int i = _cache.Count - 1; i >= 0; i--)
             {
-                if (!_cache[i].IsReady)
+                var atlas = _cache[i];
+                if (atlas.LastLoadFailed)
                 {
-                    return false;
+                    Editor.LogWarning($"Discarding failed thumbnail cache atlas '{atlas.Path}'.");
+                    _cache.RemoveAt(i);
+                    continue;
                 }
+                allLoaded &= atlas.IsReady;
             }
-            return true;
+            if (_cache.Count == 0)
+            {
+                var atlas = CreateAtlas();
+                return atlas != null && atlas.IsReady;
+            }
+            return allLoaded;
         }
 
         private PreviewsCache GetValidAtlas()

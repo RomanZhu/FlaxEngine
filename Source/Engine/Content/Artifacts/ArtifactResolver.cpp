@@ -217,7 +217,7 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
         }
         if (!IsBuildableStatus(record.Status))
         {
-            if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && inspection.IsCompatible)
+            if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && compatibilityMatches)
             {
                 result = inspection.Artifact;
                 result.IsExact = false;
@@ -259,7 +259,7 @@ bool ArtifactResolver::Resolve(const ArtifactRequest& request, ResolvedArtifact&
                 : AssetPipelineDiagnosticCode::ArtifactRebuildRequired;
             return ResolveFail(diagnostic, code, request, record.SourcePath.Get(), TEXT("No exact artifact is available and NoBuild policy forbids scheduling work."));
         }
-        if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && inspection.IsCompatible)
+        if (request.Policy == ArtifactResolvePolicy::Interactive && inspection.HasOutput && compatibilityMatches)
         {
             result = inspection.Artifact;
             result.IsExact = false;

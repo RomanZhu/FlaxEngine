@@ -1939,9 +1939,18 @@ namespace FlaxEngine.Tests
                 {
                     Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
                     WaitForCurrentArtifact(id);
-                    Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(id),
-                        "Authored asset failed its registered cooker path: " + id);
                 }
+                lifecycleStage = "cook emitter";
+                var cookValidationTimer = System.Diagnostics.Stopwatch.StartNew();
+                var cookValidationDeadline = TimeSpan.FromSeconds(30);
+                CurrentFormatCookerValidation.AssertCooks(emitterId, "particle emitter", cookValidationTimer,
+                    cookValidationDeadline);
+                lifecycleStage = "cook system";
+                CurrentFormatCookerValidation.AssertCooks(systemId, "particle system", cookValidationTimer,
+                    cookValidationDeadline);
+                lifecycleStage = "cook collision";
+                CurrentFormatCookerValidation.AssertCooks(collisionId, "collision data", cookValidationTimer,
+                    cookValidationDeadline);
 
                 lifecycleStage = "collision dependency invalidation";
                 File.AppendAllText(modelPath, " ");
@@ -2033,12 +2042,14 @@ namespace FlaxEngine.Tests
                     WaitForCurrentArtifact(id);
                 }
 
+                var cookValidationTimer = System.Diagnostics.Stopwatch.StartNew();
+                var cookValidationDeadline = TimeSpan.FromSeconds(20);
                 stage = "scene cooker";
-                Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(fixture.SceneId),
-                    "The current-format scene failed its registered cooker path.");
+                CurrentFormatCookerValidation.AssertCooks(fixture.SceneId, "current-format scene",
+                    cookValidationTimer, cookValidationDeadline);
                 stage = "prefab cooker";
-                Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(fixture.PrefabId),
-                    "The current-format prefab failed its registered cooker path.");
+                CurrentFormatCookerValidation.AssertCooks(fixture.PrefabId, "current-format prefab",
+                    cookValidationTimer, cookValidationDeadline);
 
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(fixture.SceneId, out var sceneRecord));
                 Assert.AreEqual(typeof(SceneAsset).FullName, sceneRecord.TypeName);

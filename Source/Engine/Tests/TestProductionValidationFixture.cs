@@ -116,14 +116,16 @@ namespace FlaxEngine.Tests
                 Assert.Greater(model.LODsCount, 0);
                 model.Reload();
                 Assert.IsFalse(model.WaitForLoaded());
-                Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(main.ID),
-                    "The exact model artifact failed its registered cooker path.");
+                var cookValidationTimer = System.Diagnostics.Stopwatch.StartNew();
+                var cookValidationDeadline = TimeSpan.FromSeconds(30);
+                CurrentFormatCookerValidation.AssertCooks(main.ID, "model root", cookValidationTimer,
+                    cookValidationDeadline);
                 var meshSubAsset = children.First(x => IsModelType(x.TypeName));
-                Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(meshSubAsset.ID),
-                    "The exact model subasset failed its registered cooker path.");
+                CurrentFormatCookerValidation.AssertCooks(meshSubAsset.ID, "model mesh subasset",
+                    cookValidationTimer, cookValidationDeadline);
                 var animationSubAsset = children.First(x => x.TypeName == typeof(Animation).FullName);
-                Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(animationSubAsset.ID),
-                    "The exact animation subasset failed its registered cooker path.");
+                CurrentFormatCookerValidation.AssertCooks(animationSubAsset.ID, "model animation subasset",
+                    cookValidationTimer, cookValidationDeadline);
 
                 stage = "source reorder invalidation";
                 WriteTwoMeshGlb(fixture.ModelPath, true);

@@ -205,6 +205,7 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
     CHECK(diagnostic.Code == AssetPipelineDiagnosticCode::ArtifactRebuildRequired);
     CHECK(builds.load() == 0);
 
+    request.RequiredCompatibility.Clear();
     request.Policy = ArtifactResolvePolicy::Interactive;
     REQUIRE_FALSE(resolver.Resolve(request, artifact, diagnostic));
     CHECK(artifact.IsLastGood);
@@ -212,6 +213,7 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
     REQUIRE(WaitForCount(publications, 1));
     CHECK(builds.load() == 1);
 
+    request.RequiredCompatibility = "runtime-v1";
     request.Policy = ArtifactResolvePolicy::Exact;
     REQUIRE_FALSE(resolver.Resolve(request, artifact, diagnostic));
     CHECK(artifact.IsExact);
@@ -246,7 +248,7 @@ TEST_CASE("ArtifactResolver enforces exact interactive and no-build policy witho
     input.Status = AssetRecordStatus::MissingSource;
     records[0] = input;
     REQUIRE_FALSE(database.PublishFullSnapshot(records, diagnostic));
-    request.RequiredCompatibility = "runtime-v1";
+    request.RequiredCompatibility.Clear();
     request.Policy = ArtifactResolvePolicy::Interactive;
     REQUIRE_FALSE(resolver.Resolve(request, artifact, diagnostic));
     CHECK(artifact.IsLastGood);

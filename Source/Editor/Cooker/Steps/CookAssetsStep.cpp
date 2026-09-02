@@ -943,6 +943,24 @@ bool ProcessTextureBase(CookAssetsStep::AssetCookData& data)
     return false;
 }
 
+CookAssetsStep::ProcessAssetFunc ResolveAssetProcessor(const StringView& typeName)
+{
+    CookAssetsStep::ProcessAssetFunc processor = nullptr;
+    if (CookAssetsStep::AssetProcessors.TryGet(typeName, processor))
+        return processor ? processor : CookAssetsStep::ProcessDefaultAsset;
+#if FLAX_TESTS
+    if (typeName == Material::TypeName)
+        return ProcessMaterial;
+    if (typeName == Shader::TypeName)
+        return ProcessShader;
+    if (typeName == ParticleEmitter::TypeName)
+        return ProcessParticleEmitter;
+    if (typeName == Texture::TypeName || typeName == CubeTexture::TypeName || typeName == SpriteAtlas::TypeName)
+        return ProcessTextureBase;
+#endif
+    return CookAssetsStep::ProcessDefaultAsset;
+}
+
 CookAssetsStep::CookAssetsStep()
     : AssetsRegistry(1024)
     , AssetPathsMapping(256)
@@ -958,11 +976,7 @@ CookAssetsStep::CookAssetsStep()
 #if FLAX_TESTS
 bool CookAssetsStep::ProcessAssetForTesting(AssetCookData& options)
 {
-    CookAssetsStep step;
-    ProcessAssetFunc processor = nullptr;
-    if (!AssetProcessors.TryGet(options.Asset->GetTypeName(), processor))
-        processor = ProcessDefaultAsset;
-    return processor(options);
+    return ResolveAssetProcessor(options.Asset->GetTypeName())(options);
 }
 #endif
 
@@ -994,8 +1008,7 @@ bool CookAssetsStep::Process(CookingData& data, CacheData& cache, BinaryAsset* a
     auto chunksLock = asset->Storage->LockSafe();
 
     // Process asset
-    ProcessAssetFunc assetProcessor = nullptr;
-    AssetProcessors.TryGet(asset->GetTypeName(), assetProcessor);
+    ProcessAssetFunc assetProcessor = ResolveAssetProcessor(asset->GetTypeName());
     AssetCookData options
     {
         data,
@@ -1004,8 +1017,6 @@ bool CookAssetsStep::Process(CookingData& data, CacheData& cache, BinaryAsset* a
         asset,
         fileDependencies
     };
-    if (!assetProcessor)
-        assetProcessor = ProcessDefaultAsset;
     if (assetProcessor(options))
         return true;
 
@@ -1038,8 +1049,7 @@ bool CookAssetsStep::Process(CookingData& data, CacheData& cache, JsonAssetBase*
     initData.Header.TypeName = asset->GetTypeName();
 
     // Process asset
-    ProcessAssetFunc assetProcessor = nullptr;
-    AssetProcessors.TryGet(asset->GetTypeName(), assetProcessor);
+    ProcessAssetFunc assetProcessor = ResolveAssetProcessor(asset->GetTypeName());
     AssetCookData options
     {
         data,
@@ -1048,8 +1058,6 @@ bool CookAssetsStep::Process(CookingData& data, CacheData& cache, JsonAssetBase*
         asset,
         fileDependencies
     };
-    if (!assetProcessor)
-        assetProcessor = ProcessDefaultAsset;
     if (assetProcessor(options))
         return true;
 

@@ -98,7 +98,7 @@ public:
 
 #if FLAX_TESTS
     /// <summary>Runs the registered current-platform cooker processor against one exact asset.</summary>
-    API_FUNCTION() static bool ValidateAssetCookForTesting(const Guid& objectID);
+    API_FUNCTION() static bool ValidateAssetCookForTesting(const Guid& objectID, double timeoutInMilliseconds = 10000.0);
 
     /// <summary>Compatibility entry point that rejects non-binary assets before registered cooker validation.</summary>
     API_FUNCTION() static bool ValidateBinaryAssetCookForTesting(const Guid& objectID);

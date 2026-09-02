@@ -2221,6 +2221,14 @@ Guid AssetDatabaseQueryService::GetBackingAssetID(const Guid& objectID)
     if (!objectID.IsValid() || EnsureDatabaseLoaded())
         return Guid::Empty;
     AssetRecord record;
+    return AssetDatabase::Get().TryGetRecord(objectID, record) && IsFacadeRecord(record) ? record.ID : Guid::Empty;
+}
+
+Guid AssetDatabaseQueryService::GetBuildOwnerID(const Guid& objectID)
+{
+    if (!objectID.IsValid() || EnsureDatabaseLoaded())
+        return Guid::Empty;
+    AssetRecord record;
     return AssetDatabase::Get().TryGetRecord(objectID, record) && IsFacadeRecord(record) ? record.SourceAssetID : Guid::Empty;
 }
 

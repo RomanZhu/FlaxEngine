@@ -11,6 +11,8 @@ namespace FlaxEditor.Content.Thumbnails
     [HideInEditor]
     public class ThumbnailRequest
     {
+        private static readonly TimeSpan PublishedPreviewGrace = TimeSpan.FromSeconds(2);
+
         /// <summary>
         /// The request state types.
         /// </summary>
@@ -78,6 +80,7 @@ namespace FlaxEditor.Content.Thumbnails
         public Guid CacheVersion;
 
         private DateTime _nextThumbnailLoadAttemptUtc;
+        private DateTime _publishedPreviewDeadlineUtc;
         private Guid _buildAssetId;
         private bool _proxyPrepared;
 
@@ -119,12 +122,21 @@ namespace FlaxEditor.Content.Thumbnails
                 else
                 {
                     var status = AssetPipelineService.GetBuildStatus(_buildAssetId);
-                    if (status == "Failed" || status == "Cancelled" || status == "NotBuilt")
+                    var terminalFailure = status == "Failed" || status == "Cancelled" || status == "NotBuilt";
+                    if (status == "ReadyExact")
+                    {
+                        if (_publishedPreviewDeadlineUtc == default)
+                            _publishedPreviewDeadlineUtc = DateTime.UtcNow + PublishedPreviewGrace;
+                        terminalFailure = DateTime.UtcNow >= _publishedPreviewDeadlineUtc;
+                    }
+                    if (terminalFailure)
                     {
                         var diagnostic = AssetPipelineService.GetBuildDiagnostic(_buildAssetId);
                         FailureMessage = !string.IsNullOrEmpty(diagnostic.Message)
                             ? diagnostic.Message
-                            : $"Runtime artifact build ended with status {status}.";
+                            : status == "ReadyExact"
+                                ? "Runtime artifact is current but its preview could not be loaded."
+                                : $"Runtime artifact build ended with status {status}.";
                         State = States.Failed;
                     }
                     else
@@ -168,7 +180,7 @@ namespace FlaxEditor.Content.Thumbnails
 
         private void BeginArtifactBuild()
         {
-            _buildAssetId = AssetDatabaseQueryService.GetBackingAssetID(Item.ID);
+            _buildAssetId = AssetDatabaseQueryService.GetBuildOwnerID(Item.ID);
             if (_buildAssetId == Guid.Empty || AssetPipelineService.BuildAssetForeground(_buildAssetId))
             {
                 var diagnostic = AssetPipelineService.GetBuildDiagnostic(_buildAssetId);
@@ -203,15 +215,17 @@ namespace FlaxEditor.Content.Thumbnails
             if (State == States.Disposed)
                 throw new InvalidOperationException();
 
-            if (_proxyPrepared)
+            try
             {
-                // Cleanup
-                Proxy.OnThumbnailDrawCleanup(this);
-                Asset = null;
+                if (_proxyPrepared)
+                    Proxy.OnThumbnailDrawCleanup(this);
             }
-
-            Tag = null;
-            State = States.Disposed;
+            finally
+            {
+                Asset = null;
+                Tag = null;
+                State = States.Disposed;
+            }
         }
     }
 }
