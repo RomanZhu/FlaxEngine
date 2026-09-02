@@ -50,9 +50,9 @@ namespace FlaxEngine.Tests
         [Test]
         public void TestProjectCommandStartupWaitIsBounded()
         {
-            Assert.IsFalse(CliRequestService.IsCommandStartupReady(true, true));
-            Assert.IsFalse(CliRequestService.IsCommandStartupReady(false, false));
-            Assert.IsTrue(CliRequestService.IsCommandStartupReady(true, false));
+            Assert.IsFalse(CliRequestService.IsCommandStartupReady(true, false));
+            Assert.IsFalse(CliRequestService.IsCommandStartupReady(false, true));
+            Assert.IsTrue(CliRequestService.IsCommandStartupReady(true, true));
 
             var deadline = DateTime.UtcNow.AddSeconds(-1);
             Assert.IsFalse(CliRequestService.EvaluateCommandStartup(false, DateTime.UtcNow, deadline, out var timedOut));

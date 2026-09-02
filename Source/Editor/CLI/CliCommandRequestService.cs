@@ -892,7 +892,7 @@ namespace FlaxEditor
                 throw new InvalidOperationException("The command action is missing.");
 
             TryWriteEvent(new { type = "started", requestId = _request.RequestId, operation = _request.Operation, action = options.Action, name = options.Name });
-            if (!IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsCompiling))
+            if (!IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsReady))
             {
                 DeferCommandUntilScriptsLoad(options);
                 return;
@@ -908,7 +908,7 @@ namespace FlaxEditor
             update = () =>
             {
                 var ready = EvaluateCommandStartup(
-                    IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsCompiling),
+                    IsCommandStartupReady(Editor.Instance.StateMachine.CurrentState.IsEditorReady, ScriptsBuilder.IsReady),
                     DateTime.UtcNow, deadline, out var timedOut);
                 if (ready)
                 {
@@ -932,9 +932,9 @@ namespace FlaxEditor
             return scriptsLoaded;
         }
 
-        internal static bool IsCommandStartupReady(bool editorReady, bool scriptsCompiling)
+        internal static bool IsCommandStartupReady(bool editorReady, bool scriptsReady)
         {
-            return editorReady && !scriptsCompiling;
+            return editorReady && scriptsReady;
         }
 
         private void ExecuteCommand(CliCommandOptions options)
