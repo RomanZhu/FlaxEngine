@@ -2136,6 +2136,22 @@ bool PublishSavedSceneSource(Scene* scene, const StringView& path)
     }
     return false;
 }
+
+bool ReloadSavedSceneAsset(const Guid& sceneId, const StringView& path)
+{
+    Asset* asset = Content::GetRuntimeObject(sceneId);
+    if (!asset)
+        asset = Content::GetAsset(path);
+    if (!asset)
+        return false;
+    asset->Reload();
+    if (asset->WaitForLoaded())
+    {
+        LOG(Error, "Cannot reload published scene artifact '{0}'.", path);
+        return true;
+    }
+    return false;
+}
 #endif
 
 bool LevelImpl::saveScene(Scene* scene, const String& path)
@@ -2196,12 +2212,11 @@ bool LevelImpl::saveScene(Scene* scene, const String& path)
     LOG(Info, "Scene saved! Time {0}ms", stopwatch.GetMilliseconds());
 
 #if USE_EDITOR
-    // Reload asset at the target location if is loaded
-    Asset* asset = Content::GetRuntimeObject(sceneId);
-    if (!asset)
-        asset = Content::GetAsset(path);
-    if (asset)
-        asset->Reload();
+    if (ReloadSavedSceneAsset(sceneId, path))
+    {
+        CallSceneEvent(SceneEventType::OnSceneSaveError, scene, sceneId);
+        return true;
+    }
 #endif
 
     // Fire event
@@ -2269,14 +2284,11 @@ bool LevelImpl::saveScenes(const Array<Scene*>& scenes)
     LOG(Info, "Saved {0} scenes atomically. Time {1}ms", scenes.Count(), stopwatch.GetMilliseconds());
     for (Scene* scene : scenes)
     {
-        const Guid sceneId = scene->GetID();
-        Asset* asset = Content::GetRuntimeObject(sceneId);
-        if (!asset)
-            asset = Content::GetAsset(scene->GetPath());
-        if (asset)
-            asset->Reload();
-        CallSceneEvent(SceneEventType::OnSceneSaved, scene, sceneId);
+        if (ReloadSavedSceneAsset(scene->GetID(), scene->GetPath()))
+            return failBatch(TEXT("A published scene artifact could not be reloaded."));
     }
+    for (Scene* scene : scenes)
+        CallSceneEvent(SceneEventType::OnSceneSaved, scene, scene->GetID());
     return false;
 #else
     LOG(Error, "Cannot save scene batches to cooked content.");
