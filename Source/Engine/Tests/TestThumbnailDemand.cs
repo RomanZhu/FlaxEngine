@@ -123,6 +123,15 @@ namespace FlaxEngine.Tests
             Assert.IsFalse(ThumbnailRequest.IsArtifactVersionSuperseded(requested, Guid.Empty));
         }
 
+        [Test]
+        public void LoadedMaterialWaitsForRenderingShaderReadiness()
+        {
+            Assert.IsFalse(ThumbnailsModule.HasMaterialRenderingQuality(false, false));
+            Assert.IsFalse(ThumbnailsModule.HasMaterialRenderingQuality(false, true));
+            Assert.IsFalse(ThumbnailsModule.HasMaterialRenderingQuality(true, false), "A loaded material with a compiling shader must not be drawn.");
+            Assert.IsTrue(ThumbnailsModule.HasMaterialRenderingQuality(true, true));
+        }
+
         public static int RunOrdinaryOwnershipDoesNotCreateThumbnailDemand()
         {
             var tests = new TestThumbnailDemand();
@@ -130,6 +139,7 @@ namespace FlaxEngine.Tests
             tests.LastGoodThumbnailSurvivesForcedFailureUntilExactReplacement();
             tests.ForcedUndoReplacementCannotPublishLaterPixels();
             tests.ExactArtifactVersionIsImmutableAndRejectsSupersession();
+            tests.LoadedMaterialWaitsForRenderingShaderReadiness();
             return 0;
         }
     }

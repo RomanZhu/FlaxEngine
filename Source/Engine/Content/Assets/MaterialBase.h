@@ -47,6 +47,14 @@ public:
     }
 
     /// <summary>
+    /// Gets whether the material and its rendering shader are ready to draw.
+    /// </summary>
+    API_PROPERTY() FORCE_INLINE bool GetIsReadyForRendering() const
+    {
+        return IsReady();
+    }
+
+    /// <summary>
     /// Gets the material parameter.
     /// </summary>
     API_FUNCTION() FORCE_INLINE MaterialParameter* GetParameter(const StringView& name)

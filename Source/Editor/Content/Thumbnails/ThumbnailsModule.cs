@@ -311,7 +311,7 @@ namespace FlaxEditor.Content.Thumbnails
 
         private static bool HasMinimumQualityInternal(MaterialBase asset)
         {
-            if (!asset.IsLoaded)
+            if (!HasMaterialRenderingQuality(asset.IsLoaded, asset.IsReadyForRendering))
                 return false;
             var parameters = asset.Parameters;
             foreach (var parameter in parameters)
@@ -320,6 +320,11 @@ namespace FlaxEditor.Content.Thumbnails
                     return false;
             }
             return true;
+        }
+
+        internal static bool HasMaterialRenderingQuality(bool isLoaded, bool isReadyForRendering)
+        {
+            return isLoaded && isReadyForRendering;
         }
 
         private static bool HasMinimumQualityInternal(Actor actor)
