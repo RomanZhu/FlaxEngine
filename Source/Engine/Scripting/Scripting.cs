@@ -78,6 +78,15 @@ namespace FlaxEngine
     /// </summary>
     public static partial class Scripting
     {
+#if FLAX_EDITOR
+        /// <summary>
+        /// Gets whether a collectible game-scripts AssemblyLoadContext failed to unload.
+        /// The Editor must be restarted before entering Play mode again because stale
+        /// managed thunks can no longer be invoked safely.
+        /// </summary>
+        public static bool RequiresEditorRestart { get; internal set; }
+#endif
+
         private static readonly List<Action> UpdateActions = new List<Action>();
         private static readonly MainThreadTaskScheduler MainThreadTaskScheduler = new MainThreadTaskScheduler();
 

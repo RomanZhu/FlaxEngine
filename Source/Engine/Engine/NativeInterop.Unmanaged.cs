@@ -984,7 +984,7 @@ namespace FlaxEngine.Interop
                 // In case the ALC doesn't unload properly: https://learn.microsoft.com/en-us/dotnet/standard/assembly/unloadability#debug-unloading-issues
                 while (true)
 #else
-                for (int attempts = 5; attempts > 0; attempts--)
+                for (int attempts = 20; attempts > 0; attempts--)
 #endif
                 {
                     GC.Collect();
@@ -997,7 +997,8 @@ namespace FlaxEngine.Interop
                 if (IsHandleAlive(weakRef))
                 {
                     Debug.Logger.LogHandler.LogWrite(LogType.Warning, "Scripting AssemblyLoadContext was not unloaded.");
-                    Debug.Logger.LogHandler.LogWrite(LogType.Info, "Reload continues with a leaked collectible AssemblyLoadContext until editor restart.");
+                    Debug.Logger.LogHandler.LogWrite(LogType.Error, "The Editor must be restarted before entering Play mode. Continuing with this scripting context is unsafe.");
+                    Scripting.RequiresEditorRestart = true;
                 }
                 weakRef.Free();
 

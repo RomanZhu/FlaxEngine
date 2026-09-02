@@ -210,7 +210,10 @@ void Actor::OnDeleteObject()
         // Note: endPlay will remove managed instance
         EndPlay();
 
-        if (isParentInPlay)
+        // Always unlink before this actor can be freed. During recursive EndPlay the
+        // parent clears its play flag before visiting children, so using that flag as
+        // the unlink condition can leave a dangling pointer in parent->Children.
+        if (_parent)
         {
             // Unlink from the parent
             _parent->Children.RemoveKeepOrder(this);
@@ -243,6 +246,11 @@ void Actor::OnDeleteObject()
     _isHierarchyDirty = true;
     for (Actor* child : children)
     {
+        if (!ObjectsRemovalService::IsLive(child))
+        {
+            LOG(Error, "Discarding destroyed child reference while deleting '{0}'.", ToString());
+            continue;
+        }
         if (child->_parent != this)
         {
             const String parentName = child->_parent ? child->_parent->ToString() : TEXT("<none>");
@@ -260,7 +268,24 @@ void Actor::OnDeleteObject()
     for (int32 i = 0; i < Scripts.Count(); i++)
     {
         auto script = Scripts.Get()[i];
-        ASSERT(script->_parent == this);
+        if (!ObjectsRemovalService::IsLive(script))
+        {
+            LOG(Error, "Discarding destroyed script reference while deleting '{0}'.", ToString());
+            Scripts.RemoveAtKeepOrder(i--);
+#if BUILD_DEBUG
+            callsCheck--;
+#endif
+            continue;
+        }
+        if (script->_parent != this)
+        {
+            LOG(Error, "Discarding stale script reference while deleting '{0}'.", ToString());
+            Scripts.RemoveAtKeepOrder(i--);
+#if BUILD_DEBUG
+            callsCheck--;
+#endif
+            continue;
+        }
         if (script->_wasAwakeCalled)
         {
             script->_wasAwakeCalled = false;
@@ -1072,8 +1097,15 @@ void Actor::EndPlay()
         OnDisable();
     }
 
-    for (auto* script : Scripts)
+    for (int32 i = 0; i < Scripts.Count(); i++)
     {
+        auto* script = Scripts[i];
+        if (!ObjectsRemovalService::IsLive(script))
+        {
+            LOG(Error, "Removing destroyed script reference while ending play for '{0}'.", ToString());
+            Scripts.RemoveAtKeepOrder(i--);
+            continue;
+        }
         if (script->_wasAwakeCalled)
         {
             script->_wasAwakeCalled = false;
@@ -1094,6 +1126,18 @@ void Actor::EndPlay()
     for (int32 i = 0; i < Children.Count(); i++)
     {
         auto e = Children.Get()[i];
+        if (!ObjectsRemovalService::IsLive(e))
+        {
+            LOG(Error, "Removing destroyed child reference while ending play for '{0}'.", ToString());
+            Children.RemoveAtKeepOrder(i--);
+            continue;
+        }
+        if (e->_parent != this)
+        {
+            LOG(Error, "Removing stale child reference while ending play for '{0}'.", ToString());
+            Children.RemoveAtKeepOrder(i--);
+            continue;
+        }
         if (e->IsDuringPlay())
         {
             e->EndPlay();
@@ -1106,6 +1150,18 @@ void Actor::EndPlay()
     for (int32 i = 0; i < Scripts.Count(); i++)
     {
         auto e = Scripts.Get()[i];
+        if (!ObjectsRemovalService::IsLive(e))
+        {
+            LOG(Error, "Removing destroyed script reference while ending play for '{0}'.", ToString());
+            Scripts.RemoveAtKeepOrder(i--);
+            continue;
+        }
+        if (e->_parent != this)
+        {
+            LOG(Error, "Removing stale script reference while ending play for '{0}'.", ToString());
+            Scripts.RemoveAtKeepOrder(i--);
+            continue;
+        }
         if (e->IsDuringPlay())
         {
             e->EndPlay();

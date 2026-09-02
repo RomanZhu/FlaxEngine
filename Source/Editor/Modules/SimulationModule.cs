@@ -125,6 +125,9 @@ namespace FlaxEditor.Modules
         {
             if (Editor.StateMachine.IsEditMode)
             {
+                if (!CanEnterPlayAfterScriptReload())
+                    return;
+
                 // Show Game window if hidden
                 if (Editor.Windows.GameWin.IsHidden)
                     Editor.Windows.GameWin.Show();
@@ -170,6 +173,8 @@ namespace FlaxEditor.Modules
                 return;
             }
             if (!Editor.StateMachine.IsEditMode)
+                return;
+            if (!CanEnterPlayAfterScriptReload())
                 return;
             if (!Editor.MultiplayerPlayMode.AreReplicasReady)
             {
@@ -452,6 +457,14 @@ namespace FlaxEditor.Modules
                 // Check if play mode has been requested
                 if (_isPlayModeRequested)
                 {
+                    if (!CanEnterPlayAfterScriptReload())
+                    {
+                        _isPlayModeRequested = false;
+                        _isMultiplayerRequest = false;
+                        Editor.UI.UpdateToolstrip();
+                        return;
+                    }
+
                     // Check if editor has been compiled and scripting reloaded (there is no pending reload action)
                     if ((_isMultiplayerRequest || ScriptsBuilder.IsReady || !Editor.Options.Options.General.AutoReloadScriptsOnMainWindowFocus) && !Level.IsAnyActionPending && Level.IsAnySceneLoaded)
                     {
@@ -510,6 +523,14 @@ namespace FlaxEditor.Modules
         {
             // Rise the flag so play mode step end will be called after physics update (user see objects movement)
             _updateOrFixedUpdateWasCalled = true;
+        }
+
+        private bool CanEnterPlayAfterScriptReload()
+        {
+            if (!FlaxEngine.Scripting.RequiresEditorRestart)
+                return true;
+            Editor.LogError("[PlayMode] Cannot start because the previous script reload did not unload cleanly. Save your work and restart the Editor.");
+            return false;
         }
     }
 }

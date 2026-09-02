@@ -11,6 +11,15 @@ class FLAXENGINE_API ObjectsRemovalService
 {
 public:
     /// <summary>
+    /// Determines whether the pointer still refers to a live Object instance.
+    /// This check does not dereference the pointer and can be used to validate
+    /// cached hierarchy entries during destructive callbacks.
+    /// </summary>
+    /// <param name="obj">The object pointer to validate.</param>
+    /// <returns>True if the object is still alive, otherwise false.</returns>
+    static bool IsLive(Object* obj);
+
+    /// <summary>
     /// Determines whether object has been registered in the pool for the removing.
     /// </summary>
     /// <param name="obj">The object.</param>

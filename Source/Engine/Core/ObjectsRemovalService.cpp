@@ -108,6 +108,16 @@ public:
 
 ObjectsRemoval ObjectsRemovalInstance;
 
+bool ObjectsRemovalService::IsLive(Object* obj)
+{
+    auto& state = GetRemovalState();
+    state.PoolLocker.Lock();
+    uint32 epoch;
+    const bool result = TryGetLiveEpoch(obj, epoch);
+    state.PoolLocker.Unlock();
+    return result;
+}
+
 bool ObjectsRemovalService::IsInPool(Object* obj)
 {
     auto& state = GetRemovalState();
