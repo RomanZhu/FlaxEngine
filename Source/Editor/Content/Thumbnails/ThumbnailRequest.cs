@@ -105,6 +105,7 @@ namespace FlaxEditor.Content.Thumbnails
         /// <param name="item">The item.</param>
         /// <param name="proxy">The proxy.</param>
         /// <param name="cacheVersion">The immutable artifact version represented by the thumbnail.</param>
+        /// <param name="forceRegenerate">True to regenerate even when the published artifact version is unchanged.</param>
         public ThumbnailRequest(AssetItem item, AssetProxy proxy, Guid cacheVersion, bool forceRegenerate)
         {
             Item = item;
