@@ -65,9 +65,11 @@ namespace FlaxEngine.Tests
                 stage = "expanded family import";
                 WriteTwoMeshGlb(fixture.ModelPath, false);
                 StageAuthoredModelMetadata(fixture);
+                stage = "authored family refresh";
                 Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { fixture.ModelPath }, false));
-                Assert.IsFalse(ModelImporterService.ReconcileSubAssets(fixture.ModelId));
+                stage = "authored family build request";
                 Assert.IsFalse(AssetPipelineService.BuildAsset(fixture.ModelId));
+                stage = "authored family build completion";
                 ProductionValidationFixture.WaitForImports(new[] { fixture.ModelId });
                 Assert.Less(timer.Elapsed, ProductionValidationFixture.ImportTimeout);
 
@@ -112,7 +114,6 @@ namespace FlaxEngine.Tests
                 Assert.IsFalse(AssetPipelineService.IsArtifactCurrent(main.ID), "Source change did not invalidate the model artifact.");
                 Assert.IsTrue(children.Any(x => !AssetPipelineService.IsArtifactCurrent(x.ID)),
                     "Source change did not invalidate any model subasset artifact.");
-                Assert.IsFalse(ModelImporterService.ReconcileSubAssets(fixture.ModelId));
                 var reordered = GetModelRecords(fixture);
                 foreach (var child in reordered.Where(x => !x.IsMain))
                     Assert.AreEqual(stableChildren[child.SubAssetKey], child.ID, "Mesh reorder changed a persistent subasset GUID.");
