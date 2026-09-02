@@ -504,6 +504,9 @@ namespace FlaxEditor.Modules.SourceCodeEditing
         {
             base.OnUpdate();
 
+            if (Editor.IsHeadlessMode)
+                return;
+
             // Automatic project files generation after workspace modifications
             if (_autoGenerateScriptsProjectFiles && ScriptsBuilder.IsSourceWorkspaceDirty && !ScriptsBuilder.IsCompiling)
             {
