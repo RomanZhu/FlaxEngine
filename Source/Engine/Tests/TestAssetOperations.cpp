@@ -917,6 +917,23 @@ TEST_CASE("Project panel preserves authored particle and collision text lifecycl
 #endif
 }
 
+TEST_CASE("Current scene and prefab artifacts exercise registered cooker paths")
+{
+#if USE_CSHARP && USE_NETCORE
+    MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestEditorUtils");
+    REQUIRE(testClass);
+    MMethod* testMethod = testClass->GetMethod("RunSceneAndPrefabCurrentFormatCookerPaths", 0);
+    REQUIRE(testMethod);
+    MObject* exception = nullptr;
+    MObject* result = testMethod->Invoke(nullptr, nullptr, &exception);
+    if (exception)
+        MException(exception).Log(LogType::Error, TEXT("TestEditorUtils"));
+    CHECK_FALSE(exception);
+    REQUIRE(result);
+    CHECK(MUtils::Unbox<int32>(result) == 0);
+#endif
+}
+
 TEST_CASE("Project panel preserves additional authored text family lifecycles")
 {
 #if USE_CSHARP && USE_NETCORE

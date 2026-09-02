@@ -97,7 +97,10 @@ public:
     API_FUNCTION() static void GetCurrentPlatform(API_PARAM(Out) PlatformType& platform, API_PARAM(Out) BuildPlatform& buildPlatform, API_PARAM(Out) BuildConfiguration& buildConfiguration);
 
 #if FLAX_TESTS
-    /// <summary>Runs the cooker's default binary-asset processor against one exact artifact.</summary>
+    /// <summary>Runs the registered current-platform cooker processor against one exact asset.</summary>
+    API_FUNCTION() static bool ValidateAssetCookForTesting(const Guid& objectID);
+
+    /// <summary>Compatibility entry point that rejects non-binary assets before registered cooker validation.</summary>
     API_FUNCTION() static bool ValidateBinaryAssetCookForTesting(const Guid& objectID);
 #endif
 

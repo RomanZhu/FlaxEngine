@@ -649,30 +649,52 @@ void GameCooker::GetCurrentPlatform(PlatformType& platform, BuildPlatform& build
 }
 
 #if FLAX_TESTS
-bool GameCooker::ValidateBinaryAssetCookForTesting(const Guid& objectID)
+bool GameCooker::ValidateAssetCookForTesting(const Guid& objectID)
 {
     Asset* asset = Content::LoadAsset<Asset>(objectID, 300000.0);
     BinaryAsset* binaryAsset = dynamic_cast<BinaryAsset*>(asset);
-    if (!binaryAsset || !binaryAsset->Storage)
+    JsonAssetBase* jsonAsset = dynamic_cast<JsonAssetBase*>(asset);
+    if (!asset || (!binaryAsset && !jsonAsset) || (binaryAsset && !binaryAsset->Storage))
         return true;
 
     AssetInitData initData;
-    if (binaryAsset->Storage->LoadAssetHeader(objectID, initData))
-        return true;
-    initData.Header.UnlinkChunks();
-    initData.Metadata.Release();
-    initData.Dependencies.Clear();
+    if (binaryAsset)
+    {
+        if (binaryAsset->Storage->LoadAssetHeader(objectID, initData))
+            return true;
+        initData.Header.UnlinkChunks();
+        initData.Metadata.Release();
+        initData.Dependencies.Clear();
+    }
+    else
+    {
+        initData.SerializedVersion = 1;
+        initData.Header.ID = objectID;
+        initData.Header.TypeName = asset->GetTypeName();
+    }
 
     CookingData* data = New<CookingData>();
+    PlatformType platform;
+    GetCurrentPlatform(platform, data->Platform, data->Configuration);
+    data->Tools = GetTools(data->Platform);
     CookAssetsStep::CacheData cache;
     CookAssetsStep::FileDependenciesList dependencies;
-    CookAssetsStep::AssetCookData options { *data, cache, initData, binaryAsset, dependencies };
-    const bool failed = CookAssetsStep::ProcessDefaultAsset(options);
-    const bool invalid = initData.Header.ID != objectID || initData.Header.TypeName != binaryAsset->GetTypeName() ||
-                         initData.Header.Chunks[0] == nullptr;
+    CookAssetsStep::AssetCookData options { *data, cache, initData, asset, dependencies };
+    const bool failed = !data->Tools || CookAssetsStep::ProcessAssetForTesting(options);
+    bool hasPayload = false;
+    for (int32 i = 0; i < ASSET_FILE_DATA_CHUNKS; i++)
+        hasPayload |= initData.Header.Chunks[i] != nullptr;
+    const bool invalid = initData.Header.ID != objectID || initData.Header.TypeName != asset->GetTypeName() ||
+                         !hasPayload;
     initData.Header.DeleteChunks();
     data->DeleteObject();
     return failed || invalid;
+}
+
+bool GameCooker::ValidateBinaryAssetCookForTesting(const Guid& objectID)
+{
+    Asset* asset = Content::LoadAsset<Asset>(objectID, 300000.0);
+    return !dynamic_cast<BinaryAsset*>(asset) || ValidateAssetCookForTesting(objectID);
 }
 #endif
 

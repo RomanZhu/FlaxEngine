@@ -158,8 +158,8 @@ namespace FlaxEngine.Tests
             Assert.IsNotEmpty(texture.ArtifactKey);
             Assert.IsTrue(File.Exists(texture.StoragePath));
             StringAssert.Contains("/library/artifacts/", StringUtils.NormalizePath(texture.StoragePath).ToLowerInvariant());
-            Assert.IsFalse(FlaxEditor.GameCooker.ValidateBinaryAssetCookForTesting(textureId),
-                "The exact texture artifact failed the cooker binary-asset path.");
+            Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(textureId),
+                "The exact texture artifact failed its registered current-platform cooker path.");
 
             stage = "cached restart";
             AssetPipelineService.DrainArtifactPublications();

@@ -1939,6 +1939,8 @@ namespace FlaxEngine.Tests
                 {
                     Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
                     WaitForCurrentArtifact(id);
+                    Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(id),
+                        "Authored asset failed its registered cooker path: " + id);
                 }
 
                 lifecycleStage = "collision dependency invalidation";
@@ -2007,6 +2009,63 @@ namespace FlaxEngine.Tests
         public static int RunParticleAndCollisionAuthoredTextLifecycle()
         {
             new TestEditorUtils().TestParticleAndCollisionAuthoredTextLifecycle();
+            return 0;
+        }
+
+        [Test]
+        public void TestSceneAndPrefabCurrentFormatCookerPaths()
+        {
+            ProductionValidationFixture fixture = null;
+            string root = null;
+            var stage = "setup";
+            try
+            {
+                fixture = ProductionValidationFixture.Create();
+                root = fixture.RootPath;
+                var paths = new[] { fixture.ScenePath, fixture.PrefabPath };
+                var ids = new[] { fixture.SceneId, fixture.PrefabId };
+                stage = "registration";
+                Assert.IsFalse(AssetPipelineService.RefreshSources(paths, false));
+                stage = "artifact builds";
+                foreach (var id in ids)
+                {
+                    Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
+                    WaitForCurrentArtifact(id);
+                }
+
+                stage = "scene cooker";
+                Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(fixture.SceneId),
+                    "The current-format scene failed its registered cooker path.");
+                stage = "prefab cooker";
+                Assert.IsFalse(FlaxEditor.GameCooker.ValidateAssetCookForTesting(fixture.PrefabId),
+                    "The current-format prefab failed its registered cooker path.");
+
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(fixture.SceneId, out var sceneRecord));
+                Assert.AreEqual(typeof(SceneAsset).FullName, sceneRecord.TypeName);
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(fixture.PrefabId, out var prefabRecord));
+                Assert.AreEqual(typeof(Prefab).FullName, prefabRecord.TypeName);
+                var diagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
+                    x.Severity != AssetPipelineDiagnosticSeverity.Info &&
+                    (ids.Contains(x.AssetGuid) || paths.Any(path =>
+                        string.Equals(path, x.SourcePath, StringComparison.OrdinalIgnoreCase)))).ToArray();
+                Assert.IsEmpty(diagnostics, string.Join(Environment.NewLine,
+                    diagnostics.Select(x => x.Code + ": " + x.Message)));
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException("Current-format scene/prefab cooker validation failed during " + stage + ".", ex);
+            }
+            finally
+            {
+                fixture?.Dispose();
+                if (root != null)
+                    AssetPipelineService.RefreshSources(new[] { root });
+            }
+        }
+
+        public static int RunSceneAndPrefabCurrentFormatCookerPaths()
+        {
+            new TestEditorUtils().TestSceneAndPrefabCurrentFormatCookerPaths();
             return 0;
         }
 

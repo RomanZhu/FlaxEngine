@@ -947,13 +947,24 @@ CookAssetsStep::CookAssetsStep()
     : AssetsRegistry(1024)
     , AssetPathsMapping(256)
 {
-    AssetProcessors.Add(Material::TypeName, ProcessMaterial);
-    AssetProcessors.Add(Shader::TypeName, ProcessShader);
-    AssetProcessors.Add(ParticleEmitter::TypeName, ProcessParticleEmitter);
-    AssetProcessors.Add(Texture::TypeName, ProcessTextureBase);
-    AssetProcessors.Add(CubeTexture::TypeName, ProcessTextureBase);
-    AssetProcessors.Add(SpriteAtlas::TypeName, ProcessTextureBase);
+    AssetProcessors[Material::TypeName] = ProcessMaterial;
+    AssetProcessors[Shader::TypeName] = ProcessShader;
+    AssetProcessors[ParticleEmitter::TypeName] = ProcessParticleEmitter;
+    AssetProcessors[Texture::TypeName] = ProcessTextureBase;
+    AssetProcessors[CubeTexture::TypeName] = ProcessTextureBase;
+    AssetProcessors[SpriteAtlas::TypeName] = ProcessTextureBase;
 }
+
+#if FLAX_TESTS
+bool CookAssetsStep::ProcessAssetForTesting(AssetCookData& options)
+{
+    CookAssetsStep step;
+    ProcessAssetFunc processor = nullptr;
+    if (!AssetProcessors.TryGet(options.Asset->GetTypeName(), processor))
+        processor = ProcessDefaultAsset;
+    return processor(options);
+}
+#endif
 
 bool CookAssetsStep::Process(CookingData& data, CacheData& cache, BinaryAsset* asset)
 {

@@ -174,6 +174,11 @@ public:
     static Dictionary<String, ProcessAssetFunc> AssetProcessors;
 
     static bool ProcessDefaultAsset(AssetCookData& options);
+
+#if FLAX_TESTS
+    /// <summary>Runs the registered cooker processor for an exact loaded asset.</summary>
+    static bool ProcessAssetForTesting(AssetCookData& options);
+#endif
     
 private:
 
