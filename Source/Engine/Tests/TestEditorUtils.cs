@@ -1664,7 +1664,7 @@ namespace FlaxEngine.Tests
                 lifecycleStage = "emitter edit";
                 var thumbnailOwner = new ThumbnailOwner();
                 var stableEmitterId = emitterItem.ObjectID;
-                emitterItem.Thumbnail = Editor.Instance.Icons.Document128;
+                emitterItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Document128;
                 emitterItem.AddReference(thumbnailOwner, true);
                 var emitter = AssetDocumentRegistry.OpenGraph<ParticleEmitter>(emitterItem, out var emitterSession);
                 try
@@ -1679,7 +1679,7 @@ namespace FlaxEngine.Tests
                         "Saving the emitter graph did not request the newly published artifact preview.");
                     Assert.IsTrue(emitterItem.Thumbnail.IsValid,
                         "Saving the emitter graph discarded the last-good thumbnail while replacement was queued.");
-                    emitterItem.Thumbnail = Editor.Instance.Icons.Folder128;
+                    emitterItem.Thumbnail = FlaxEditor.Editor.Instance.Icons.Folder128;
                     emitterSession.SetGraphSurface((byte[])emitterSession.GetGraphSurface().Clone());
                     Assert.IsFalse(emitterSession.SaveGraph(emitterItem));
                     Assert.AreEqual(stableEmitterId, emitterItem.ObjectID,
