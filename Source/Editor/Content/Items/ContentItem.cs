@@ -562,9 +562,15 @@ namespace FlaxEditor.Content
 
         private void RequestThumbnail(bool forceRegenerate = false)
         {
-            _thumbnailRequestQueued = true;
-            _thumbnailForceRetry = forceRegenerate;
+            NotifyThumbnailRequestQueued(forceRegenerate);
             Editor.Instance.Thumbnails.RequestPreview(this, forceRegenerate, true);
+        }
+
+        internal void NotifyThumbnailRequestQueued(bool forceRegenerate)
+        {
+            _thumbnailRequestQueued = true;
+            _thumbnailRequestFailed = false;
+            _thumbnailForceRetry |= forceRegenerate;
         }
 
         internal void SetStaleThumbnail(SpriteHandle thumbnail)

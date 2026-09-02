@@ -66,6 +66,7 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (item == null)
                 throw new ArgumentNullException();
+            item.NotifyThumbnailRequestQueued(forceRegenerate);
             if (_task == null)
             {
                 if (!_pendingRequests.Contains(item) && _pendingRequests.Count >= MaxPendingRequests)
