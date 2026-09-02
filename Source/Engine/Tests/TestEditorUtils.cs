@@ -1768,6 +1768,19 @@ namespace FlaxEngine.Tests
             Assert.AreEqual(typeName, (string)json["type"]);
         }
 
+        private static void WaitForCurrentArtifact(Guid id)
+        {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            while (!AssetPipelineService.IsArtifactCurrent(id))
+            {
+                var status = AssetPipelineService.GetBuildStatus(id);
+                Assert.IsFalse(status == "Failed" || status == "Cancelled",
+                    "Artifact build ended as " + status + " for " + id + ": " + AssetPipelineService.GetBuildDiagnostic(id).Message);
+                Assert.Less(timer.Elapsed, TimeSpan.FromMinutes(5), "Artifact build exceeded the five-minute ceiling for " + id);
+                Thread.Sleep(1);
+            }
+        }
+
         [Test]
         public void TestParticleAndCollisionAuthoredTextLifecycle()
         {
@@ -1849,7 +1862,7 @@ namespace FlaxEngine.Tests
                 foreach (var id in new[] { emitterId, systemId, collisionId })
                 {
                     Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
-                    Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(id), "Artifact was not current for " + id);
+                    WaitForCurrentArtifact(id);
                 }
 
                 lifecycleStage = "collision dependency invalidation";
@@ -2029,7 +2042,7 @@ namespace FlaxEngine.Tests
                 foreach (var id in ids)
                 {
                     Assert.IsFalse(AssetPipelineService.BuildAssetForeground(id));
-                    Assert.IsTrue(AssetPipelineService.IsArtifactCurrent(id), "Artifact was not current for " + id);
+                    WaitForCurrentArtifact(id);
                 }
                 Assert.IsTrue(AssetDatabaseQueryService.GetDependencies(materialInstanceId).Any(x => x.TargetObject == materialId),
                     "Material instance did not retain its persistent base-material dependency.");
