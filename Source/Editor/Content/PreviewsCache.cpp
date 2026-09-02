@@ -8,7 +8,6 @@
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
 #include "Engine/ContentImporters/GeneratedAssetBuilder.h"
-#include "Engine/Content/Upgraders/TextureAssetUpgrader.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Graphics/GPUDevice.h"
 
@@ -80,7 +79,7 @@ void PreviewsCache::FlushTask::OnEnd()
     ThreadPoolTask::OnEnd();
 }
 
-REGISTER_BINARY_ASSET_WITH_UPGRADER(PreviewsCache, "FlaxEditor.PreviewsCache", TextureAssetUpgrader, false);
+REGISTER_BINARY_ASSET(PreviewsCache, "FlaxEditor.PreviewsCache", false);
 
 PreviewsCache::PreviewsCache(const SpawnParams& params, const AssetInfo* info)
     : SpriteAtlas(params, info)
