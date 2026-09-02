@@ -51,6 +51,37 @@ TEST_CASE("Model processor reuses parsed source data for owned material and text
     CHECK(ModelProcessor::RequiresSourceTransform(ModelSubAssetKind::Texture, true, false));
 }
 
+TEST_CASE("Model processor declares owned material texture runtime dependencies")
+{
+    ModelSourceAnalysis analysis;
+    auto data = std::make_shared<ModelData>();
+    data->Textures.Resize(2);
+    data->Materials.Resize(2);
+    data->Materials[0].Diffuse.TextureIndex = 1;
+    data->Materials[0].Normals.TextureIndex = 1;
+    analysis.ParsedSource = data;
+    ModelSubAssetInfo& material = analysis.SubAssets.AddOne();
+    material.Kind = ModelSubAssetKind::Material;
+    material.StableKey = TEXT("material:Body");
+    material.SourceIndex = 0;
+    ModelSubAssetInfo& unusedTexture = analysis.SubAssets.AddOne();
+    unusedTexture.Kind = ModelSubAssetKind::Texture;
+    unusedTexture.StableKey = TEXT("texture:Unused");
+    unusedTexture.SourceIndex = 0;
+    ModelSubAssetInfo& usedTexture = analysis.SubAssets.AddOne();
+    usedTexture.Kind = ModelSubAssetKind::Texture;
+    usedTexture.StableKey = TEXT("texture:Body");
+    usedTexture.SourceIndex = 1;
+
+    Array<String> keys;
+    ModelProcessor::CollectRuntimeReferenceKeys(analysis, &material, keys);
+    REQUIRE(keys.Count() == 1);
+    CHECK(keys[0] == TEXT("texture:Body"));
+    ModelProcessor::CollectRuntimeReferenceKeys(analysis, nullptr, keys);
+    REQUIRE(keys.Count() == 1);
+    CHECK(keys[0] == TEXT("material:Body"));
+}
+
 TEST_CASE("Model processor analyzes one source into deterministic family records")
 {
     const String root = Globals::TemporaryFolder / (TEXT("ModelSourceAnalysis-") + Guid::New().ToString(Guid::FormatType::N));

@@ -66,6 +66,8 @@ public:
     static AssetProcessorDescriptor CreateDescriptor();
     static bool AnalyzeSource(const StringView& sourcePath, const ModelProcessorSettings& settings,
         ModelSourceAnalysis& analysis, AssetPipelineDiagnostic& diagnostic);
+    static void CollectRuntimeReferenceKeys(const ModelSourceAnalysis& analysis, const ModelSubAssetInfo* selected,
+        Array<String>& keys);
     static void PrimeAnalysisCache(const StringView& sourcePath, const ModelProcessorSettings& settings,
         const ModelSourceAnalysis& analysis);
     static bool Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic);

@@ -6,6 +6,7 @@
 
 #include "Engine/Content/Build/ArtifactBuildContext.h"
 #include "Engine/Content/Build/PrepareAssetContext.h"
+#include "Engine/Content/AssetDatabase/AssetDatabase.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Content/Assets/Animation.h"
 #include "Engine/Content/Assets/Material.h"
@@ -741,6 +742,53 @@ bool ModelProcessor::RequiresSourceTransform(ModelSubAssetKind kind, bool import
         (kind != ModelSubAssetKind::Texture || !importTextures);
 }
 
+void ModelProcessor::CollectRuntimeReferenceKeys(const ModelSourceAnalysis& analysis, const ModelSubAssetInfo* selected,
+    Array<String>& keys)
+{
+    keys.Clear();
+    HashSet<int32> sourceIndices;
+    ModelSubAssetKind referencedKind;
+    if (selected && selected->Kind == ModelSubAssetKind::Material)
+    {
+        referencedKind = ModelSubAssetKind::Texture;
+        if (selected->SourceIndex < 0 || selected->SourceIndex >= analysis.ParsedSource->Materials.Count())
+            return;
+        const MaterialSlotEntry& material = analysis.ParsedSource->Materials[selected->SourceIndex];
+        sourceIndices.Add(material.Diffuse.TextureIndex);
+        sourceIndices.Add(material.Emissive.TextureIndex);
+        sourceIndices.Add(material.Opacity.TextureIndex);
+        sourceIndices.Add(material.Roughness.TextureIndex);
+        sourceIndices.Add(material.Metalness.TextureIndex);
+        sourceIndices.Add(material.Normals.TextureIndex);
+        sourceIndices.Remove(-1);
+    }
+    else if (!selected || selected->Kind == ModelSubAssetKind::Mesh)
+    {
+        referencedKind = ModelSubAssetKind::Material;
+        if (!selected)
+        {
+            for (int32 i = 0; i < analysis.ParsedSource->Materials.Count(); i++)
+                sourceIndices.Add(i);
+        }
+        else
+        {
+            for (const ModelLodData& lod : analysis.ParsedSource->LODs)
+                for (const MeshData* mesh : lod.Meshes)
+                    if (mesh && mesh->Name == selected->DisplayName && mesh->MaterialSlotIndex >= 0)
+                        sourceIndices.Add(mesh->MaterialSlotIndex);
+        }
+    }
+    else
+    {
+        return;
+    }
+    for (const ModelSubAssetInfo& info : analysis.SubAssets)
+        if (info.Kind == referencedKind && sourceIndices.Contains(info.SourceIndex))
+            keys.Add(info.StableKey);
+    if (keys.Count() > 1)
+        std::sort(keys.Get(), keys.Get() + keys.Count());
+}
+
 bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepared, AssetPipelineDiagnostic& diagnostic)
 {
     prepared = PreparedAsset();
@@ -828,6 +876,37 @@ bool ModelProcessor::Prepare(PrepareAssetContext& context, PreparedAsset& prepar
         if (!selected || selected->TypeName != context.GetRecord().TypeName)
             return Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Prepare,
                 context.GetRecord().ID, context.GetRecord().SourcePath.Get(), TEXT("Model child record no longer matches a prepared stable candidate."));
+    }
+
+    Array<String> runtimeReferenceKeys;
+    CollectRuntimeReferenceKeys(*analysis, selected, runtimeReferenceKeys);
+    if (runtimeReferenceKeys.HasItems())
+    {
+        Array<AssetRecord> familyRecords;
+        AssetDatabase::Get().GetSubAssets(context.GetRecord().SourceAssetID, familyRecords);
+        AssetDependencyOrigin origin;
+        origin.Path = context.GetRecord().SourcePath.Get();
+        origin.GraphNode = TEXT("model-family");
+        for (const String& referenceKey : runtimeReferenceKeys)
+        {
+            const AssetRecord* target = nullptr;
+            for (const AssetRecord& candidate : familyRecords)
+            {
+                if (candidate.SubAsset.Get() == referenceKey)
+                {
+                    target = &candidate;
+                    break;
+                }
+            }
+            if (!target || context.DeclareRuntimeReference(referenceKey,
+                AssetObjectId(AssetGuid(target->SourceAssetID), target->LocalId), origin, diagnostic))
+            {
+                if (!target)
+                    Fail(diagnostic, AssetPipelineDiagnosticCode::SubAssetReconcileRequired, AssetPipelineDiagnosticStage::Prepare,
+                        context.GetRecord().ID, context.GetRecord().SourcePath.Get(), TEXT("Model runtime dependency has no reconciled family record."));
+                return true;
+            }
+        }
     }
 
     if (context.DeclareOutput(StringAnsiView("runtime"), context.GetRecord().ID, diagnostic))
