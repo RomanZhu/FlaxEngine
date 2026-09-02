@@ -395,6 +395,7 @@ namespace FlaxEngine.Tests
             ContentItemFilesystemAction deleteAction = null;
             int nativeProjectMoves = 0;
             var lifecycleStage = "setup";
+            var lifecycleTimer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var workspace = FlaxEditor.Editor.Instance.ContentDatabase;
@@ -516,6 +517,17 @@ namespace FlaxEngine.Tests
                     "API restore refresh failed before database verification.");
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(apiMovePath, out var apiRestoredRecord));
                 Assert.AreEqual(apiCopyId, apiRestoredRecord.SourceAssetID);
+
+                lifecycleStage = "diagnostics";
+                var lifecyclePaths = new[] { sourcePath, projectCopyPath, projectMovePath, apiCopyPath, apiMovePath };
+                var diagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(diagnostic =>
+                    lifecyclePaths.Any(path => !string.IsNullOrEmpty(diagnostic.SourcePath) &&
+                        ContentMutationPathUtils.Comparer.Equals(ContentMutationPathUtils.Normalize(path),
+                            ContentMutationPathUtils.Normalize(diagnostic.SourcePath)))).ToArray();
+                Assert.IsEmpty(diagnostics, string.Join(Environment.NewLine,
+                    diagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message)));
+                Assert.Less(lifecycleTimer.ElapsedMilliseconds, 5000,
+                    "UI-backed single mutation lifecycle exceeded its responsiveness budget.");
             }
             catch (Exception ex)
             {
@@ -548,6 +560,8 @@ namespace FlaxEngine.Tests
             var destinationAssetPath = Path.Combine(destinationFolderPath, "Canonical.txt");
             AssetCopyEntryRequest[] observedEntries = null;
             string[] presentedPaths = null;
+            ContentItemFilesystemAction folderDeleteAction = null;
+            var lifecycleTimer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 Directory.CreateDirectory(nestedFolderPath);
@@ -615,10 +629,43 @@ namespace FlaxEngine.Tests
 
                 var destinationFolder = workspace.Find(destinationFolderPath) as ContentFolder;
                 Assert.NotNull(destinationFolder);
-                workspace.Delete(destinationFolder, true);
+                contentWindow.Select(destinationFolder, true);
+                var movedFolderPath = destinationFolderPath + " Moved";
+                var movedAssetPath = Path.Combine(movedFolderPath, "Canonical.txt");
+                var moveResult = workspace.TryMove(new[] { (Item: (ContentItem)destinationFolder, Destination: movedFolderPath) });
+                Assert.IsTrue(moveResult.Succeeded, moveResult.Message);
                 Assert.IsFalse(Directory.Exists(destinationFolderPath));
                 Assert.IsFalse(File.Exists(destinationAssetPath));
                 Assert.IsFalse(File.Exists(destinationAssetPath + ".meta"));
+                Assert.IsTrue(Directory.Exists(movedFolderPath));
+                Assert.IsTrue(File.Exists(movedAssetPath));
+                Assert.IsTrue(File.Exists(movedAssetPath + ".meta"));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(movedAssetPath, out var movedRecord));
+                Assert.AreEqual(copiedRecord.SourceAssetID, movedRecord.SourceAssetID);
+                Assert.AreEqual(1, contentWindow.Selection.Count);
+                Assert.AreEqual(Path.GetFullPath(movedFolderPath), Path.GetFullPath(contentWindow.Selection[0].Path));
+
+                folderDeleteAction = ContentItemFilesystemAction.Delete(FlaxEditor.Editor.Instance,
+                    new List<ContentItem> { destinationFolder });
+                Assert.NotNull(folderDeleteAction);
+                Assert.IsFalse(Directory.Exists(movedFolderPath));
+                Assert.IsFalse(File.Exists(movedAssetPath));
+                Assert.IsFalse(File.Exists(movedAssetPath + ".meta"));
+                Assert.IsTrue(folderDeleteAction.TryUndo());
+                Assert.IsTrue(Directory.Exists(movedFolderPath));
+                Assert.IsTrue(File.Exists(movedAssetPath));
+                Assert.IsTrue(File.Exists(movedAssetPath + ".meta"));
+                Assert.IsFalse(AssetPipelineService.RefreshSources(new[] { movedFolderPath }));
+                Assert.IsTrue(AssetDatabaseQueryService.TryGetMainRecordAtPath(movedAssetPath, out var restoredRecord));
+                Assert.AreEqual(copiedRecord.SourceAssetID, restoredRecord.SourceAssetID);
+                var lifecycleDiagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(diagnostic =>
+                    !string.IsNullOrEmpty(diagnostic.SourcePath) &&
+                    ContentMutationPathUtils.IsWithinRoot(diagnostic.SourcePath, root, true)).ToArray();
+                Assert.IsEmpty(lifecycleDiagnostics, string.Join(Environment.NewLine,
+                    lifecycleDiagnostics.Select(diagnostic => diagnostic.Code + ": " + diagnostic.Message)));
+                Assert.Less(lifecycleTimer.ElapsedMilliseconds, 5000,
+                    "UI-backed mixed folder lifecycle exceeded its responsiveness budget.");
+
                 Assert.IsFalse(AssetDatabaseQueryService.TryGetMainRecordAtPath(destinationAssetPath, out _));
                 Assert.IsTrue(File.Exists(sourceAssetPath));
                 Assert.IsTrue(File.Exists(sourceAssetPath + ".meta"));
@@ -627,6 +674,7 @@ namespace FlaxEngine.Tests
             {
                 AssetWorkspaceModule.NativeCopyBatchObserver = null;
                 AssetWorkspaceModule.NativePresentationObserver = null;
+                folderDeleteAction?.Dispose();
                 CleanupCanonicalCopyAsset(destinationAssetPath);
                 CleanupCanonicalCopyAsset(sourceAssetPath);
                 if (Directory.Exists(root))
@@ -764,14 +812,24 @@ namespace FlaxEngine.Tests
                 File.WriteAllText(fileCollisionPath, "existing file");
                 var sourceFolder = new ContentFolder(ContentFolderType.Content, sourceFolderPath, null);
                 var database = new AssetWorkspaceModule(null);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
 
                 var folderResult = database.Copy(sourceFolder, destinationFolderPath);
                 var crossTypeResult = database.Copy(sourceFolder, fileCollisionPath);
 
                 Assert.IsFalse(folderResult.Succeeded);
                 Assert.IsFalse(crossTypeResult.Succeeded);
+                Assert.AreEqual(ContentMutationFailure.DestinationCollision, folderResult.Failure);
+                Assert.AreEqual(ContentMutationFailure.DestinationCollision, crossTypeResult.Failure);
+                Assert.AreEqual(Path.GetFullPath(sourceFolderPath), Path.GetFullPath(folderResult.SourcePath));
+                Assert.AreEqual(Path.GetFullPath(destinationFolderPath), Path.GetFullPath(folderResult.DestinationPath));
+                Assert.IsFalse(folderResult.RequiresRecovery);
+                Assert.IsEmpty(folderResult.CompletedPaths);
+                Assert.IsEmpty(folderResult.RolledBackPaths);
                 Assert.AreEqual("existing", File.ReadAllText(Path.Combine(destinationFolderPath, "Existing.txt")));
                 Assert.AreEqual("existing file", File.ReadAllText(fileCollisionPath));
+                Assert.Less(timer.ElapsedMilliseconds, 1000,
+                    "Structured Project-panel collision preflight exceeded its responsiveness budget.");
             }
             finally
             {
