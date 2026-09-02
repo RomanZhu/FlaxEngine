@@ -8,6 +8,19 @@
 #include "Engine/Scripting/ManagedCLR/MException.h"
 #include "Engine/Scripting/ManagedCLR/MMethod.h"
 #include "Engine/Scripting/ManagedCLR/MUtils.h"
+#include "Editor/Content/PreviewsCache.h"
+
+TEST_CASE("Warm thumbnail cache retains canonical slots across restart")
+{
+    CHECK(PreviewsCache::ShouldRetainSlot(true, false, false, AssetRecordStatus::MissingSource));
+    CHECK(PreviewsCache::ShouldRetainSlot(false, true, false, AssetRecordStatus::MissingSource));
+    CHECK(PreviewsCache::ShouldRetainSlot(false, false, true, AssetRecordStatus::Ready));
+    CHECK(PreviewsCache::ShouldRetainSlot(false, false, true, AssetRecordStatus::Stale));
+    CHECK_FALSE(PreviewsCache::ShouldRetainSlot(false, false, true, AssetRecordStatus::MissingSource));
+    CHECK_FALSE(PreviewsCache::ShouldRetainSlot(false, false, true, AssetRecordStatus::OrphanMeta));
+    CHECK_FALSE(PreviewsCache::ShouldRetainSlot(true, true, true, AssetRecordStatus::OrphanMeta));
+    CHECK_FALSE(PreviewsCache::ShouldRetainSlot(false, false, false, AssetRecordStatus::Ready));
+}
 
 TEST_CASE("Visible thumbnail demand preserves exact replacement lifecycle")
 {

@@ -2281,6 +2281,44 @@ Guid AssetDatabaseQueryService::GetCurrentRuntimeArtifactCacheID(const Guid& obj
 #endif
 }
 
+Guid AssetDatabaseQueryService::GetPublishedRuntimeArtifactCacheID(const Guid& objectID)
+{
+#if USE_EDITOR
+    ArtifactResolver& resolver = ArtifactResolver::Get();
+    AssetRecord record;
+    if (!resolver.IsConfigured() || !objectID.IsValid() || EnsureDatabaseLoaded() ||
+        !AssetDatabase::Get().TryGetRecord(objectID, record) || !IsFacadeRecord(record) || record.Status != AssetRecordStatus::Ready)
+        return Guid::Empty;
+
+    const AssetDatabaseReadSnapshot snapshot = AssetDatabase::Get().GetDurableSnapshot();
+    const String targetId(resolver.GetDefaultTarget().BuildKey(ArtifactTargetDimension::All).ToString());
+    SourceAssetRow source;
+    SourceAssetPublicationRow publication;
+    if (!snapshot.IsValid() || !snapshot.TryGetSource(record.SourceAssetID, source) ||
+        !snapshot.TryGetPublication(AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId), targetId, publication) ||
+        publication.SourceRevision != source.LastModifiedRevision ||
+        publication.ImporterRegistryGeneration != snapshot.GetState().Database.ImporterRegistryGeneration)
+        return Guid::Empty;
+
+    ArtifactRequest request;
+    request.Object = AssetObjectId(AssetGuid(record.SourceAssetID), record.LocalId);
+    request.Target = resolver.GetDefaultTarget();
+    request.OutputKind = "runtime";
+    request.Policy = ArtifactResolvePolicy::PublishedOnly;
+    AssetProcessorDescriptor processorDescriptor;
+    if (AssetProcessorRegistry::Get().TryGetDescriptor(record.ProcessorID, processorDescriptor) && processorDescriptor.Outputs.Count())
+        request.RequiredCompatibility = processorDescriptor.Outputs[0].CompatibilityTag;
+    ResolvedArtifact artifact;
+    AssetPipelineDiagnostic diagnostic;
+    ArtifactKey key;
+    if (resolver.Resolve(request, artifact, diagnostic) || ArtifactKey::Parse(artifact.Key, key) || key != publication.Artifact)
+        return Guid::Empty;
+    return Guid(key.Digest.Values[0], key.Digest.Values[1], key.Digest.Values[2], key.Digest.Values[3]);
+#else
+    return Guid::Empty;
+#endif
+}
+
 Guid AssetDatabaseQueryService::GetLoadedRuntimeArtifactCacheID(Asset* asset)
 {
 #if USE_EDITOR

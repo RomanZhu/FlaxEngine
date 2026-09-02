@@ -224,6 +224,8 @@ public:
     API_FUNCTION() static String GetCanonicalSourcePath(const Guid& assetID);
     /// <summary>Gets the current default-target runtime artifact digest projected to a cache identifier.</summary>
     API_FUNCTION() static Guid GetCurrentRuntimeArtifactCacheID(const Guid& objectID);
+    /// <summary>Gets the validated default-target runtime publication digest without preparing the source.</summary>
+    API_FUNCTION() static Guid GetPublishedRuntimeArtifactCacheID(const Guid& objectID);
     /// <summary>Gets the exact runtime artifact digest currently loaded by a binary asset, or an empty value.</summary>
     API_FUNCTION() static Guid GetLoadedRuntimeArtifactCacheID(Asset* asset);
     API_FUNCTION() static Asset* LoadAssetPreview(const Guid& objectID);

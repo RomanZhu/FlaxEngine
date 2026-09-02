@@ -148,7 +148,7 @@ namespace FlaxEditor.Content.Thumbnails
         {
             if (!item.IsCanonicalSource)
                 return Guid.Empty;
-            return AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(item.ID);
+            return AssetDatabaseQueryService.GetPublishedRuntimeArtifactCacheID(item.ID);
         }
 
         internal static bool ShouldDeferRequest(bool renderTaskAvailable, bool cacheAtlasesLoaded)
@@ -439,7 +439,7 @@ namespace FlaxEditor.Content.Thumbnails
             for (int i = 0; i < files.Length; i++)
             {
                 // Load asset
-                var asset = FlaxEngine.Content.LoadAsync(files[i]);
+                var asset = PreviewsCache.LoadExisting(files[i]);
                 if (asset == null)
                     continue;
 
@@ -830,6 +830,9 @@ namespace FlaxEditor.Content.Thumbnails
             // Wait some frames before start generating previews (late init feature)
             if (_task == null || Time.TimeSinceStartup < 1.0f || HasAllAtlasesLoaded() == false)
                 return;
+
+            for (int i = 0; i < _cache.Count; i++)
+                _cache[i].ValidateSlots();
 
             // Initial Project rows can demand previews while persisted cache atlases are still loading.
             // Resolve those requests only now so the first lookup can reuse their exact cached slots.

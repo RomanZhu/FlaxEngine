@@ -4,6 +4,7 @@
 
 #include "Engine/Render2D/SpriteAtlas.h"
 #include "Engine/Content/Asset.h"
+#include "Engine/Content/AssetDatabase/AssetRecord.h"
 #include "Engine/ContentImporters/Types.h"
 #include "Engine/Graphics/Textures/GPUTexture.h"
 #include "Engine/Threading/ThreadPoolTask.h"
@@ -53,9 +54,19 @@ private:
     Array<Guid> _assets;
     Array<Guid> _versions;
     bool _isDirty = false;
+    bool _slotsValidated = false;
     FlushTask* _flushTask = nullptr;
 
 public:
+
+    /// <summary>Loads an existing atlas from the private Editor thumbnail cache.</summary>
+    API_FUNCTION(Attributes="HideInEditor") static PreviewsCache* LoadExisting(const StringView& path);
+
+    /// <summary>Prunes slots after the authoritative asset database finishes startup.</summary>
+    API_FUNCTION(Attributes="HideInEditor") void ValidateSlots();
+
+    /// <summary>Determines whether persisted slot metadata still belongs to a live asset.</summary>
+    static bool ShouldRetainSlot(bool hasLoadedAsset, bool hasLegacyAssetInfo, bool hasDatabaseRecord, AssetRecordStatus databaseStatus);
 
     /// <summary>
     /// Determines whether this atlas is ready (is loaded and has texture streamed).

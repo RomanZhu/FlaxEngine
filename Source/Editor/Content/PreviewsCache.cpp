@@ -6,8 +6,13 @@
 #include "Engine/Threading/Threading.h"
 #include "Engine/Graphics/RenderTools.h"
 #include "Engine/Content/Content.h"
+#include "Engine/Content/AssetObjectRegistry.h"
+#include "Engine/Content/AssetDatabase/AssetPath.h"
+#include "Engine/Content/AssetDatabase/AssetDatabaseServices.h"
 #include "Engine/Content/Factories/BinaryAssetFactory.h"
+#include "Engine/Content/Storage/ContentStorageManager.h"
 #include "Engine/ContentImporters/GeneratedAssetBuilder.h"
+#include "Engine/Engine/Globals.h"
 #include "Engine/Platform/FileSystem.h"
 #include "Engine/Graphics/GPUDevice.h"
 
@@ -86,6 +91,60 @@ PreviewsCache::PreviewsCache(const SpawnParams& params, const AssetInfo* info)
 {
 }
 
+PreviewsCache* PreviewsCache::LoadExisting(const StringView& inputPath)
+{
+    String path(inputPath);
+    String cacheFolder = Globals::ProjectCacheFolder / TEXT("Thumbnails/v5");
+    ContentStorageManager::FormatPath(path);
+    ContentStorageManager::FormatPath(cacheFolder);
+    const StringView fileName = StringUtils::GetFileName(path);
+    if (!AssetPathPolicy::IsSameOrChild(path, cacheFolder) ||
+        !fileName.StartsWith(TEXT("cache_"), StringSearchCase::IgnoreCase) ||
+        FileSystem::GetExtension(path).ToLower() != TEXT("flax"))
+        return nullptr;
+
+    const FlaxStorageReference storage = ContentStorageManager::GetStorage(path);
+    if (!storage || storage->GetEntriesCount() != 1)
+        return nullptr;
+    const FlaxStorage::Entry entry = storage->GetEntry(0);
+    if (!entry.ID.IsValid() || entry.TypeName != TypeName)
+        return nullptr;
+
+    Content::GetObjectRegistry()->RegisterTransientPackage(storage);
+    return Content::LoadAsync<PreviewsCache>(path);
+}
+
+bool PreviewsCache::ShouldRetainSlot(bool hasLoadedAsset, bool hasLegacyAssetInfo, bool hasDatabaseRecord, AssetRecordStatus databaseStatus)
+{
+    if (hasDatabaseRecord)
+        return databaseStatus != AssetRecordStatus::MissingSource && databaseStatus != AssetRecordStatus::OrphanMeta;
+    return hasLoadedAsset || hasLegacyAssetInfo;
+}
+
+void PreviewsCache::ValidateSlots()
+{
+    ScopeLock lock(Locker);
+    if (_slotsValidated || !IsReady())
+        return;
+    _slotsValidated = true;
+
+    AssetInfo assetInfo;
+    for (int32 i = 0; i < _assets.Count(); i++)
+    {
+        Guid& id = _assets[i];
+        AssetDatabaseRecordInfo databaseRecord{};
+        const bool hasDatabaseRecord = id.IsValid() && AssetDatabaseQueryService::TryGetRecord(id, databaseRecord);
+        const bool hasLoadedAsset = id.IsValid() && !hasDatabaseRecord && Content::GetAsset(id) != nullptr;
+        const bool hasLegacyAssetInfo = id.IsValid() && !hasDatabaseRecord && Content::GetAssetInfo(id, assetInfo);
+        if (id.IsValid() && !ShouldRetainSlot(hasLoadedAsset, hasLegacyAssetInfo, hasDatabaseRecord, databaseRecord.Status))
+        {
+            _versions[i] = Guid::Empty;
+            id = Guid::Empty;
+            _isDirty = true;
+        }
+    }
+}
+
 bool PreviewsCache::IsReady() const
 {
     return IsLoaded() && GetTexture()->MipLevels() > 0;
@@ -129,19 +188,6 @@ Asset::LoadResult PreviewsCache::load()
     _versions.Set(versionsMetaChunk->Get<Guid>(), ASSETS_ICONS_PER_ATLAS);
     _assets.Set(previewsMetaChunk->Get<Guid>(), ASSETS_ICONS_PER_ATLAS);
 
-    // Verify if cached assets still exist (don't store thumbnails for removed files)
-    AssetInfo assetInfo;
-    for (int32 i = 0; i < _assets.Count(); i++)
-    {
-        Guid& id = _assets[i];
-        if (id.IsValid() && Content::GetAsset(id) == nullptr && !Content::GetAssetInfo(id, assetInfo))
-        {
-            // Free slot (no matter the texture contents)
-            _versions[i] = Guid::Empty;
-            id = Guid::Empty;
-        }
-    }
-
     // Setup atlas sprites array
     Sprite sprite;
     sprite.Area.Size = static_cast<float>(ASSET_ICON_SIZE) / ASSETS_ICONS_ATLAS_SIZE;
@@ -169,6 +215,7 @@ void PreviewsCache::unload(bool isReloading)
     // Release data
     _assets.Clear();
     _versions.Clear();
+    _slotsValidated = false;
 
     SpriteAtlas::unload(isReloading);
 }
