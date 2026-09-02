@@ -366,10 +366,6 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
         if (IsExcluded(metaPath, contentRoot, libraryRoot) || !IsMeta(metaPath) || consumedMeta.Contains(metaPath))
             continue;
         const String sourcePath = metaPath.Substring(0, metaPath.Length() - 5);
-        AssetPipelineDiagnostic orphan = MakeDiagnostic(AssetPipelineDiagnosticCode::SourceMissing, sourcePath, TEXT("Metadata sidecar has no adjacent source file."));
-        orphan.Related.Add(metaPath);
-        result.Diagnostics.Add(orphan);
-
         AssetMeta meta;
         AssetPipelineDiagnostic diagnostic;
         if (AssetMeta::Load(metaPath, meta, diagnostic))
@@ -383,6 +379,27 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             result.Diagnostics.Add(diagnostic);
             continue;
         }
+        AssetRecordStatus status = AssetRecordStatus::OrphanMeta;
+        if (meta.FolderAsset)
+        {
+            if (FileSystem::CreateDirectory(sourcePath) && !FileSystem::DirectoryExists(sourcePath))
+            {
+                AssetPipelineDiagnostic orphan = MakeDiagnostic(AssetPipelineDiagnosticCode::SourceMissing, sourcePath, TEXT("Folder metadata sidecar could not materialize its adjacent directory."));
+                orphan.Related.Add(metaPath);
+                result.Diagnostics.Add(MoveTemp(orphan));
+            }
+            else
+            {
+                status = AssetRecordStatus::Ready;
+                result.SidecarsParsed++;
+            }
+        }
+        else
+        {
+            AssetPipelineDiagnostic orphan = MakeDiagnostic(AssetPipelineDiagnosticCode::SourceMissing, sourcePath, TEXT("Metadata sidecar has no adjacent source file."));
+            orphan.Related.Add(metaPath);
+            result.Diagnostics.Add(MoveTemp(orphan));
+        }
         AssetPathPolicy::ProjectPath& normalizedPath = normalizedSource.Path;
         StringAnsi canonicalMeta;
         if (meta.ToJson(canonicalMeta, diagnostic))
@@ -391,7 +408,7 @@ bool AssetDatabaseScanner::CollectFromFiles(const StringView& projectRoot, const
             continue;
         }
         Array<AssetRecord> metaRecords;
-        AddMetaRecords(meta, sourcePath, metaPath, normalizedPath, Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length()), AssetRecordStatus::OrphanMeta, metaRecords);
+        AddMetaRecords(meta, sourcePath, metaPath, normalizedPath, Crc::MemCrc32(canonicalMeta.Get(), canonicalMeta.Length()), status, metaRecords);
         for (AssetRecord& record : metaRecords)
             AddRecordWithDuplicateCheck(MoveTemp(record), records, recordIndices, result.Diagnostics);
     }
