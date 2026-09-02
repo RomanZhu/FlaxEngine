@@ -509,13 +509,6 @@ namespace
             Globals::ProjectLibraryFolder, *modificationProcessor, *databaseCallbacks);
         if (operations->Initialize(diagnostic))
             return true;
-        Array<AssetPipelineDiagnostic> recoveryDiagnostics;
-        if (operations->RecoverIncompleteTransactions(recoveryDiagnostics))
-        {
-            diagnostic = recoveryDiagnostics.HasItems() ? recoveryDiagnostics[0] : AssetPipelineDiagnostic();
-            SetDiagnostics(recoveryDiagnostics);
-            return true;
-        }
         OperationModificationProcessor = std::move(modificationProcessor);
         OperationDatabaseCallbacks = std::move(databaseCallbacks);
         Operations = std::move(operations);

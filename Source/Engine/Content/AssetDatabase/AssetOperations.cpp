@@ -2,7 +2,6 @@
 
 #include "AssetOperations.h"
 #include "AssetDatabaseServices.h"
-#include "DurableAssetFileSystem.h"
 #include "Engine/Content/Content.h"
 #include "Engine/Content/Documents/CanonicalJsonWriter.h"
 #include "Engine/Core/ScopeExit.h"
@@ -24,28 +23,14 @@
 
 namespace
 {
-    constexpr uint32 JournalMagic = 0x4A504F41; // AOPJ
-    constexpr uint32 JournalVersion = 2;
-    constexpr uint32 BatchJournalMagic = 0x42504F41; // AOPB
-    constexpr uint32 BatchJournalVersion = 3;
-    constexpr uint32 MetadataBatchJournalMagic = 0x4D504F41; // AOPM
-    constexpr uint32 MetadataBatchJournalVersion = 1;
     constexpr int32 MaximumTrashEntries = 4096;
     constexpr int32 MaximumMetadataBatchEntries = 4096;
     CriticalSection MetadataBatchLocker;
 
-    enum class JournalPhase : byte
-    {
-        Prepared,
-        Applied,
-        Committed,
-    };
-
-    struct OperationJournal
+    struct OperationRollbackPlan
     {
         Guid TransactionId;
         AssetOperationKind Kind = AssetOperationKind::Create;
-        JournalPhase Phase = JournalPhase::Prepared;
         Guid AssetGuid;
         Guid SourceAssetGuid;
         String SourcePath;
@@ -57,7 +42,7 @@ namespace
         String StageFragmentsPath;
     };
 
-    enum class BatchJournalKind : byte
+    enum class BatchRollbackKind : byte
     {
         Trash,
         Restore,
@@ -66,17 +51,16 @@ namespace
         ContentCopy,
     };
 
-    struct BatchOperationJournal
+    struct BatchRollbackPlan
     {
         Guid TransactionId;
-        BatchJournalKind Kind = BatchJournalKind::Trash;
-        JournalPhase Phase = JournalPhase::Prepared;
+        BatchRollbackKind Kind = BatchRollbackKind::Trash;
         AssetTrashBatch Trash;
         String TrashRoot;
         String DiscardStageRoot;
     };
 
-    struct MetadataBatchJournalEntry
+    struct MetadataBatchRollbackEntry
     {
         Guid AssetID;
         String SourcePath;
@@ -86,11 +70,10 @@ namespace
         bool ReplaceExistingMetadata = false;
     };
 
-    struct MetadataBatchJournal
+    struct MetadataBatchRollbackPlan
     {
         Guid TransactionId;
-        JournalPhase Phase = JournalPhase::Prepared;
-        Array<MetadataBatchJournalEntry> Entries;
+        Array<MetadataBatchRollbackEntry> Entries;
     };
 
     bool Fail(AssetPipelineDiagnostic& diagnostic, AssetPipelineDiagnosticCode code, const StringView& path,
@@ -118,17 +101,12 @@ namespace
     {
         if (path.IsEmpty())
             return true;
-        return DurableAssetFileSystem::EnsureDirectory(path);
+        return FileSystem::CreateDirectory(path);
     }
 
     bool EnsureParent(const StringView& path)
     {
         return EnsureDirectory(StringUtils::GetDirectoryName(path));
-    }
-
-    bool FlushFile(const StringView& path)
-    {
-        return DurableAssetFileSystem::FlushFile(path);
     }
 
     bool PrepareRemappedSceneSource(const StringView& sourcePath, const StringView& stagingPath,
@@ -167,384 +145,46 @@ namespace
         rapidjson_flax::StringBuffer buffer;
         PrettyJsonWriter writer(buffer);
         document.Accept(writer.GetWriter());
-        if (File::WriteAllBytes(stagingPath, buffer.GetString(), static_cast<int32>(buffer.GetSize())) ||
-            FlushFile(stagingPath))
+        if (File::WriteAllBytes(stagingPath, buffer.GetString(), static_cast<int32>(buffer.GetSize())))
         {
-            error = TEXT("Cannot write or flush the remapped external-actors scene source staging file.");
+            error = TEXT("Cannot write the remapped external-actors scene source staging file.");
             return true;
         }
         return false;
     }
 
-    bool DurableMove(const StringView& destination, const StringView& source, bool overwrite)
+    bool MovePath(const StringView& destination, const StringView& source, bool overwrite)
     {
-        return DurableAssetFileSystem::Move(destination, source, overwrite);
+        return FileSystem::MoveFile(destination, source, overwrite);
     }
 
-    bool DurableDeleteFile(const StringView& path)
+    bool DeletePath(const StringView& path)
     {
-        return DurableAssetFileSystem::DeleteFile(path);
+        return FileSystem::DeleteFile(path);
     }
 
-    bool DurableDeleteDirectory(const StringView& path)
+    bool DeleteTree(const StringView& path)
     {
-        return DurableAssetFileSystem::DeleteDirectory(path, true);
+        return FileSystem::DeleteDirectory(path, true);
     }
 
-    bool DurableDeleteEmptyDirectory(const StringView& path)
+    bool DeleteEmptyDirectory(const StringView& path)
     {
-        return DurableAssetFileSystem::DeleteDirectory(path, false);
+        return FileSystem::DeleteDirectory(path, false);
     }
 
-    class JournalWriter
+    bool PrepareOperationScratch(const StringView& directory, AssetPipelineDiagnostic& diagnostic)
     {
-    public:
-        Array<byte> Data;
-
-        void UInt32(uint32 value)
-        {
-            for (int32 i = 0; i < 4; i++)
-                Data.Add(static_cast<byte>(value >> (i * 8)));
-        }
-
-        void Byte(byte value)
-        {
-            Data.Add(value);
-        }
-
-        void GuidValue(const Guid& value)
-        {
-            UInt32(value.A);
-            UInt32(value.B);
-            UInt32(value.C);
-            UInt32(value.D);
-        }
-
-        void StringValue(const StringView& value)
-        {
-            const StringAnsi utf8(value);
-            UInt32(utf8.Length());
-            if (utf8.HasChars())
-                Data.Add(reinterpret_cast<const byte*>(utf8.Get()), utf8.Length());
-        }
-    };
-
-    class JournalReader
-    {
-        const byte* _data;
-        uint32 _length;
-        uint32 _position = 0;
-
-    public:
-        JournalReader(const byte* data, uint32 length)
-            : _data(data)
-            , _length(length)
-        {
-        }
-
-        bool Bytes(void* output, uint32 length)
-        {
-            if (_position > _length || length > _length - _position)
-                return true;
-            Platform::MemoryCopy(output, _data + _position, length);
-            _position += length;
-            return false;
-        }
-
-        bool UInt32(uint32& value)
-        {
-            byte bytes[4];
-            if (Bytes(bytes, 4))
-                return true;
-            value = static_cast<uint32>(bytes[0]) | (static_cast<uint32>(bytes[1]) << 8) |
-                    (static_cast<uint32>(bytes[2]) << 16) | (static_cast<uint32>(bytes[3]) << 24);
-            return false;
-        }
-
-        bool Byte(byte& value)
-        {
-            return Bytes(&value, 1);
-        }
-
-        bool GuidValue(Guid& value)
-        {
-            return UInt32(value.A) || UInt32(value.B) || UInt32(value.C) || UInt32(value.D);
-        }
-
-        bool StringValue(String& value)
-        {
-            uint32 length;
-            if (UInt32(length) || length > 1024 * 1024 || length > _length - _position)
-                return true;
-            value = String(StringAnsiView(reinterpret_cast<const char*>(_data + _position), length));
-            _position += length;
-            return false;
-        }
-
-        bool AtEnd() const
-        {
-            return _position == _length;
-        }
-    };
-
-    bool SaveJournal(const StringView& directory, const OperationJournal& journal, AssetPipelineDiagnostic& diagnostic)
-    {
-        if (EnsureDirectory(directory))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
-                TEXT("Cannot create the asset operation transaction directory."));
-        JournalWriter writer;
-        writer.UInt32(JournalMagic);
-        writer.UInt32(JournalVersion);
-        writer.Byte(static_cast<byte>(journal.Kind));
-        writer.Byte(static_cast<byte>(journal.Phase));
-        writer.GuidValue(journal.TransactionId);
-        writer.GuidValue(journal.AssetGuid);
-        writer.GuidValue(journal.SourceAssetGuid);
-        writer.StringValue(journal.SourcePath);
-        writer.StringValue(journal.DestinationPath);
-        writer.StringValue(journal.StageSourcePath);
-        writer.StringValue(journal.StageMetaPath);
-        writer.StringValue(journal.SourceFragmentsPath);
-        writer.StringValue(journal.DestinationFragmentsPath);
-        writer.StringValue(journal.StageFragmentsPath);
-        const String destination = String(directory) / TEXT("journal.bin");
-        const String staging = destination + TEXT(".tmp");
-        if (File::WriteAllBytes(staging, writer.Data.Get(), writer.Data.Count()) || FlushFile(staging) ||
-            DurableMove(destination, staging, true))
-        {
-            DurableAssetFileSystem::DeleteFile(staging);
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destination,
-                TEXT("Cannot durably persist the asset operation journal."));
-        }
-        return false;
+        return EnsureDirectory(directory) && Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed,
+            directory, TEXT("Cannot create the asset operation staging directory."));
     }
 
-    bool LoadJournal(const StringView& directory, OperationJournal& journal, AssetPipelineDiagnostic& diagnostic)
+    bool PrepareBatchScratch(const StringView& directory, AssetPipelineDiagnostic& diagnostic)
     {
-        const String path = String(directory) / TEXT("journal.bin");
-        BytesContainer bytes;
-        if (File::ReadAllBytes(path, bytes) || bytes.Length() > MAX_uint32)
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Asset operation journal is missing or unreadable."));
-        JournalReader reader(bytes.Get(), static_cast<uint32>(bytes.Length()));
-        uint32 magic;
-        uint32 version;
-        byte kind;
-        byte phase;
-        if (reader.UInt32(magic) || reader.UInt32(version) || reader.Byte(kind) || reader.Byte(phase) ||
-            reader.GuidValue(journal.TransactionId) || reader.GuidValue(journal.AssetGuid) ||
-            reader.GuidValue(journal.SourceAssetGuid) || reader.StringValue(journal.SourcePath) ||
-            reader.StringValue(journal.DestinationPath) || reader.StringValue(journal.StageSourcePath) ||
-            reader.StringValue(journal.StageMetaPath) || magic != JournalMagic ||
-            (version != 1 && version != JournalVersion))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Asset operation journal is malformed or unsupported."));
-        if (version >= 2 && (reader.StringValue(journal.SourceFragmentsPath) ||
-            reader.StringValue(journal.DestinationFragmentsPath) || reader.StringValue(journal.StageFragmentsPath)))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Asset operation journal is malformed or unsupported."));
-        if (!reader.AtEnd() || kind > static_cast<byte>(AssetOperationKind::Restore) ||
-            phase > static_cast<byte>(JournalPhase::Committed))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Asset operation journal is malformed or unsupported."));
-        journal.Kind = static_cast<AssetOperationKind>(kind);
-        journal.Phase = static_cast<JournalPhase>(phase);
-        return false;
+        return EnsureDirectory(directory) && Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed,
+            directory, TEXT("Cannot create the batch asset operation staging directory."));
     }
 
-    String BatchJournalPath(const StringView& directory)
-    {
-        return String(directory) / TEXT("batch-journal.bin");
-    }
-
-    bool SaveBatchJournal(const StringView& directory, const BatchOperationJournal& journal,
-        AssetPipelineDiagnostic& diagnostic)
-    {
-        if (!journal.TransactionId.IsValid() || journal.Trash.Entries.IsEmpty() ||
-            journal.Trash.Entries.Count() > MaximumTrashEntries || EnsureDirectory(directory))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
-                TEXT("Cannot create the batch asset operation transaction directory."));
-        JournalWriter writer;
-        writer.UInt32(BatchJournalMagic);
-        writer.UInt32(BatchJournalVersion);
-        writer.Byte(static_cast<byte>(journal.Kind));
-        writer.Byte(static_cast<byte>(journal.Phase));
-        writer.GuidValue(journal.TransactionId);
-        writer.GuidValue(journal.Trash.TransactionId);
-        writer.StringValue(journal.TrashRoot);
-        writer.StringValue(journal.DiscardStageRoot);
-        writer.UInt32(journal.Trash.Entries.Count());
-        for (const AssetTrashEntry& entry : journal.Trash.Entries)
-        {
-            if (entry.Fragments.Count() > MaximumTrashEntries)
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, directory,
-                    TEXT("Batch asset operation fragment paths are inconsistent."));
-            writer.GuidValue(entry.AssetGuid);
-            writer.Byte(entry.IsFolder ? 1 : 0);
-            writer.StringValue(entry.OriginalPath);
-            writer.StringValue(entry.TrashPath);
-            writer.StringValue(entry.OriginalMetaPath);
-            writer.StringValue(entry.TrashMetaPath);
-            writer.UInt32(entry.Fragments.Count());
-            for (const AssetTrashFragment& fragment : entry.Fragments)
-            {
-                writer.StringValue(fragment.OriginalPath);
-                writer.StringValue(fragment.TrashPath);
-            }
-        }
-        const String destination = BatchJournalPath(directory);
-        const String staging = destination + TEXT(".tmp");
-        if (File::WriteAllBytes(staging, writer.Data.Get(), writer.Data.Count()) || FlushFile(staging) ||
-            DurableMove(destination, staging, true))
-        {
-            DurableDeleteFile(staging);
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destination,
-                TEXT("Cannot durably persist the batch asset operation journal."));
-        }
-        return false;
-    }
-
-    bool LoadBatchJournal(const StringView& directory, BatchOperationJournal& journal,
-        AssetPipelineDiagnostic& diagnostic)
-    {
-        const String path = BatchJournalPath(directory);
-        BytesContainer bytes;
-        if (File::ReadAllBytes(path, bytes) || bytes.Length() > 64 * 1024 * 1024)
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Batch asset operation journal is missing, unreadable, or oversized."));
-        JournalReader reader(bytes.Get(), static_cast<uint32>(bytes.Length()));
-        uint32 magic;
-        uint32 version;
-        uint32 entryCount;
-        byte kind;
-        byte phase;
-        if (reader.UInt32(magic) || reader.UInt32(version) || reader.Byte(kind) || reader.Byte(phase) ||
-            reader.GuidValue(journal.TransactionId) || reader.GuidValue(journal.Trash.TransactionId) ||
-            reader.StringValue(journal.TrashRoot) ||
-            reader.StringValue(journal.DiscardStageRoot) || reader.UInt32(entryCount) ||
-            magic != BatchJournalMagic || version < 1 || version > BatchJournalVersion ||
-            !journal.TransactionId.IsValid() ||
-            !journal.Trash.TransactionId.IsValid() ||
-            kind > static_cast<byte>(BatchJournalKind::ContentCopy) ||
-            (version < 2 && kind == static_cast<byte>(BatchJournalKind::Copy)) ||
-            (version < 3 && kind == static_cast<byte>(BatchJournalKind::ContentCopy)) ||
-            phase > static_cast<byte>(JournalPhase::Committed) || entryCount == 0 || entryCount > MaximumTrashEntries)
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Batch asset operation journal is malformed or unsupported."));
-        journal.Kind = static_cast<BatchJournalKind>(kind);
-        journal.Phase = static_cast<JournalPhase>(phase);
-        journal.Trash.Entries.Resize(entryCount);
-        for (AssetTrashEntry& entry : journal.Trash.Entries)
-        {
-            uint32 fragmentCount;
-            byte isFolder;
-            if (reader.GuidValue(entry.AssetGuid) || reader.Byte(isFolder) || isFolder > 1 ||
-                reader.StringValue(entry.OriginalPath) || reader.StringValue(entry.TrashPath) ||
-                reader.StringValue(entry.OriginalMetaPath) || reader.StringValue(entry.TrashMetaPath) ||
-                reader.UInt32(fragmentCount) || fragmentCount > MaximumTrashEntries)
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                    TEXT("Batch asset operation journal entry is malformed."));
-            entry.IsFolder = isFolder != 0;
-            entry.Fragments.Resize(fragmentCount);
-            for (uint32 i = 0; i < fragmentCount; i++)
-            {
-                if (reader.StringValue(entry.Fragments[i].OriginalPath) ||
-                    reader.StringValue(entry.Fragments[i].TrashPath))
-                    return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                        TEXT("Batch asset operation fragment entry is malformed."));
-            }
-        }
-        if (!reader.AtEnd())
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Batch asset operation journal contains trailing data."));
-        return false;
-    }
-
-    String MetadataBatchJournalPath(const StringView& directory)
-    {
-        return String(directory) / TEXT("metadata-batch-journal.bin");
-    }
-
-    bool SaveMetadataBatchJournal(const StringView& directory, const MetadataBatchJournal& journal,
-        AssetPipelineDiagnostic& diagnostic)
-    {
-        if (!journal.TransactionId.IsValid() || journal.Entries.IsEmpty() ||
-            journal.Entries.Count() > MaximumMetadataBatchEntries || EnsureDirectory(directory))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
-                TEXT("Cannot create the metadata batch transaction directory."));
-        JournalWriter writer;
-        writer.UInt32(MetadataBatchJournalMagic);
-        writer.UInt32(MetadataBatchJournalVersion);
-        writer.Byte(static_cast<byte>(journal.Phase));
-        writer.GuidValue(journal.TransactionId);
-        writer.UInt32(journal.Entries.Count());
-        for (const MetadataBatchJournalEntry& entry : journal.Entries)
-        {
-            writer.GuidValue(entry.AssetID);
-            writer.Byte(entry.ReplaceExistingMetadata ? 1 : 0);
-            writer.StringValue(entry.SourcePath);
-            writer.StringValue(entry.MetadataPath);
-            writer.StringValue(entry.StagingPath);
-            writer.StringValue(entry.BackupPath);
-        }
-        const String destination = MetadataBatchJournalPath(directory);
-        const String staging = destination + TEXT(".tmp");
-        if (File::WriteAllBytes(staging, writer.Data.Get(), writer.Data.Count()) || FlushFile(staging) ||
-            DurableMove(destination, staging, true))
-        {
-            DurableDeleteFile(staging);
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destination,
-                TEXT("Cannot durably persist the metadata batch journal."));
-        }
-        return false;
-    }
-
-    bool LoadMetadataBatchJournal(const StringView& directory, MetadataBatchJournal& journal,
-        AssetPipelineDiagnostic& diagnostic)
-    {
-        const String path = MetadataBatchJournalPath(directory);
-        BytesContainer bytes;
-        if (File::ReadAllBytes(path, bytes) || bytes.Length() > 64 * 1024 * 1024)
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Metadata batch journal is missing, unreadable, or oversized."));
-        JournalReader reader(bytes.Get(), static_cast<uint32>(bytes.Length()));
-        uint32 magic;
-        uint32 version;
-        uint32 entryCount;
-        byte phase;
-        if (reader.UInt32(magic) || reader.UInt32(version) || reader.Byte(phase) ||
-            reader.GuidValue(journal.TransactionId) || reader.UInt32(entryCount) ||
-            magic != MetadataBatchJournalMagic || version != MetadataBatchJournalVersion ||
-            !journal.TransactionId.IsValid() || phase > static_cast<byte>(JournalPhase::Committed) ||
-            entryCount == 0 || entryCount > MaximumMetadataBatchEntries)
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Metadata batch journal is malformed or unsupported."));
-        journal.Phase = static_cast<JournalPhase>(phase);
-        journal.Entries.Resize(entryCount);
-        for (MetadataBatchJournalEntry& entry : journal.Entries)
-        {
-            byte replace;
-            if (reader.GuidValue(entry.AssetID) || reader.Byte(replace) || replace > 1 ||
-                reader.StringValue(entry.SourcePath) || reader.StringValue(entry.MetadataPath) ||
-                reader.StringValue(entry.StagingPath) || reader.StringValue(entry.BackupPath))
-                return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                    TEXT("Metadata batch journal entry is malformed."));
-            entry.ReplaceExistingMetadata = replace != 0;
-        }
-        if (!reader.AtEnd())
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, path,
-                TEXT("Metadata batch journal contains trailing data."));
-        return false;
-    }
-
-    bool HashFile(const StringView& path, ContentHash& hash)
-    {
-        BytesContainer bytes;
-        if (File::ReadAllBytes(path, bytes))
-            return true;
-        hash = ContentHash::Compute(bytes.Get(), bytes.Length());
-        return false;
-    }
 
     bool PathExists(const StringView& path)
     {
@@ -604,14 +244,10 @@ namespace
         const bool failed = entry.IsFolder
             ? Content::RenameAssetFolder(source, destination)
             : (entry.AssetGuid.IsValid() ? Content::RenameAsset(source, destination) :
-                DurableMove(destination, source, false));
-        if (failed)
-            return true;
-        const bool sourceFlushFailed = DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(source));
-        const bool destinationFlushFailed = DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(destination));
-        return sourceFlushFailed || destinationFlushFailed;
+                MovePath(destination, source, false));
+        return failed;
 #else
-        return DurableMove(destination, source, false);
+        return MovePath(destination, source, false);
 #endif
     }
 
@@ -625,14 +261,14 @@ namespace
         {
             const StringView metaSource = toTrash ? StringView(entry.OriginalMetaPath) : StringView(entry.TrashMetaPath);
             const StringView metaDestination = toTrash ? StringView(entry.TrashMetaPath) : StringView(entry.OriginalMetaPath);
-            if (EnsureParent(metaDestination) || DurableMove(metaDestination, metaSource, false))
+            if (EnsureParent(metaDestination) || MovePath(metaDestination, metaSource, false))
                 return true;
         }
         for (const AssetTrashFragment& fragment : entry.Fragments)
         {
             const StringView fragmentSource = toTrash ? StringView(fragment.OriginalPath) : StringView(fragment.TrashPath);
             const StringView fragmentDestination = toTrash ? StringView(fragment.TrashPath) : StringView(fragment.OriginalPath);
-            if (EnsureParent(fragmentDestination) || DurableMove(fragmentDestination, fragmentSource, false))
+            if (EnsureParent(fragmentDestination) || MovePath(fragmentDestination, fragmentSource, false))
                 return true;
         }
         return false;
@@ -646,7 +282,7 @@ namespace
             const StringView source = wasTrash ? StringView(entry.Fragments[i].TrashPath) : StringView(entry.Fragments[i].OriginalPath);
             const StringView destination = wasTrash ? StringView(entry.Fragments[i].OriginalPath) : StringView(entry.Fragments[i].TrashPath);
             if (!PathExists(destination) && FileSystem::DirectoryExists(source))
-                failed |= EnsureParent(destination) || DurableMove(destination, source, false);
+                failed |= EnsureParent(destination) || MovePath(destination, source, false);
             else if (PathExists(source))
                 failed = true;
         }
@@ -655,7 +291,7 @@ namespace
             const StringView source = wasTrash ? StringView(entry.TrashMetaPath) : StringView(entry.OriginalMetaPath);
             const StringView destination = wasTrash ? StringView(entry.OriginalMetaPath) : StringView(entry.TrashMetaPath);
             if (!PathExists(destination) && FileSystem::FileExists(source))
-                failed |= EnsureParent(destination) || DurableMove(destination, source, false);
+                failed |= EnsureParent(destination) || MovePath(destination, source, false);
             else if (PathExists(source))
                 failed = true;
         }
@@ -691,19 +327,19 @@ namespace
         for (int32 i = entry.Fragments.Count() - 1; i >= 0; i--)
         {
             if (FileSystem::DirectoryExists(entry.Fragments[i].TrashPath) &&
-                DurableDeleteDirectory(entry.Fragments[i].TrashPath))
+                DeleteTree(entry.Fragments[i].TrashPath))
                 return true;
         }
         if (entry.IsFolder && FileSystem::DirectoryExists(entry.TrashPath))
         {
-            if (DurableDeleteDirectory(entry.TrashPath))
+            if (DeleteTree(entry.TrashPath))
                 return true;
         }
-        else if (FileSystem::FileExists(entry.TrashPath) && DurableDeleteFile(entry.TrashPath))
+        else if (FileSystem::FileExists(entry.TrashPath) && DeletePath(entry.TrashPath))
         {
             return true;
         }
-        return FileSystem::FileExists(entry.TrashMetaPath) && DurableDeleteFile(entry.TrashMetaPath);
+        return FileSystem::FileExists(entry.TrashMetaPath) && DeletePath(entry.TrashMetaPath);
     }
 
     bool RollbackContentCopyEntry(const AssetTrashEntry& entry)
@@ -712,47 +348,47 @@ namespace
         for (int32 i = entry.Fragments.Count() - 1; i >= 0; i--)
         {
             if (FileSystem::DirectoryExists(entry.Fragments[i].TrashPath))
-                failed |= DurableDeleteDirectory(entry.Fragments[i].TrashPath);
+                failed |= DeleteTree(entry.Fragments[i].TrashPath);
         }
         if (entry.IsFolder && FileSystem::DirectoryExists(entry.TrashPath))
-            failed |= DurableDeleteDirectory(entry.TrashPath);
+            failed |= DeleteTree(entry.TrashPath);
         else if (FileSystem::FileExists(entry.TrashPath))
-            failed |= DurableDeleteFile(entry.TrashPath);
+            failed |= DeletePath(entry.TrashPath);
         if (FileSystem::FileExists(entry.TrashMetaPath))
-            failed |= DurableDeleteFile(entry.TrashMetaPath);
+            failed |= DeletePath(entry.TrashMetaPath);
         return failed;
     }
 
-    bool RollbackBatchJournal(const BatchOperationJournal& journal)
+    bool RollbackBatch(const BatchRollbackPlan& plan)
     {
-        if (journal.Kind == BatchJournalKind::Discard)
+        if (plan.Kind == BatchRollbackKind::Discard)
         {
-            if (!PathExists(journal.TrashRoot) && FileSystem::DirectoryExists(journal.DiscardStageRoot))
-                return EnsureParent(journal.TrashRoot) || DurableMove(journal.TrashRoot, journal.DiscardStageRoot, false);
-            return FileSystem::DirectoryExists(journal.DiscardStageRoot);
+            if (!PathExists(plan.TrashRoot) && FileSystem::DirectoryExists(plan.DiscardStageRoot))
+                return EnsureParent(plan.TrashRoot) || MovePath(plan.TrashRoot, plan.DiscardStageRoot, false);
+            return FileSystem::DirectoryExists(plan.DiscardStageRoot);
         }
         bool failed = false;
-        for (int32 i = journal.Trash.Entries.Count() - 1; i >= 0; i--)
+        for (int32 i = plan.Trash.Entries.Count() - 1; i >= 0; i--)
         {
-            if (journal.Kind == BatchJournalKind::Copy)
-                failed |= RollbackCopiedEntry(journal.Trash.Entries[i]);
-            else if (journal.Kind == BatchJournalKind::ContentCopy)
-                failed |= RollbackContentCopyEntry(journal.Trash.Entries[i]);
+            if (plan.Kind == BatchRollbackKind::Copy)
+                failed |= RollbackCopiedEntry(plan.Trash.Entries[i]);
+            else if (plan.Kind == BatchRollbackKind::ContentCopy)
+                failed |= RollbackContentCopyEntry(plan.Trash.Entries[i]);
             else
-                failed |= RollbackMovedEntry(journal.Trash.Entries[i], journal.Kind == BatchJournalKind::Trash);
+                failed |= RollbackMovedEntry(plan.Trash.Entries[i], plan.Kind == BatchRollbackKind::Trash);
         }
         return failed;
     }
 
-    void CleanupEmptyTrashRoot(const BatchOperationJournal& journal)
+    void CleanupEmptyTrashRoot(const BatchRollbackPlan& plan)
     {
-        for (const AssetTrashEntry& entry : journal.Trash.Entries)
+        for (const AssetTrashEntry& entry : plan.Trash.Entries)
         {
-            DurableDeleteEmptyDirectory(StringUtils::GetDirectoryName(entry.TrashPath));
+            DeleteEmptyDirectory(StringUtils::GetDirectoryName(entry.TrashPath));
             for (const AssetTrashFragment& fragment : entry.Fragments)
-                DurableDeleteEmptyDirectory(StringUtils::GetDirectoryName(fragment.TrashPath));
+                DeleteEmptyDirectory(StringUtils::GetDirectoryName(fragment.TrashPath));
         }
-        DurableDeleteEmptyDirectory(journal.TrashRoot);
+        DeleteEmptyDirectory(plan.TrashRoot);
     }
 
     bool EqualTrashEntry(const AssetTrashEntry& left, const AssetTrashEntry& right)
@@ -787,42 +423,42 @@ namespace
         return kind == AssetOperationKind::Create || kind == AssetOperationKind::Import || kind == AssetOperationKind::Copy;
     }
 
-    bool RollbackJournal(const OperationJournal& journal)
+    bool RollbackOperation(const OperationRollbackPlan& plan)
     {
-        const String sourceMeta = MetaPath(journal.SourcePath);
-        const String destinationMeta = MetaPath(journal.DestinationPath);
+        const String sourceMeta = MetaPath(plan.SourcePath);
+        const String destinationMeta = MetaPath(plan.DestinationPath);
         bool failed = false;
-        if (IsCreateKind(journal.Kind))
+        if (IsCreateKind(plan.Kind))
         {
-            if (FileSystem::FileExists(journal.DestinationPath))
-                failed |= DurableDeleteFile(journal.DestinationPath);
+            if (FileSystem::FileExists(plan.DestinationPath))
+                failed |= DeletePath(plan.DestinationPath);
             if (FileSystem::FileExists(destinationMeta))
-                failed |= DurableDeleteFile(destinationMeta);
-            if (journal.DestinationFragmentsPath.HasChars() &&
-                FileSystem::DirectoryExists(journal.DestinationFragmentsPath))
-                failed |= DurableDeleteDirectory(journal.DestinationFragmentsPath);
+                failed |= DeletePath(destinationMeta);
+            if (plan.DestinationFragmentsPath.HasChars() &&
+                FileSystem::DirectoryExists(plan.DestinationFragmentsPath))
+                failed |= DeleteTree(plan.DestinationFragmentsPath);
             return failed;
         }
-        if (!FileSystem::FileExists(journal.SourcePath))
+        if (!FileSystem::FileExists(plan.SourcePath))
         {
-            if (FileSystem::FileExists(journal.DestinationPath))
-                failed |= DurableMove(journal.SourcePath, journal.DestinationPath, false);
-            else if (FileSystem::FileExists(journal.StageSourcePath))
-                failed |= DurableMove(journal.SourcePath, journal.StageSourcePath, false);
+            if (FileSystem::FileExists(plan.DestinationPath))
+                failed |= MovePath(plan.SourcePath, plan.DestinationPath, false);
+            else if (FileSystem::FileExists(plan.StageSourcePath))
+                failed |= MovePath(plan.SourcePath, plan.StageSourcePath, false);
         }
         if (!FileSystem::FileExists(sourceMeta))
         {
             if (FileSystem::FileExists(destinationMeta))
-                failed |= DurableMove(sourceMeta, destinationMeta, false);
-            else if (FileSystem::FileExists(journal.StageMetaPath))
-                failed |= DurableMove(sourceMeta, journal.StageMetaPath, false);
+                failed |= MovePath(sourceMeta, destinationMeta, false);
+            else if (FileSystem::FileExists(plan.StageMetaPath))
+                failed |= MovePath(sourceMeta, plan.StageMetaPath, false);
         }
-        if (journal.SourceFragmentsPath.HasChars() && !FileSystem::DirectoryExists(journal.SourceFragmentsPath))
+        if (plan.SourceFragmentsPath.HasChars() && !FileSystem::DirectoryExists(plan.SourceFragmentsPath))
         {
-            if (FileSystem::DirectoryExists(journal.DestinationFragmentsPath))
-                failed |= DurableMove(journal.SourceFragmentsPath, journal.DestinationFragmentsPath, false);
-            else if (FileSystem::DirectoryExists(journal.StageFragmentsPath))
-                failed |= DurableMove(journal.SourceFragmentsPath, journal.StageFragmentsPath, false);
+            if (FileSystem::DirectoryExists(plan.DestinationFragmentsPath))
+                failed |= MovePath(plan.SourceFragmentsPath, plan.DestinationFragmentsPath, false);
+            else if (FileSystem::DirectoryExists(plan.StageFragmentsPath))
+                failed |= MovePath(plan.SourceFragmentsPath, plan.StageFragmentsPath, false);
         }
         return failed;
     }
@@ -839,9 +475,9 @@ namespace
     bool RestoreFileAtomic(const StringView& path, const BytesContainer& bytes)
     {
         const String staging = String(path) + TEXT(".rollback-") + Guid::New().ToString(Guid::FormatType::N);
-        SCOPE_EXIT { DurableAssetFileSystem::DeleteFile(staging); };
-        return DurableAssetFileSystem::WriteFile(staging, bytes.Get(), bytes.Length()) ||
-               DurableAssetFileSystem::Replace(path, staging);
+        SCOPE_EXIT { FileSystem::DeleteFile(staging); };
+        return File::WriteAllBytes(staging, bytes.Get(), bytes.Length()) ||
+               FileSystem::MoveFile(path, staging, true);
     }
 
     String NormalizeMetadataBatchPath(const StringView& path)
@@ -852,24 +488,24 @@ namespace
         return result;
     }
 
-    bool ValidateMetadataBatchJournal(const MetadataBatchJournal& journal, const StringView& directory,
+    bool ValidateMetadataBatchPlan(const MetadataBatchRollbackPlan& plan, const StringView& directory,
         const StringView& projectRoot, const StringView& contentRoot, const StringView& libraryRoot,
         AssetPipelineDiagnostic& diagnostic)
     {
-        const String transactionRoot = NormalizeMetadataBatchPath(String(libraryRoot) / TEXT("AssetOperations/Transactions"));
-        const String expectedDirectory = transactionRoot / journal.TransactionId.ToString(Guid::FormatType::N);
+        const String transactionRoot = NormalizeMetadataBatchPath(String(libraryRoot) / TEXT("Temp/AssetOperations"));
+        const String expectedDirectory = transactionRoot / plan.TransactionId.ToString(Guid::FormatType::N);
         const String stagingRoot = NormalizeMetadataBatchPath(String(libraryRoot) / TEXT("Temp/MetadataBatches"));
         if (!FileSystem::AreFilePathsEquivalent(directory, expectedDirectory))
             return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, directory,
-                TEXT("Metadata batch transaction directory does not match its durable identity."));
+                TEXT("Metadata batch staging directory does not match its operation identity."));
 
         AssetSourceRootRegistry roots(projectRoot, libraryRoot);
         if (roots.RegisterProjectRoots(contentRoot, diagnostic))
             return true;
         HashSet<String> paths;
-        for (int32 i = 0; i < journal.Entries.Count(); i++)
+        for (int32 i = 0; i < plan.Entries.Count(); i++)
         {
-            const MetadataBatchJournalEntry& entry = journal.Entries[i];
+            const MetadataBatchRollbackEntry& entry = plan.Entries[i];
             ResolvedAssetSourcePath resolved;
             const String expectedBackup = String(directory) / TEXT("metadata-backups") /
                 String::Format(TEXT("{0}.meta"), i);
@@ -882,7 +518,7 @@ namespace
                 FileSystem::AreFilePathsEquivalent(entry.StagingPath, stagingRoot) ||
                 !FileSystem::AreFilePathsEquivalent(entry.BackupPath, expectedBackup))
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, entry.SourcePath,
-                    TEXT("Metadata batch recovery paths failed canonical root validation."));
+                    TEXT("Metadata batch rollback paths failed canonical root validation."));
             String sourceKey = NormalizeMetadataBatchPath(entry.SourcePath).ToLower();
             String stagingKey = NormalizeMetadataBatchPath(entry.StagingPath).ToLower();
             if (paths.Contains(sourceKey) || paths.Contains(stagingKey))
@@ -895,18 +531,18 @@ namespace
         return false;
     }
 
-    bool RollbackMetadataBatchJournal(const MetadataBatchJournal& journal)
+    bool RollbackMetadataBatch(const MetadataBatchRollbackPlan& plan)
     {
         bool failed = false;
-        for (int32 i = journal.Entries.Count() - 1; i >= 0; i--)
+        for (int32 i = plan.Entries.Count() - 1; i >= 0; i--)
         {
-            const MetadataBatchJournalEntry& entry = journal.Entries[i];
+            const MetadataBatchRollbackEntry& entry = plan.Entries[i];
             if (FileSystem::FileExists(entry.MetadataPath))
             {
                 AssetMeta active;
                 AssetPipelineDiagnostic ignored;
                 if (!AssetMeta::Load(entry.MetadataPath, active, ignored) && active.ID == entry.AssetID)
-                    failed |= DurableDeleteFile(entry.MetadataPath);
+                    failed |= DeletePath(entry.MetadataPath);
                 else if (FileSystem::FileExists(entry.BackupPath) || !entry.ReplaceExistingMetadata)
                     failed = true;
             }
@@ -915,30 +551,14 @@ namespace
                 if (FileSystem::FileExists(entry.MetadataPath))
                     failed = true;
                 else
-                    failed |= DurableMove(entry.MetadataPath, entry.BackupPath, false);
+                    failed |= MovePath(entry.MetadataPath, entry.BackupPath, false);
             }
             if (FileSystem::FileExists(entry.StagingPath))
-                failed |= DurableDeleteFile(entry.StagingPath);
+                failed |= DeletePath(entry.StagingPath);
         }
         return failed;
     }
 
-    bool RecoverMetadataBatchJournal(const StringView& directory, const StringView& projectRoot,
-        const StringView& contentRoot, const StringView& libraryRoot, AssetPipelineDiagnostic& diagnostic)
-    {
-        MetadataBatchJournal journal;
-        if (LoadMetadataBatchJournal(directory, journal, diagnostic) ||
-            ValidateMetadataBatchJournal(journal, directory, projectRoot, contentRoot, libraryRoot, diagnostic))
-            return true;
-        if (journal.Phase != JournalPhase::Committed && RollbackMetadataBatchJournal(journal))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, directory,
-                TEXT("Incomplete metadata batch could not be rolled back; recovery data was preserved."));
-        if (DurableDeleteDirectory(directory))
-            return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
-                TEXT("Recovered metadata batch transaction directory could not be removed."));
-        diagnostic = AssetPipelineDiagnostic();
-        return false;
-    }
 }
 
 #if USE_EDITOR
@@ -956,18 +576,18 @@ bool AssetOperationService::PublishDefaultMetadataBatch(const Array<AssetDefault
     MetadataBatchLocker.Lock();
     SCOPE_EXIT { MetadataBatchLocker.Unlock(); };
 
-    MetadataBatchJournal journal;
-    journal.TransactionId = Guid::New();
-    const String transactionsRoot = NormalizeMetadataBatchPath(Globals::ProjectLibraryFolder /
-        TEXT("AssetOperations/Transactions"));
-    const String transactionDirectory = transactionsRoot /
-        journal.TransactionId.ToString(Guid::FormatType::N);
+    MetadataBatchRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    const String stagingRoot = NormalizeMetadataBatchPath(Globals::ProjectLibraryFolder /
+        TEXT("Temp/AssetOperations"));
+    const String transactionDirectory = stagingRoot /
+        plan.TransactionId.ToString(Guid::FormatType::N);
     const String backupRoot = transactionDirectory / TEXT("metadata-backups");
-    journal.Entries.Resize(entries.Count());
+    plan.Entries.Resize(entries.Count());
     for (int32 i = 0; i < entries.Count(); i++)
     {
         const AssetDefaultMetadataBatchEntry& input = entries[i];
-        MetadataBatchJournalEntry& entry = journal.Entries[i];
+        MetadataBatchRollbackEntry& entry = plan.Entries[i];
         entry.AssetID = input.AssetID;
         entry.SourcePath = NormalizeMetadataBatchPath(input.SourcePath);
         entry.MetadataPath = entry.SourcePath + TEXT(".meta");
@@ -977,10 +597,10 @@ bool AssetOperationService::PublishDefaultMetadataBatch(const Array<AssetDefault
     }
 
     AssetPipelineDiagnostic diagnostic;
-    if (ValidateMetadataBatchJournal(journal, transactionDirectory, Globals::ProjectFolder,
+    if (ValidateMetadataBatchPlan(plan, transactionDirectory, Globals::ProjectFolder,
             Globals::ProjectContentFolder, Globals::ProjectLibraryFolder, diagnostic))
         return true;
-    for (const MetadataBatchJournalEntry& entry : journal.Entries)
+    for (const MetadataBatchRollbackEntry& entry : plan.Entries)
     {
         if (!FileSystem::FileExists(entry.SourcePath) || !FileSystem::FileExists(entry.StagingPath) ||
             IsFileSystemLink(entry.SourcePath) || IsFileSystemLink(entry.MetadataPath) ||
@@ -993,38 +613,31 @@ bool AssetOperationService::PublishDefaultMetadataBatch(const Array<AssetDefault
     }
 
     bool needsBackupRoot = false;
-    for (const MetadataBatchJournalEntry& entry : journal.Entries)
+    for (const MetadataBatchRollbackEntry& entry : plan.Entries)
         needsBackupRoot |= entry.ReplaceExistingMetadata;
-    if (EnsureDirectory(transactionsRoot))
+    if (EnsureDirectory(transactionDirectory))
         return true;
-    if (SaveMetadataBatchJournal(transactionDirectory, journal, diagnostic))
-    {
-        DurableDeleteDirectory(transactionDirectory);
-        return true;
-    }
     if (needsBackupRoot && EnsureDirectory(backupRoot))
     {
-        RollbackMetadataBatchJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackMetadataBatch(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
 
     bool failed = false;
-    for (int32 i = 0; i < journal.Entries.Count(); i++)
+    for (int32 i = 0; i < plan.Entries.Count(); i++)
     {
-        const MetadataBatchJournalEntry& entry = journal.Entries[i];
-        if (entry.ReplaceExistingMetadata && DurableMove(entry.BackupPath, entry.MetadataPath, false))
+        const MetadataBatchRollbackEntry& entry = plan.Entries[i];
+        if (entry.ReplaceExistingMetadata && MovePath(entry.BackupPath, entry.MetadataPath, false))
         {
             failed = true;
             break;
         }
-        if (DurableMove(entry.MetadataPath, entry.StagingPath, false))
+        if (MovePath(entry.MetadataPath, entry.StagingPath, false))
         {
             failed = true;
             break;
         }
-        if (i == 0 && failurePoint == AssetDefaultMetadataBatchFailurePoint::AfterFirstMetadataWithoutRollback)
-            return true;
         if (i == 0 && failurePoint == AssetDefaultMetadataBatchFailurePoint::AfterFirstMetadata)
         {
             failed = true;
@@ -1034,9 +647,9 @@ bool AssetOperationService::PublishDefaultMetadataBatch(const Array<AssetDefault
 
     Array<String> sourcePaths;
     Array<Guid> assetIDs;
-    sourcePaths.EnsureCapacity(journal.Entries.Count());
-    assetIDs.EnsureCapacity(journal.Entries.Count());
-    for (const MetadataBatchJournalEntry& entry : journal.Entries)
+    sourcePaths.EnsureCapacity(plan.Entries.Count());
+    assetIDs.EnsureCapacity(plan.Entries.Count());
+    for (const MetadataBatchRollbackEntry& entry : plan.Entries)
     {
         sourcePaths.Add(entry.SourcePath);
         assetIDs.Add(entry.AssetID);
@@ -1044,33 +657,19 @@ bool AssetOperationService::PublishDefaultMetadataBatch(const Array<AssetDefault
     bool publicationAttempted = false;
     if (!failed)
     {
-        journal.Phase = JournalPhase::Applied;
-        failed = SaveMetadataBatchJournal(transactionDirectory, journal, diagnostic);
-        if (!failed)
-        {
-            publicationAttempted = true;
-            failed = AssetOperationService::PublishDefaultMetadataBatch(assetIDs, sourcePaths);
-        }
+        publicationAttempted = true;
+        failed = AssetOperationService::PublishDefaultMetadataBatch(assetIDs, sourcePaths);
     }
     if (failed)
     {
-        const bool rollbackFailed = RollbackMetadataBatchJournal(journal);
+        const bool rollbackFailed = RollbackMetadataBatch(plan);
         const bool refreshFailed = publicationAttempted && AssetPipelineService::RefreshSources(sourcePaths, false);
         if (!rollbackFailed && !refreshFailed)
-            DurableDeleteDirectory(transactionDirectory);
+            DeleteTree(transactionDirectory);
         return true;
     }
 
-    journal.Phase = JournalPhase::Committed;
-    if (SaveMetadataBatchJournal(transactionDirectory, journal, diagnostic))
-    {
-        const bool rollbackFailed = RollbackMetadataBatchJournal(journal);
-        const bool refreshFailed = AssetPipelineService::RefreshSources(sourcePaths, false);
-        if (!rollbackFailed && !refreshFailed)
-            DurableDeleteDirectory(transactionDirectory);
-        return true;
-    }
-    DurableDeleteDirectory(transactionDirectory);
+    DeleteTree(transactionDirectory);
     return false;
 }
 #endif
@@ -1080,7 +679,7 @@ AssetOperations::AssetOperations(const StringView& projectRoot, const StringView
     : _projectRoot(projectRoot)
     , _contentRoot(contentRoot)
     , _libraryRoot(libraryRoot)
-    , _transactionsRoot(String(libraryRoot) / TEXT("AssetOperations/Transactions"))
+    , _stagingRoot(String(libraryRoot) / TEXT("Temp/AssetOperations"))
     , _trashRoot(String(libraryRoot) / TEXT("AssetOperations/Trash"))
     , _rootRegistry(projectRoot, libraryRoot)
     , _modificationProcessor(modificationProcessor)
@@ -1097,7 +696,7 @@ bool AssetOperations::Initialize(AssetPipelineDiagnostic& diagnostic)
         return true;
     }
     if (_projectRoot.IsEmpty() || _contentRoot.IsEmpty() || _libraryRoot.IsEmpty() ||
-        EnsureDirectory(_transactionsRoot) || EnsureDirectory(_trashRoot))
+        EnsureDirectory(_trashRoot))
         return Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, _libraryRoot,
             TEXT("Asset operations roots are invalid or cannot be created."));
     diagnostic = AssetPipelineDiagnostic();
@@ -1255,44 +854,40 @@ bool AssetOperations::CreateFromBytes(AssetOperationKind kind, const StringView&
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, normalized.AbsolutePath,
             TEXT("Asset operation destination is not an exact empty source-plus-meta target."));
 
-    OperationJournal journal;
-    journal.TransactionId = Guid::New();
-    journal.Kind = kind;
-    journal.AssetGuid = meta.ID;
-    journal.DestinationPath = normalized.AbsolutePath;
-    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
-    journal.StageSourcePath = transactionDirectory / TEXT("source.stage");
-    journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
-    if (SaveJournal(transactionDirectory, journal, diagnostic) ||
-        File::WriteAllBytes(journal.StageSourcePath, sourceData.Get(), sourceData.Length()) || FlushFile(journal.StageSourcePath) ||
-        AssetMeta::SaveAtomic(journal.StageMetaPath, meta, diagnostic) ||
-        DurableMove(normalized.AbsolutePath, journal.StageSourcePath, false) ||
-        DurableMove(destinationMeta, journal.StageMetaPath, false))
+    OperationRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    plan.Kind = kind;
+    plan.AssetGuid = meta.ID;
+    plan.DestinationPath = normalized.AbsolutePath;
+    const String transactionDirectory = _stagingRoot / plan.TransactionId.ToString(Guid::FormatType::N);
+    plan.StageSourcePath = transactionDirectory / TEXT("source.stage");
+    plan.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
+    if (PrepareOperationScratch(transactionDirectory, diagnostic) ||
+        File::WriteAllBytes(plan.StageSourcePath, sourceData.Get(), sourceData.Length()) ||
+        AssetMeta::SaveAtomic(plan.StageMetaPath, meta, diagnostic) ||
+        MovePath(normalized.AbsolutePath, plan.StageSourcePath, false) ||
+        MovePath(destinationMeta, plan.StageMetaPath, false))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, normalized.AbsolutePath,
                 TEXT("Asset create/import transaction could not publish source and metadata."));
         return true;
     }
-    journal.Phase = JournalPhase::Applied;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    DurableDeleteDirectory(transactionDirectory);
+    DeleteTree(transactionDirectory);
     commit = AssetOperationCommit();
-    commit.TransactionId = journal.TransactionId;
+    commit.TransactionId = plan.TransactionId;
     commit.Kind = kind;
     commit.AssetGuid = meta.ID;
     commit.DestinationPath = normalized.AbsolutePath;
@@ -1408,51 +1003,47 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PathCollision, destinationAbsolute,
             TEXT("Asset move destination is not an exact empty source-plus-meta target."));
 
-    OperationJournal journal;
-    journal.TransactionId = Guid::New();
-    journal.Kind = kind;
-    journal.AssetGuid = currentMeta.ID;
-    journal.SourcePath = source.AbsolutePath;
-    journal.DestinationPath = destinationAbsolute;
-    journal.SourceFragmentsPath = sourceFragments;
-    journal.DestinationFragmentsPath = destinationFragments;
-    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
-    journal.StageSourcePath = transactionDirectory / TEXT("source.stage");
-    journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
-    journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
-    if (SaveJournal(transactionDirectory, journal, diagnostic) ||
-        (hasFragments && DurableMove(journal.StageFragmentsPath, sourceFragments, false)) ||
-        DurableMove(journal.StageSourcePath, source.AbsolutePath, false) ||
-        DurableMove(journal.StageMetaPath, sourceMeta, false) ||
-        DurableMove(destinationAbsolute, journal.StageSourcePath, false) ||
-        DurableMove(destinationMeta, journal.StageMetaPath, false) ||
-        (hasFragments && DurableMove(destinationFragments, journal.StageFragmentsPath, false)))
+    OperationRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    plan.Kind = kind;
+    plan.AssetGuid = currentMeta.ID;
+    plan.SourcePath = source.AbsolutePath;
+    plan.DestinationPath = destinationAbsolute;
+    plan.SourceFragmentsPath = sourceFragments;
+    plan.DestinationFragmentsPath = destinationFragments;
+    const String transactionDirectory = _stagingRoot / plan.TransactionId.ToString(Guid::FormatType::N);
+    plan.StageSourcePath = transactionDirectory / TEXT("source.stage");
+    plan.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
+    plan.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
+    if (PrepareOperationScratch(transactionDirectory, diagnostic) ||
+        (hasFragments && MovePath(plan.StageFragmentsPath, sourceFragments, false)) ||
+        MovePath(plan.StageSourcePath, source.AbsolutePath, false) ||
+        MovePath(plan.StageMetaPath, sourceMeta, false) ||
+        MovePath(destinationAbsolute, plan.StageSourcePath, false) ||
+        MovePath(destinationMeta, plan.StageMetaPath, false) ||
+        (hasFragments && MovePath(destinationFragments, plan.StageFragmentsPath, false)))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, source.AbsolutePath,
                 TEXT("Asset move transaction could not publish source and metadata together."));
         return true;
     }
-    journal.Phase = JournalPhase::Applied;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    DurableDeleteDirectory(transactionDirectory);
+    DeleteTree(transactionDirectory);
 
     AssetOperationCommit commit;
-    commit.TransactionId = journal.TransactionId;
+    commit.TransactionId = plan.TransactionId;
     commit.Kind = kind;
     commit.AssetGuid = currentMeta.ID;
     commit.SourcePath = source.AbsolutePath;
@@ -1464,7 +1055,7 @@ bool AssetOperations::MoveExact(AssetOperationKind kind, const AssetOperationTar
     }
     if (trash)
     {
-        trash->TransactionId = journal.TransactionId;
+        trash->TransactionId = plan.TransactionId;
         trash->AssetGuid = currentMeta.ID;
         trash->OriginalSourcePath = source.AbsolutePath;
         trash->OriginalMetaPath = sourceMeta;
@@ -1560,60 +1151,56 @@ bool AssetOperations::CopyAssetInternal(const AssetOperationTarget& target, cons
 
     AssetMeta copiedMeta = currentMeta.CloneWithNewIdentities();
     copiedMeta.ID = copiedAssetGuid;
-    OperationJournal journal;
-    journal.TransactionId = Guid::New();
-    journal.Kind = AssetOperationKind::Copy;
-    journal.AssetGuid = copiedMeta.ID;
-    journal.SourceAssetGuid = currentMeta.ID;
-    journal.SourcePath = source.AbsolutePath;
-    journal.DestinationPath = destinationPath.AbsolutePath;
-    journal.SourceFragmentsPath = hasFragments ? sourceFragments : String::Empty;
-    journal.DestinationFragmentsPath = destinationFragments;
-    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
-    journal.StageSourcePath = transactionDirectory / TEXT("source.stage");
-    journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
-    journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
+    OperationRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    plan.Kind = AssetOperationKind::Copy;
+    plan.AssetGuid = copiedMeta.ID;
+    plan.SourceAssetGuid = currentMeta.ID;
+    plan.SourcePath = source.AbsolutePath;
+    plan.DestinationPath = destinationPath.AbsolutePath;
+    plan.SourceFragmentsPath = hasFragments ? sourceFragments : String::Empty;
+    plan.DestinationFragmentsPath = destinationFragments;
+    const String transactionDirectory = _stagingRoot / plan.TransactionId.ToString(Guid::FormatType::N);
+    plan.StageSourcePath = transactionDirectory / TEXT("source.stage");
+    plan.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
+    plan.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
     String fragmentError;
-    if (SaveJournal(transactionDirectory, journal, diagnostic) ||
+    if (PrepareOperationScratch(transactionDirectory, diagnostic) ||
         (hasFragments && SceneFragmentStore::PrepareCloneDirectory(_projectRoot, currentMeta.ID, copiedMeta.ID,
-            journal.StageFragmentsPath, fragmentError)) ||
+            plan.StageFragmentsPath, fragmentError)) ||
         (hasFragments
-            ? PrepareRemappedSceneSource(source.AbsolutePath, journal.StageSourcePath, currentMeta.ID,
+            ? PrepareRemappedSceneSource(source.AbsolutePath, plan.StageSourcePath, currentMeta.ID,
                 copiedMeta.ID, fragmentError)
-            : FileSystem::CopyFile(journal.StageSourcePath, source.AbsolutePath) || FlushFile(journal.StageSourcePath)) ||
-        AssetMeta::SaveAtomic(journal.StageMetaPath, copiedMeta, diagnostic) ||
-        DurableMove(destinationPath.AbsolutePath, journal.StageSourcePath, false) ||
-        DurableMove(destinationMeta, journal.StageMetaPath, false) ||
-        (hasFragments && DurableMove(destinationFragments, journal.StageFragmentsPath, false)))
+            : FileSystem::CopyFile(plan.StageSourcePath, source.AbsolutePath)) ||
+        AssetMeta::SaveAtomic(plan.StageMetaPath, copiedMeta, diagnostic) ||
+        MovePath(destinationPath.AbsolutePath, plan.StageSourcePath, false) ||
+        MovePath(destinationMeta, plan.StageMetaPath, false) ||
+        (hasFragments && MovePath(destinationFragments, plan.StageFragmentsPath, false)))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, destinationPath.AbsolutePath,
                 fragmentError.HasChars() ? fragmentError :
                     TEXT("Asset copy transaction could not publish source, cloned metadata, and private fragments."));
         return true;
     }
-    journal.Phase = JournalPhase::Applied;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    DurableDeleteDirectory(transactionDirectory);
+    DeleteTree(transactionDirectory);
 
     if (_databaseCallbacks.ClearCopiedState(currentMeta.ID, copiedMeta.ID, diagnostic))
         return true;
     AssetOperationCommit commit;
-    commit.TransactionId = journal.TransactionId;
+    commit.TransactionId = plan.TransactionId;
     commit.Kind = AssetOperationKind::Copy;
     commit.AssetGuid = copiedMeta.ID;
     commit.SourceAssetGuid = currentMeta.ID;
@@ -1783,10 +1370,10 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
     metadataClones.EnsureCapacity(expandedRequests.Count());
     sourceSizes.EnsureCapacity(expandedRequests.Count());
     sourceWriteTicks.EnsureCapacity(expandedRequests.Count());
-    BatchOperationJournal journal;
-    journal.TransactionId = Guid::New();
-    journal.Kind = BatchJournalKind::Copy;
-    journal.Trash.TransactionId = journal.TransactionId;
+    BatchRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    plan.Kind = BatchRollbackKind::Copy;
+    plan.Trash.TransactionId = plan.TransactionId;
     const auto reserveDestination = [this, &reservedDestinations, &diagnostic](const StringView& path)
     {
         for (const String& previous : reservedDestinations)
@@ -1847,7 +1434,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         }
         else
         {
-            journal.Kind = BatchJournalKind::ContentCopy;
+            plan.Kind = BatchRollbackKind::ContentCopy;
             if (request.Kind != AssetCopyEntryKind::File && request.Kind != AssetCopyEntryKind::Directory &&
                 request.Kind != AssetCopyEntryKind::MetadataSidecar)
                 return Fail(diagnostic, AssetPipelineDiagnosticCode::InvalidSettingsCombination, request.SourcePath,
@@ -1905,7 +1492,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         metadataClones.Add(MoveTemp(metadataClone));
         sourceSizes.Add(sourceSize);
         sourceWriteTicks.Add(sourceWriteTime);
-        AssetTrashEntry& entry = journal.Trash.Entries.AddOne();
+        AssetTrashEntry& entry = plan.Trash.Entries.AddOne();
         entry.AssetGuid = copiedGuid;
         entry.OriginalPath = source.AbsolutePath;
         entry.TrashPath = destination.AbsolutePath;
@@ -1923,21 +1510,21 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         }
     }
 
-    if (BeginImmediateTransaction(journal.Trash.Entries[0].OriginalPath, diagnostic))
+    if (BeginImmediateTransaction(plan.Trash.Entries[0].OriginalPath, diagnostic))
         return true;
     SCOPE_EXIT { EndImmediateTransaction(); };
-    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    const String transactionDirectory = _stagingRoot / plan.TransactionId.ToString(Guid::FormatType::N);
+    if (PrepareBatchScratch(transactionDirectory, diagnostic))
         return true;
 
     Array<AssetOperationCommit> commits;
     commits.EnsureCapacity(expandedRequests.Count());
     bool publicationAttempted = false;
-    const auto failAndRollback = [this, &journal, &transactionDirectory, &diagnostic, &commits,
+    const auto failAndRollback = [this, &plan, &transactionDirectory, &diagnostic, &commits,
         &publicationAttempted, result](
         const AssetPipelineDiagnostic& failure)
     {
-        const bool rollbackFailed = RollbackBatchJournal(journal);
+        const bool rollbackFailed = RollbackBatch(plan);
         if (result && !rollbackFailed)
             result->RolledBackEntries = result->CompletedEntries;
         if (!rollbackFailed)
@@ -1949,7 +1536,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
                 for (const AssetOperationCommit& published : commits)
                 {
                     AssetOperationCommit& rollback = rollbackCommits.AddOne();
-                    rollback.TransactionId = journal.TransactionId;
+                    rollback.TransactionId = plan.TransactionId;
                     rollback.Kind = AssetOperationKind::Delete;
                     rollback.AssetGuid = published.AssetGuid;
                     rollback.SourcePath = published.DestinationPath;
@@ -1957,7 +1544,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
                 AssetPipelineDiagnostic ignored;
                 _databaseCallbacks.RefreshCommitted(rollbackCommits, ignored);
             }
-            DurableDeleteDirectory(transactionDirectory);
+            DeleteTree(transactionDirectory);
         }
         diagnostic = failure;
         if (rollbackFailed)
@@ -1995,7 +1582,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         else
         {
             const bool isDirectory = expandedRequests[i].Kind == AssetCopyEntryKind::Directory;
-            const String& source = journal.Trash.Entries[i].OriginalPath;
+            const String& source = plan.Trash.Entries[i].OriginalPath;
             if ((isDirectory ? !FileSystem::DirectoryExists(source) : !FileSystem::FileExists(source)) ||
                 PathExists(destinations[i]) ||
                 FileSystem::GetFileLastEditTime(source).Ticks != sourceWriteTicks[i] ||
@@ -2012,8 +1599,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
             else if (expandedRequests[i].Kind == AssetCopyEntryKind::MetadataSidecar)
                 copyFailed = AssetMeta::SaveAtomic(destinations[i], metadataClones[i], diagnostic);
             else
-                copyFailed = FileSystem::CopyFile(destinations[i], source) || FlushFile(destinations[i]) ||
-                    DurableAssetFileSystem::FlushDirectory(StringUtils::GetDirectoryName(destinations[i]));
+                copyFailed = FileSystem::CopyFile(destinations[i], source);
             if (copyFailed)
             {
                 if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
@@ -2030,16 +1616,14 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
             if (!isDirectory)
                 AddSelfWrite(commit, destinations[i]);
         }
-        commit.TransactionId = journal.TransactionId;
+        commit.TransactionId = plan.TransactionId;
         for (AssetOperationSelfWrite& write : commit.SelfWrites)
-            write.TransactionId = journal.TransactionId;
+            write.TransactionId = plan.TransactionId;
         commits.Add(MoveTemp(commit));
         if (result)
             result->CompletedEntries = i + 1;
     }
 
-    journal.Phase = JournalPhase::Applied;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
         const AssetPipelineDiagnostic failure = diagnostic;
         return failAndRollback(failure);
@@ -2050,8 +1634,6 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         const AssetPipelineDiagnostic failure = diagnostic;
         return failAndRollback(failure);
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
         const AssetPipelineDiagnostic failure = diagnostic;
         return failAndRollback(failure);
@@ -2062,7 +1644,7 @@ bool AssetOperations::CopyAssets(const Array<AssetCopyEntryRequest>& requests, A
         _selfWrites.Add(commit.SelfWrites);
     _stateLocker.Unlock();
     copiedGuids = MoveTemp(plannedGuids);
-    DurableDeleteDirectory(transactionDirectory);
+    DeleteTree(transactionDirectory);
     if (result)
     {
         result->FailureIndex = -1;
@@ -2289,50 +1871,46 @@ bool AssetOperations::RestoreAsset(const AssetTrashRecord& trash, AssetPipelineD
         return Fail(diagnostic, AssetPipelineDiagnosticCode::PrepareInvalidated, trash.TrashMetaPath,
             TEXT("Asset trash metadata changed during restore validation."));
 
-    OperationJournal journal;
-    journal.TransactionId = Guid::New();
-    journal.Kind = AssetOperationKind::Restore;
-    journal.AssetGuid = trash.AssetGuid;
-    journal.SourcePath = trash.TrashSourcePath;
-    journal.DestinationPath = trash.OriginalSourcePath;
-    journal.SourceFragmentsPath = trash.TrashFragmentsPath;
-    journal.DestinationFragmentsPath = trash.OriginalFragmentsPath;
-    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
-    journal.StageSourcePath = transactionDirectory / TEXT("source.stage");
-    journal.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
-    journal.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
-    if (SaveJournal(transactionDirectory, journal, diagnostic) ||
-        (hasFragments && DurableMove(journal.StageFragmentsPath, trash.TrashFragmentsPath, false)) ||
-        DurableMove(journal.StageSourcePath, trash.TrashSourcePath, false) ||
-        DurableMove(journal.StageMetaPath, trash.TrashMetaPath, false) ||
-        DurableMove(trash.OriginalSourcePath, journal.StageSourcePath, false) ||
-        DurableMove(trash.OriginalMetaPath, journal.StageMetaPath, false) ||
-        (hasFragments && DurableMove(trash.OriginalFragmentsPath, journal.StageFragmentsPath, false)))
+    OperationRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    plan.Kind = AssetOperationKind::Restore;
+    plan.AssetGuid = trash.AssetGuid;
+    plan.SourcePath = trash.TrashSourcePath;
+    plan.DestinationPath = trash.OriginalSourcePath;
+    plan.SourceFragmentsPath = trash.TrashFragmentsPath;
+    plan.DestinationFragmentsPath = trash.OriginalFragmentsPath;
+    const String transactionDirectory = _stagingRoot / plan.TransactionId.ToString(Guid::FormatType::N);
+    plan.StageSourcePath = transactionDirectory / TEXT("source.stage");
+    plan.StageMetaPath = transactionDirectory / TEXT("source.meta.stage");
+    plan.StageFragmentsPath = transactionDirectory / TEXT("fragments.stage");
+    if (PrepareOperationScratch(transactionDirectory, diagnostic) ||
+        (hasFragments && MovePath(plan.StageFragmentsPath, trash.TrashFragmentsPath, false)) ||
+        MovePath(plan.StageSourcePath, trash.TrashSourcePath, false) ||
+        MovePath(plan.StageMetaPath, trash.TrashMetaPath, false) ||
+        MovePath(trash.OriginalSourcePath, plan.StageSourcePath, false) ||
+        MovePath(trash.OriginalMetaPath, plan.StageMetaPath, false) ||
+        (hasFragments && MovePath(trash.OriginalFragmentsPath, plan.StageFragmentsPath, false)))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
             Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, trash.OriginalSourcePath,
                 TEXT("Asset restore transaction could not publish source and metadata."));
         return true;
     }
-    journal.Phase = JournalPhase::Applied;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveJournal(transactionDirectory, journal, diagnostic))
     {
-        RollbackJournal(journal);
-        DurableDeleteDirectory(transactionDirectory);
+        RollbackOperation(plan);
+        DeleteTree(transactionDirectory);
         return true;
     }
-    DurableDeleteDirectory(transactionDirectory);
+    DeleteTree(transactionDirectory);
     AssetOperationCommit commit;
-    commit.TransactionId = journal.TransactionId;
+    commit.TransactionId = plan.TransactionId;
     commit.Kind = AssetOperationKind::Restore;
     commit.AssetGuid = trash.AssetGuid;
     commit.SourcePath = trash.TrashSourcePath;
@@ -2549,17 +2127,17 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
                 TEXT("The recoverable Content entry set changed during transaction preparation."));
     }
 
-    BatchOperationJournal journal;
-    journal.TransactionId = transactionId;
-    journal.Kind = BatchJournalKind::Trash;
-    journal.Trash = prepared;
-    journal.TrashRoot = trashRoot;
-    const String transactionDirectory = _transactionsRoot / transactionId.ToString(Guid::FormatType::N);
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    BatchRollbackPlan plan;
+    plan.TransactionId = transactionId;
+    plan.Kind = BatchRollbackKind::Trash;
+    plan.Trash = prepared;
+    plan.TrashRoot = trashRoot;
+    const String transactionDirectory = _stagingRoot / transactionId.ToString(Guid::FormatType::N);
+    if (PrepareBatchScratch(transactionDirectory, diagnostic))
         return true;
-    for (int32 i = 0; i < journal.Trash.Entries.Count(); i++)
+    for (int32 i = 0; i < plan.Trash.Entries.Count(); i++)
     {
-        const AssetTrashEntry& entry = journal.Trash.Entries[i];
+        const AssetTrashEntry& entry = plan.Trash.Entries[i];
         if (result)
         {
             result->FailureIndex = i;
@@ -2567,11 +2145,11 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
         }
         if (isCancelled())
         {
-            const bool rollbackFailed = RollbackBatchJournal(journal);
+            const bool rollbackFailed = RollbackBatch(plan);
             if (!rollbackFailed)
             {
-                CleanupEmptyTrashRoot(journal);
-                DurableDeleteDirectory(transactionDirectory);
+                CleanupEmptyTrashRoot(plan);
+                DeleteTree(transactionDirectory);
             }
             if (result)
             {
@@ -2586,18 +2164,18 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
         }
         if (MoveEntry(entry, true))
         {
-            const bool rollbackFailed = RollbackBatchJournal(journal);
+            const bool rollbackFailed = RollbackBatch(plan);
             if (result && !rollbackFailed)
                 result->RolledBackEntries = result->CompletedEntries;
             if (!rollbackFailed)
             {
-                CleanupEmptyTrashRoot(journal);
-                DurableDeleteDirectory(transactionDirectory);
+                CleanupEmptyTrashRoot(plan);
+                DeleteTree(transactionDirectory);
             }
             if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
                 Fail(diagnostic, rollbackFailed ? AssetPipelineDiagnosticCode::MigrationFailed :
                     AssetPipelineDiagnosticCode::LibraryCreationFailed, entry.OriginalPath,
-                    rollbackFailed ? TEXT("Content trash rollback failed; native recovery data was preserved.") :
+                    rollbackFailed ? TEXT("Content trash rollback failed; temporary operation data remains.") :
                         TEXT("Content trash staging failed and was rolled back."));
             if (rollbackFailed)
                 diagnostic.Related.Add(transactionDirectory);
@@ -2606,14 +2184,12 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
         if (result)
             result->CompletedEntries = i + 1;
     }
-    journal.Phase = JournalPhase::Applied;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
-        const bool rollbackFailed = RollbackBatchJournal(journal);
+        const bool rollbackFailed = RollbackBatch(plan);
         if (!rollbackFailed)
         {
-            CleanupEmptyTrashRoot(journal);
-            DurableDeleteDirectory(transactionDirectory);
+            CleanupEmptyTrashRoot(plan);
+            DeleteTree(transactionDirectory);
         }
         else
             diagnostic.Related.Add(transactionDirectory);
@@ -2621,7 +2197,7 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
     }
 
     Array<AssetOperationCommit> commits;
-    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    for (const AssetTrashEntry& entry : plan.Trash.Entries)
     {
         AssetOperationCommit commit;
         commit.TransactionId = transactionId;
@@ -2634,13 +2210,13 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
     if (_databaseCallbacks.RefreshCommitted(commits, diagnostic))
     {
         const AssetPipelineDiagnostic publicationDiagnostic = diagnostic;
-        const bool rollbackFailed = RollbackBatchJournal(journal);
+        const bool rollbackFailed = RollbackBatch(plan);
         if (result && !rollbackFailed)
             result->RolledBackEntries = result->CompletedEntries;
         if (!rollbackFailed)
         {
             Array<AssetOperationCommit> rollbackCommits;
-            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            for (const AssetTrashEntry& entry : plan.Trash.Entries)
             {
                 AssetOperationCommit rollbackCommit;
                 rollbackCommit.TransactionId = transactionId;
@@ -2652,25 +2228,23 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
             }
             AssetPipelineDiagnostic ignored;
             _databaseCallbacks.RefreshCommitted(rollbackCommits, ignored);
-            CleanupEmptyTrashRoot(journal);
-            DurableDeleteDirectory(transactionDirectory);
+            CleanupEmptyTrashRoot(plan);
+            DeleteTree(transactionDirectory);
         }
         diagnostic = publicationDiagnostic;
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
         const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
-        bool rollbackFailed = RollbackBatchJournal(journal);
+        bool rollbackFailed = RollbackBatch(plan);
         if (result && !rollbackFailed)
             result->RolledBackEntries = result->CompletedEntries;
         if (!rollbackFailed)
         {
             Array<AssetOperationCommit> rollbackCommits;
-            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            for (const AssetTrashEntry& entry : plan.Trash.Entries)
             {
                 AssetOperationCommit rollbackCommit;
                 rollbackCommit.TransactionId = transactionId;
@@ -2685,16 +2259,16 @@ bool AssetOperations::TrashEntries(const Array<AssetTrashEntryRequest>& requests
         }
         if (!rollbackFailed)
         {
-            CleanupEmptyTrashRoot(journal);
-            DurableDeleteDirectory(transactionDirectory);
+            CleanupEmptyTrashRoot(plan);
+            DeleteTree(transactionDirectory);
         }
         diagnostic = commitDiagnostic;
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    // A committed journal makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
-    DurableDeleteDirectory(transactionDirectory);
+    // A committed plan makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
+    DeleteTree(transactionDirectory);
     trash = MoveTemp(prepared);
     if (result)
     {
@@ -2811,45 +2385,43 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
     if (validate(diagnostic))
         return true;
 
-    BatchOperationJournal journal;
-    journal.TransactionId = Guid::New();
-    journal.Kind = BatchJournalKind::Restore;
-    journal.Trash = trash;
-    journal.TrashRoot = trashRoot;
-    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    BatchRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    plan.Kind = BatchRollbackKind::Restore;
+    plan.Trash = trash;
+    plan.TrashRoot = trashRoot;
+    const String transactionDirectory = _stagingRoot / plan.TransactionId.ToString(Guid::FormatType::N);
+    if (PrepareBatchScratch(transactionDirectory, diagnostic))
         return true;
-    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    for (const AssetTrashEntry& entry : plan.Trash.Entries)
     {
         if (MoveEntry(entry, false))
         {
-            const bool rollbackFailed = RollbackBatchJournal(journal);
+            const bool rollbackFailed = RollbackBatch(plan);
             if (!rollbackFailed)
-                DurableDeleteDirectory(transactionDirectory);
+                DeleteTree(transactionDirectory);
             if (diagnostic.Code == AssetPipelineDiagnosticCode::None)
                 Fail(diagnostic, rollbackFailed ? AssetPipelineDiagnosticCode::MigrationFailed :
                     AssetPipelineDiagnosticCode::LibraryCreationFailed, entry.OriginalPath,
-                    rollbackFailed ? TEXT("Content restore rollback failed; native recovery data was preserved.") :
+                    rollbackFailed ? TEXT("Content restore rollback failed; temporary operation data remains.") :
                         TEXT("Content restore failed and was rolled back."));
             if (rollbackFailed)
                 diagnostic.Related.Add(transactionDirectory);
             return true;
         }
     }
-    journal.Phase = JournalPhase::Applied;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
-        if (!RollbackBatchJournal(journal))
-            DurableDeleteDirectory(transactionDirectory);
+        if (!RollbackBatch(plan))
+            DeleteTree(transactionDirectory);
         else
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
     Array<AssetOperationCommit> commits;
-    for (const AssetTrashEntry& entry : journal.Trash.Entries)
+    for (const AssetTrashEntry& entry : plan.Trash.Entries)
     {
         AssetOperationCommit commit;
-        commit.TransactionId = journal.TransactionId;
+        commit.TransactionId = plan.TransactionId;
         commit.Kind = AssetOperationKind::Restore;
         commit.AssetGuid = entry.AssetGuid;
         commit.SourcePath = entry.TrashPath;
@@ -2863,14 +2435,14 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
     if (_databaseCallbacks.RefreshCommitted(commits, diagnostic))
     {
         const AssetPipelineDiagnostic publicationDiagnostic = diagnostic;
-        const bool rollbackFailed = RollbackBatchJournal(journal);
+        const bool rollbackFailed = RollbackBatch(plan);
         if (!rollbackFailed)
         {
             Array<AssetOperationCommit> rollbackCommits;
-            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            for (const AssetTrashEntry& entry : plan.Trash.Entries)
             {
                 AssetOperationCommit rollbackCommit;
-                rollbackCommit.TransactionId = journal.TransactionId;
+                rollbackCommit.TransactionId = plan.TransactionId;
                 rollbackCommit.Kind = AssetOperationKind::Trash;
                 rollbackCommit.AssetGuid = entry.AssetGuid;
                 rollbackCommit.SourcePath = entry.OriginalPath;
@@ -2879,25 +2451,23 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
             }
             AssetPipelineDiagnostic ignored;
             _databaseCallbacks.RefreshCommitted(rollbackCommits, ignored);
-            DurableDeleteDirectory(transactionDirectory);
+            DeleteTree(transactionDirectory);
         }
         diagnostic = publicationDiagnostic;
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
         const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
-        bool rollbackFailed = RollbackBatchJournal(journal);
+        bool rollbackFailed = RollbackBatch(plan);
         if (!rollbackFailed)
         {
             Array<AssetOperationCommit> rollbackCommits;
-            for (const AssetTrashEntry& entry : journal.Trash.Entries)
+            for (const AssetTrashEntry& entry : plan.Trash.Entries)
             {
                 AssetOperationCommit rollbackCommit;
-                rollbackCommit.TransactionId = journal.TransactionId;
+                rollbackCommit.TransactionId = plan.TransactionId;
                 rollbackCommit.Kind = AssetOperationKind::Trash;
                 rollbackCommit.AssetGuid = entry.AssetGuid;
                 rollbackCommit.SourcePath = entry.OriginalPath;
@@ -2908,15 +2478,15 @@ bool AssetOperations::RestoreEntries(const AssetTrashBatch& trash, AssetPipeline
             rollbackFailed = _databaseCallbacks.RefreshCommitted(rollbackCommits, rollbackDiagnostic);
         }
         if (!rollbackFailed)
-            DurableDeleteDirectory(transactionDirectory);
+            DeleteTree(transactionDirectory);
         diagnostic = commitDiagnostic;
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    // A committed journal makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
-    DurableDeleteDirectory(transactionDirectory);
-    CleanupEmptyTrashRoot(journal);
+    // A committed plan makes interrupted cleanup recoverable, so cleanup failure is not an operation failure.
+    DeleteTree(transactionDirectory);
+    CleanupEmptyTrashRoot(plan);
     _stateLocker.Lock();
     for (const AssetOperationCommit& commit : commits)
         _selfWrites.Add(commit.SelfWrites);
@@ -3000,52 +2570,48 @@ bool AssetOperations::DiscardTrash(const AssetTrashBatch& trash, AssetPipelineDi
     if (validate(diagnostic))
         return true;
 
-    BatchOperationJournal journal;
-    journal.TransactionId = Guid::New();
-    journal.Kind = BatchJournalKind::Discard;
-    journal.Trash = trash;
-    journal.TrashRoot = trashRoot;
-    const String transactionDirectory = _transactionsRoot / journal.TransactionId.ToString(Guid::FormatType::N);
-    journal.DiscardStageRoot = transactionDirectory / TEXT("discard.stage");
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
+    BatchRollbackPlan plan;
+    plan.TransactionId = Guid::New();
+    plan.Kind = BatchRollbackKind::Discard;
+    plan.Trash = trash;
+    plan.TrashRoot = trashRoot;
+    const String transactionDirectory = _stagingRoot / plan.TransactionId.ToString(Guid::FormatType::N);
+    plan.DiscardStageRoot = transactionDirectory / TEXT("discard.stage");
+    if (PrepareBatchScratch(transactionDirectory, diagnostic))
         return true;
-    if (DurableMove(journal.DiscardStageRoot, trashRoot, false))
+    if (MovePath(plan.DiscardStageRoot, trashRoot, false))
     {
-        const bool rollbackFailed = RollbackBatchJournal(journal);
+        const bool rollbackFailed = RollbackBatch(plan);
         if (!rollbackFailed)
-            DurableDeleteDirectory(transactionDirectory);
+            DeleteTree(transactionDirectory);
         Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, trashRoot,
             TEXT("Content trash discard could not enter its recoverable staging boundary."));
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Applied;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
         const AssetPipelineDiagnostic appliedDiagnostic = diagnostic;
-        const bool rollbackFailed = RollbackBatchJournal(journal);
+        const bool rollbackFailed = RollbackBatch(plan);
         if (!rollbackFailed)
-            DurableDeleteDirectory(transactionDirectory);
+            DeleteTree(transactionDirectory);
         diagnostic = appliedDiagnostic;
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
-    journal.Phase = JournalPhase::Committed;
-    if (SaveBatchJournal(transactionDirectory, journal, diagnostic))
     {
         const AssetPipelineDiagnostic commitDiagnostic = diagnostic;
-        const bool rollbackFailed = RollbackBatchJournal(journal);
+        const bool rollbackFailed = RollbackBatch(plan);
         if (!rollbackFailed)
-            DurableDeleteDirectory(transactionDirectory);
+            DeleteTree(transactionDirectory);
         diagnostic = commitDiagnostic;
         if (rollbackFailed)
             diagnostic.Related.Add(transactionDirectory);
         return true;
     }
     // A committed discard owns the staged directory. Startup recovery retries cleanup if this delete is interrupted.
-    DurableDeleteDirectory(transactionDirectory);
+    DeleteTree(transactionDirectory);
     diagnostic = AssetPipelineDiagnostic();
     return false;
 }
@@ -3128,217 +2694,4 @@ void AssetOperations::DrainSelfWrites(Array<AssetOperationSelfWrite>& result)
     result = MoveTemp(_selfWrites);
     _selfWrites.Clear();
     _stateLocker.Unlock();
-}
-
-bool AssetOperations::RecoverIncompleteTransactions(Array<AssetPipelineDiagnostic>& diagnostics)
-{
-    diagnostics.Clear();
-    if (!FileSystem::DirectoryExists(_transactionsRoot))
-        return false;
-    Array<String> directories;
-    if (FileSystem::GetChildDirectories(directories, _transactionsRoot))
-    {
-        AssetPipelineDiagnostic diagnostic;
-        Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, _transactionsRoot,
-            TEXT("Cannot enumerate asset operation transaction recovery state."));
-        diagnostics.Add(MoveTemp(diagnostic));
-        return true;
-    }
-    for (const String& directory : directories)
-    {
-        if (FileSystem::FileExists(MetadataBatchJournalPath(directory)))
-        {
-            AssetPipelineDiagnostic diagnostic;
-            if (RecoverMetadataBatchJournal(directory, _projectRoot, _contentRoot, _libraryRoot, diagnostic))
-                diagnostics.Add(MoveTemp(diagnostic));
-            continue;
-        }
-        if (FileSystem::FileExists(BatchJournalPath(directory)))
-        {
-            BatchOperationJournal batch;
-            AssetPipelineDiagnostic diagnostic;
-            if (LoadBatchJournal(directory, batch, diagnostic))
-            {
-                diagnostics.Add(MoveTemp(diagnostic));
-                continue;
-            }
-            const String expectedTransactionDirectory = _transactionsRoot /
-                batch.TransactionId.ToString(Guid::FormatType::N);
-            const String expectedTrashRoot = _trashRoot /
-                batch.Trash.TransactionId.ToString(Guid::FormatType::N);
-            const String fragmentsRoot = SceneFragmentStore::GetRootPath(_projectRoot);
-            bool unsafe = !FileSystem::AreFilePathsEquivalent(directory, expectedTransactionDirectory) ||
-                (batch.Kind == BatchJournalKind::Trash && batch.TransactionId != batch.Trash.TransactionId) ||
-                (batch.Kind == BatchJournalKind::Discard &&
-                    !FileSystem::AreFilePathsEquivalent(batch.DiscardStageRoot,
-                        String(directory) / TEXT("discard.stage"))) ||
-                (batch.Kind != BatchJournalKind::Discard && batch.DiscardStageRoot.HasChars());
-            if (batch.Kind == BatchJournalKind::Copy || batch.Kind == BatchJournalKind::ContentCopy)
-                unsafe |= batch.TransactionId != batch.Trash.TransactionId || batch.TrashRoot.HasChars();
-            else
-                unsafe |= !FileSystem::AreFilePathsEquivalent(batch.TrashRoot, expectedTrashRoot);
-            for (const AssetTrashEntry& entry : batch.Trash.Entries)
-            {
-                AssetPathPolicy::ProjectPath original;
-                unsafe |= NormalizeSource(entry.OriginalPath, original, diagnostic) ||
-                    !FileSystem::AreFilePathsEquivalent(original.AbsolutePath, entry.OriginalPath) ||
-                    FileSystem::AreFilePathsEquivalent(original.AbsolutePath, _contentRoot);
-                if (batch.Kind == BatchJournalKind::Copy)
-                {
-                    AssetPathPolicy::ProjectPath destination;
-                    unsafe |= NormalizeSource(entry.TrashPath, destination, diagnostic) ||
-                        !FileSystem::AreFilePathsEquivalent(destination.AbsolutePath, entry.TrashPath) ||
-                        FileSystem::AreFilePathsEquivalent(destination.AbsolutePath, _contentRoot) ||
-                        FileSystem::AreFilePathsEquivalent(entry.OriginalPath, entry.TrashPath) ||
-                        entry.IsFolder || !entry.AssetGuid.IsValid() || entry.Fragments.Count() > 1 ||
-                        !FileSystem::AreFilePathsEquivalent(entry.OriginalMetaPath, MetaPath(entry.OriginalPath)) ||
-                        !FileSystem::AreFilePathsEquivalent(entry.TrashMetaPath, MetaPath(entry.TrashPath));
-                    AssetMeta sourceMeta;
-                    if (batch.Phase != JournalPhase::Committed)
-                    {
-                        AssetPipelineDiagnostic sourceDiagnostic;
-                        unsafe |= AssetMeta::Load(entry.OriginalMetaPath, sourceMeta, sourceDiagnostic) ||
-                            sourceMeta.ID == entry.AssetGuid;
-                    }
-                    if (entry.Fragments.HasItems())
-                    {
-                        unsafe |= !FileSystem::AreFilePathsEquivalent(entry.Fragments[0].TrashPath,
-                                SceneFragmentStore::GetScenePath(_projectRoot, entry.AssetGuid));
-                        if (batch.Phase == JournalPhase::Committed)
-                        {
-                            unsafe |= !AssetPathPolicy::IsSameOrChild(entry.Fragments[0].OriginalPath,
-                                fragmentsRoot) || FileSystem::AreFilePathsEquivalent(
-                                    entry.Fragments[0].OriginalPath, fragmentsRoot);
-                        }
-                        else
-                        {
-                            unsafe |= !FileSystem::AreFilePathsEquivalent(entry.Fragments[0].OriginalPath,
-                                SceneFragmentStore::GetScenePath(_projectRoot, sourceMeta.ID));
-                        }
-                    }
-                    continue;
-                }
-                if (batch.Kind == BatchJournalKind::ContentCopy)
-                {
-                    AssetPathPolicy::ProjectPath destination;
-                    const bool hasMetadataPair = entry.OriginalMetaPath.HasChars() || entry.TrashMetaPath.HasChars();
-                    unsafe |= NormalizeSource(entry.TrashPath, destination, diagnostic) ||
-                        !FileSystem::AreFilePathsEquivalent(destination.AbsolutePath, entry.TrashPath) ||
-                        FileSystem::AreFilePathsEquivalent(destination.AbsolutePath, _contentRoot) ||
-                        FileSystem::AreFilePathsEquivalent(entry.OriginalPath, entry.TrashPath) ||
-                        entry.Fragments.Count() > 1 ||
-                        entry.OriginalMetaPath.HasChars() != entry.TrashMetaPath.HasChars() ||
-                        (entry.IsFolder && (entry.AssetGuid.IsValid() || hasMetadataPair || entry.Fragments.HasItems())) ||
-                        (!entry.IsFolder && !hasMetadataPair && entry.AssetGuid.IsValid() &&
-                            (!IsMetaPath(entry.OriginalPath) || !IsMetaPath(entry.TrashPath)));
-                    if (hasMetadataPair)
-                    {
-                        unsafe |= entry.IsFolder || !entry.AssetGuid.IsValid() ||
-                            !FileSystem::AreFilePathsEquivalent(entry.OriginalMetaPath, MetaPath(entry.OriginalPath)) ||
-                            !FileSystem::AreFilePathsEquivalent(entry.TrashMetaPath, MetaPath(entry.TrashPath));
-                    }
-                    AssetMeta sourceMeta;
-                    if (entry.AssetGuid.IsValid() && batch.Phase != JournalPhase::Committed)
-                    {
-                        AssetPipelineDiagnostic sourceDiagnostic;
-                        const String& sourceMetaPath = hasMetadataPair ? entry.OriginalMetaPath : entry.OriginalPath;
-                        unsafe |= AssetMeta::Load(sourceMetaPath, sourceMeta, sourceDiagnostic) ||
-                            sourceMeta.ID == entry.AssetGuid;
-                    }
-                    if (entry.Fragments.HasItems())
-                    {
-                        unsafe |= !entry.AssetGuid.IsValid() || !hasMetadataPair ||
-                            !FileSystem::AreFilePathsEquivalent(entry.Fragments[0].TrashPath,
-                                SceneFragmentStore::GetScenePath(_projectRoot, entry.AssetGuid)) ||
-                            !AssetPathPolicy::IsSameOrChild(entry.Fragments[0].OriginalPath, fragmentsRoot) ||
-                            FileSystem::AreFilePathsEquivalent(entry.Fragments[0].OriginalPath, fragmentsRoot);
-                        if (batch.Phase != JournalPhase::Committed)
-                            unsafe |= !FileSystem::AreFilePathsEquivalent(entry.Fragments[0].OriginalPath,
-                                SceneFragmentStore::GetScenePath(_projectRoot, sourceMeta.ID));
-                    }
-                    continue;
-                }
-                unsafe |= !AssetPathPolicy::IsSameOrChild(entry.TrashPath, batch.TrashRoot) ||
-                    FileSystem::AreFilePathsEquivalent(entry.TrashPath, batch.TrashRoot) ||
-                    (entry.OriginalMetaPath.HasChars() &&
-                        (!FileSystem::AreFilePathsEquivalent(entry.OriginalMetaPath, MetaPath(entry.OriginalPath)) ||
-                         !FileSystem::AreFilePathsEquivalent(entry.TrashMetaPath, entry.TrashPath + TEXT(".meta")))) ||
-                    (!entry.OriginalMetaPath.HasChars() &&
-                        (entry.TrashMetaPath.HasChars() || entry.AssetGuid.IsValid()));
-                for (const AssetTrashFragment& fragment : entry.Fragments)
-                {
-                    unsafe |= !AssetPathPolicy::IsSameOrChild(fragment.OriginalPath, fragmentsRoot) ||
-                        FileSystem::AreFilePathsEquivalent(fragment.OriginalPath, fragmentsRoot) ||
-                        !AssetPathPolicy::IsSameOrChild(fragment.TrashPath, batch.TrashRoot) ||
-                        FileSystem::AreFilePathsEquivalent(fragment.TrashPath, batch.TrashRoot);
-                }
-            }
-            if (batch.Kind == BatchJournalKind::Copy || batch.Kind == BatchJournalKind::ContentCopy)
-            {
-                for (int32 i = 0; i < batch.Trash.Entries.Count(); i++)
-                {
-                    for (int32 j = 0; j < i; j++)
-                    {
-                        unsafe |= (batch.Trash.Entries[i].AssetGuid.IsValid() &&
-                                batch.Trash.Entries[i].AssetGuid == batch.Trash.Entries[j].AssetGuid) ||
-                            FileSystem::AreFilePathsEquivalent(batch.Trash.Entries[i].TrashPath,
-                                batch.Trash.Entries[j].TrashPath) ||
-                            (batch.Trash.Entries[i].TrashMetaPath.HasChars() &&
-                                FileSystem::AreFilePathsEquivalent(batch.Trash.Entries[i].TrashMetaPath,
-                                    batch.Trash.Entries[j].TrashPath)) ||
-                            (batch.Trash.Entries[j].TrashMetaPath.HasChars() &&
-                                FileSystem::AreFilePathsEquivalent(batch.Trash.Entries[j].TrashMetaPath,
-                                    batch.Trash.Entries[i].TrashPath));
-                    }
-                }
-            }
-            if (unsafe)
-            {
-                Fail(diagnostic, AssetPipelineDiagnosticCode::ArtifactInvalid, directory,
-                    TEXT("Batch asset operation recovery paths failed canonical root validation."));
-                diagnostics.Add(MoveTemp(diagnostic));
-                continue;
-            }
-            if (batch.Phase != JournalPhase::Committed && RollbackBatchJournal(batch))
-            {
-                Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, batch.TrashRoot,
-                    TEXT("Incomplete batch asset operation could not be rolled back; recovery data was preserved."));
-                diagnostic.Related.Add(directory);
-                diagnostics.Add(MoveTemp(diagnostic));
-                continue;
-            }
-            if ((batch.Kind == BatchJournalKind::Trash && batch.Phase != JournalPhase::Committed) ||
-                (batch.Kind == BatchJournalKind::Restore && batch.Phase == JournalPhase::Committed))
-                CleanupEmptyTrashRoot(batch);
-            if (DurableDeleteDirectory(directory))
-            {
-                Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
-                    TEXT("Recovered batch asset operation directory could not be removed."));
-                diagnostics.Add(MoveTemp(diagnostic));
-            }
-            continue;
-        }
-        OperationJournal journal;
-        AssetPipelineDiagnostic diagnostic;
-        if (LoadJournal(directory, journal, diagnostic))
-        {
-            diagnostics.Add(MoveTemp(diagnostic));
-            continue;
-        }
-        if (journal.Phase != JournalPhase::Committed && RollbackJournal(journal))
-        {
-            Fail(diagnostic, AssetPipelineDiagnosticCode::MigrationFailed, journal.SourcePath,
-                TEXT("Incomplete asset operation could not be rolled back; recovery data was preserved."));
-            diagnostic.Related.Add(directory);
-            diagnostics.Add(MoveTemp(diagnostic));
-            continue;
-        }
-        if (DurableDeleteDirectory(directory))
-        {
-            Fail(diagnostic, AssetPipelineDiagnosticCode::LibraryCreationFailed, directory,
-                TEXT("Recovered asset operation directory could not be removed."));
-            diagnostics.Add(MoveTemp(diagnostic));
-        }
-    }
-    return diagnostics.HasItems();
 }

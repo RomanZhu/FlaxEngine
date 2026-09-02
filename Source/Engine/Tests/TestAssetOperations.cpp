@@ -316,9 +316,6 @@ TEST_CASE("Asset operations preserve exact identity and clone copy object mappin
     REQUIRE(writes.Count() == 1);
     CHECK(FileSystem::AreFilePathsEquivalent(writes[0].Path, moved));
     CHECK(writes[0].Content == registeredHash);
-    Array<AssetPipelineDiagnostic> recoveryDiagnostics;
-    CHECK_FALSE(operations.RecoverIncompleteTransactions(recoveryDiagnostics));
-    CHECK(recoveryDiagnostics.IsEmpty());
 }
 
 TEST_CASE("Asset operations enforce persistent GUID lifecycle through scanner publication")
@@ -1124,7 +1121,7 @@ TEST_CASE("Asset operations atomically remap external-actors scene copies")
         CHECK(failedFragmentDirectories.Contains(directory));
 }
 
-TEST_CASE("Default metadata batches roll back and recover native staged publication")
+TEST_CASE("Default metadata batches roll back failed native staged publication")
 {
     const Guid testId = Guid::New();
     const String contentRoot = Globals::ProjectContentFolder /
@@ -1185,28 +1182,8 @@ TEST_CASE("Default metadata batches roll back and recover native staged publicat
     CHECK_FALSE(FileSystem::FileExists(staging[0]));
     CHECK_FALSE(FileSystem::FileExists(staging[1]));
 
-    entries = Stage();
-    CHECK(AssetOperationService::PublishDefaultMetadataBatch(entries,
-        AssetDefaultMetadataBatchFailurePoint::AfterFirstMetadataWithoutRollback));
     AssetMeta active;
     AssetPipelineDiagnostic diagnostic;
-    REQUIRE_FALSE(AssetMeta::Load(firstMeta, active, diagnostic));
-    CHECK(active.ID == entries[0].AssetID);
-
-    OperationProcessor processor;
-    OperationDatabase database;
-    AssetOperations recovery(Globals::ProjectFolder, Globals::ProjectContentFolder,
-        Globals::ProjectLibraryFolder, processor, database);
-    REQUIRE_FALSE(recovery.Initialize(diagnostic));
-    Array<AssetPipelineDiagnostic> recoveryDiagnostics;
-    REQUIRE_FALSE(recovery.RecoverIncompleteTransactions(recoveryDiagnostics));
-    CHECK(recoveryDiagnostics.IsEmpty());
-    REQUIRE_FALSE(File::ReadAllBytes(firstMeta, restoredMetadata));
-    CHECK(EqualBytes(foreignMetadata, restoredMetadata));
-    CHECK_FALSE(FileSystem::FileExists(second + TEXT(".meta")));
-    CHECK_FALSE(FileSystem::FileExists(staging[0]));
-    CHECK_FALSE(FileSystem::FileExists(staging[1]));
-
     entries = Stage();
     REQUIRE_FALSE(AssetOperationService::PublishDefaultMetadataBatch(entries));
     REQUIRE_FALSE(AssetMeta::Load(firstMeta, active, diagnostic));

@@ -64,7 +64,6 @@ enum class AssetDefaultMetadataBatchFailurePoint : byte
 {
     None,
     AfterFirstMetadata,
-    AfterFirstMetadataWithoutRollback,
 };
 
 /// <summary>Recoverable trash location returned by delete/trash operations.</summary>
@@ -202,14 +201,14 @@ public:
         AssetPipelineDiagnostic& diagnostic) = 0;
 };
 
-/// <summary>Crash-recoverable source-plus-meta operations rooted in one project.</summary>
+/// <summary>Atomic source-plus-meta operations rooted in one project.</summary>
 class FLAXENGINE_API AssetOperations : public NonCopyable
 {
 private:
     String _projectRoot;
     String _contentRoot;
     String _libraryRoot;
-    String _transactionsRoot;
+    String _stagingRoot;
     String _trashRoot;
     AssetSourceRootRegistry _rootRegistry;
     bool _rootRegistryValid = false;
@@ -247,8 +246,6 @@ public:
         IAssetModificationProcessor& modificationProcessor, IAssetOperationDatabaseCallbacks& databaseCallbacks);
 
     bool Initialize(AssetPipelineDiagnostic& diagnostic);
-    bool RecoverIncompleteTransactions(Array<AssetPipelineDiagnostic>& diagnostics);
-
     bool CreateAsset(const StringView& destination, const Span<byte>& sourceData, const AssetMeta& meta,
         AssetPipelineDiagnostic& diagnostic);
     bool ImportAsset(const StringView& externalSource, const StringView& destination, const AssetMeta& meta,
