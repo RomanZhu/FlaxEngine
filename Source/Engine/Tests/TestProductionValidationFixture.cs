@@ -69,12 +69,15 @@ namespace FlaxEngine.Tests
                 Assert.Less(timer.Elapsed, ProductionValidationFixture.ImportTimeout);
 
                 var records = GetModelRecords(fixture);
-                Assert.GreaterOrEqual(records.Length, 3, "The representative GLB did not expose its model family.");
+                Assert.GreaterOrEqual(records.Length, 5, "The representative GLB did not expose its model family.");
                 var main = records.Single(x => x.IsMain);
                 var children = records.Where(x => !x.IsMain).ToArray();
                 Assert.AreEqual(fixture.ModelId, main.ID);
                 Assert.AreEqual(typeof(Model).FullName, main.TypeName);
                 Assert.IsTrue(children.All(x => x.ID != Guid.Empty && x.SourceAssetID == fixture.ModelId));
+                Assert.IsTrue(children.Any(x => x.TypeName == typeof(Model).FullName), "Mesh subasset type was missing.");
+                Assert.IsTrue(children.Any(x => x.TypeName == typeof(Material).FullName), "Material subasset type was missing.");
+                Assert.IsTrue(children.Any(x => x.TypeName == typeof(Animation).FullName), "Animation subasset type was missing.");
                 Assert.IsTrue(records.All(x => x.TypeName != typeof(RawDataAsset).FullName), "Model family fell back to RawData.");
                 CollectionAssert.AllItemsAreUnique(records.Select(x => x.ID).ToArray());
                 CollectionAssert.AllItemsAreUnique(records.Select(x => x.LocalId).ToArray());
@@ -85,8 +88,10 @@ namespace FlaxEngine.Tests
 
                 var stableChildren = children.ToDictionary(x => x.SubAssetKey, x => x.ID, StringComparer.Ordinal);
                 Assert.GreaterOrEqual(stableChildren.Count, 2);
+                foreach (var record in records)
+                    AssertConcreteProjectType(record);
                 AssertModelProjectRoute(main);
-                AssertModelProjectRoute(children[0]);
+                AssertModelProjectRoute(children.First(x => x.TypeName == typeof(Model).FullName));
 
                 var model = FlaxEngine.Content.LoadAssetAsync<Model>(main.ID);
                 Assert.NotNull(model);
@@ -157,31 +162,55 @@ namespace FlaxEngine.Tests
             StringAssert.Contains("ModelImportAssetPropertiesProxy", inspected[0].GetType().Name);
         }
 
+        private static void AssertConcreteProjectType(AssetDatabaseRecordInfo record)
+        {
+            var item = FlaxEditor.Editor.Instance.ContentDatabase.FindAsset(record.ID);
+            Assert.NotNull(item, "Project did not expose model-family object " + record.ID);
+            Assert.IsInstanceOf<BinaryAssetItem>(item);
+            Assert.IsFalse(item.IsOfType<RawDataAsset>());
+            if (record.TypeName == typeof(Model).FullName)
+            {
+                Assert.IsInstanceOf<ModelItem>(item);
+                Assert.AreEqual(ContentItemSearchFilter.Model, item.SearchFilter);
+            }
+            else if (record.TypeName == typeof(Material).FullName)
+            {
+                Assert.IsTrue(item.IsOfType<Material>());
+                Assert.AreEqual(ContentItemSearchFilter.Material, item.SearchFilter);
+            }
+            else if (record.TypeName == typeof(Animation).FullName)
+            {
+                Assert.IsTrue(item.IsOfType<Animation>());
+                Assert.AreEqual(ContentItemSearchFilter.Animation, item.SearchFilter);
+            }
+        }
+
         private static void WriteTwoMeshGlb(string path, bool reversed)
         {
             var meshes = reversed
-                ? "{\"name\":\"Beta\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]},{\"name\":\"Alpha\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}"
-                : "{\"name\":\"Alpha\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]},{\"name\":\"Beta\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}";
+                ? "{\"name\":\"Beta\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]},{\"name\":\"Alpha\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}"
+                : "{\"name\":\"Alpha\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]},{\"name\":\"Beta\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}";
             var nodes = reversed
                 ? "{\"name\":\"Beta\",\"mesh\":0},{\"name\":\"Alpha\",\"mesh\":1}"
                 : "{\"name\":\"Alpha\",\"mesh\":0},{\"name\":\"Beta\",\"mesh\":1}";
-            var json = "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":44}]," +
-                       "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36,\"target\":34962},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6,\"target\":34963}]," +
-                       "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1,1,0],\"min\":[0,0,0]},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}]," +
-                       "\"meshes\":[" + meshes + "],\"nodes\":[" + nodes + "],\"scenes\":[{\"nodes\":[0,1]}],\"scene\":0}";
+            var json = "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":76}]," +
+                       "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":36,\"target\":34962},{\"buffer\":0,\"byteOffset\":36,\"byteLength\":6,\"target\":34963},{\"buffer\":0,\"byteOffset\":44,\"byteLength\":8},{\"buffer\":0,\"byteOffset\":52,\"byteLength\":24}]," +
+                       "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\",\"max\":[1,1,0],\"min\":[0,0,0]},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"},{\"bufferView\":2,\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\",\"max\":[1],\"min\":[0]},{\"bufferView\":3,\"componentType\":5126,\"count\":2,\"type\":\"VEC3\"}]," +
+                       "\"materials\":[{\"name\":\"FixtureMaterial\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0,0,1]}}],\"meshes\":[" + meshes + "],\"nodes\":[" + nodes + "]," +
+                       "\"animations\":[{\"name\":\"Idle\",\"samplers\":[{\"input\":2,\"output\":3,\"interpolation\":\"LINEAR\"}],\"channels\":[{\"sampler\":0,\"target\":{\"node\":0,\"path\":\"translation\"}}]}],\"scenes\":[{\"nodes\":[0,1]}],\"scene\":0}";
             var jsonBytes = new UTF8Encoding(false).GetBytes(json);
             var paddedJsonLength = (jsonBytes.Length + 3) & ~3;
             using var stream = File.Create(path);
             using var writer = new BinaryWriter(stream, Encoding.UTF8);
             writer.Write(0x46546c67u);
             writer.Write(2u);
-            writer.Write((uint)(12 + 8 + paddedJsonLength + 8 + 44));
+            writer.Write((uint)(12 + 8 + paddedJsonLength + 8 + 76));
             writer.Write((uint)paddedJsonLength);
             writer.Write(0x4e4f534au);
             writer.Write(jsonBytes);
             for (var i = jsonBytes.Length; i < paddedJsonLength; i++)
                 writer.Write((byte)' ');
-            writer.Write(44u);
+            writer.Write(76u);
             writer.Write(0x004e4942u);
             foreach (var value in new[] { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f })
                 writer.Write(value);
@@ -189,6 +218,14 @@ namespace FlaxEngine.Tests
             writer.Write((ushort)1);
             writer.Write((ushort)2);
             writer.Write((ushort)0);
+            writer.Write(0.0f);
+            writer.Write(1.0f);
+            writer.Write(0.0f);
+            writer.Write(0.0f);
+            writer.Write(0.0f);
+            writer.Write(1.0f);
+            writer.Write(0.0f);
+            writer.Write(0.0f);
         }
 
         public static int RunStagesReducedCanonicalSourceCohortWithoutImporting()
