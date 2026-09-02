@@ -3,7 +3,9 @@
 #if FLAX_TESTS
 using System;
 using System.IO;
+using FlaxEditor;
 using FlaxEditor.Content;
+using FlaxEditor.Content.Thumbnails;
 using NUnit.Framework;
 
 namespace FlaxEngine.Tests
@@ -56,9 +58,78 @@ namespace FlaxEngine.Tests
             item.Dispose();
         }
 
+        [Test]
+        public void LastGoodThumbnailSurvivesForcedFailureUntilExactReplacement()
+        {
+            var item = new ContentFolder(ContentFolderType.Content, Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")), null);
+            var lastGood = Editor.Instance.Icons.Document128;
+            var replacement = Editor.Instance.Icons.Folder128;
+            Assert.IsTrue(lastGood.IsValid);
+            Assert.IsTrue(replacement.IsValid);
+            Assert.AreNotEqual(lastGood, replacement);
+
+            item.Thumbnail = lastGood;
+            item.SetStaleThumbnail(lastGood);
+            item.NotifyThumbnailRequestQueued(true);
+            item.NotifyThumbnailRequestFailed(true);
+
+            Assert.AreEqual(lastGood, item.Thumbnail, "A failed replacement must retain the last-good pixels.");
+            Assert.IsTrue(item.IsThumbnailStaleForTesting);
+            Assert.IsFalse(item.IsThumbnailRequestQueuedForTesting);
+            Assert.IsTrue(item.IsThumbnailRequestFailedForTesting);
+            Assert.IsTrue(item.IsThumbnailForceRetryForTesting);
+
+            item.NotifyThumbnailRequestQueued(true);
+            item.Thumbnail = replacement;
+            Assert.AreEqual(replacement, item.Thumbnail);
+            Assert.IsFalse(item.IsThumbnailStaleForTesting);
+            Assert.IsFalse(item.IsThumbnailRequestQueuedForTesting);
+            Assert.IsFalse(item.IsThumbnailRequestFailedForTesting);
+            Assert.IsFalse(item.IsThumbnailForceRetryForTesting);
+            item.Dispose();
+        }
+
+        [Test]
+        public void ForcedUndoReplacementCannotPublishLaterPixels()
+        {
+            var item = new ContentFolder(ContentFolderType.Content, Path.Combine(Globals.ProjectContentFolder, Guid.NewGuid().ToString("N")), null);
+            var beforeEdit = Editor.Instance.Icons.Document128;
+            var afterEdit = Editor.Instance.Icons.Folder128;
+
+            item.Thumbnail = afterEdit;
+            item.SetStaleThumbnail(afterEdit);
+            item.NotifyThumbnailRequestQueued(true);
+            Assert.AreEqual(afterEdit, item.Thumbnail, "Undo regeneration must retain marked later pixels while queued.");
+            Assert.IsTrue(item.IsThumbnailStaleForTesting);
+
+            item.Thumbnail = beforeEdit;
+            Assert.AreEqual(beforeEdit, item.Thumbnail, "The matching undo replacement must win.");
+            Assert.IsFalse(item.IsThumbnailStaleForTesting);
+            Assert.IsFalse(item.IsThumbnailForceRetryForTesting);
+            item.Dispose();
+        }
+
+        [Test]
+        public void ExactArtifactVersionIsImmutableAndRejectsSupersession()
+        {
+            var requested = Guid.NewGuid();
+            var newer = Guid.NewGuid();
+            var cacheVersionField = typeof(ThumbnailRequest).GetField(nameof(ThumbnailRequest.CacheVersion));
+            Assert.IsNotNull(cacheVersionField);
+            Assert.IsTrue(cacheVersionField.IsInitOnly, "A queued publication must not be relabeled to a newer artifact.");
+            Assert.IsFalse(ThumbnailRequest.IsArtifactVersionSuperseded(requested, requested));
+            Assert.IsTrue(ThumbnailRequest.IsArtifactVersionSuperseded(requested, newer));
+            Assert.IsFalse(ThumbnailRequest.IsArtifactVersionSuperseded(Guid.Empty, newer));
+            Assert.IsFalse(ThumbnailRequest.IsArtifactVersionSuperseded(requested, Guid.Empty));
+        }
+
         public static int RunOrdinaryOwnershipDoesNotCreateThumbnailDemand()
         {
-            new TestThumbnailDemand().OrdinaryOwnershipDoesNotCreateThumbnailDemand();
+            var tests = new TestThumbnailDemand();
+            tests.OrdinaryOwnershipDoesNotCreateThumbnailDemand();
+            tests.LastGoodThumbnailSurvivesForcedFailureUntilExactReplacement();
+            tests.ForcedUndoReplacementCannotPublishLaterPixels();
+            tests.ExactArtifactVersionIsImmutableAndRejectsSupersession();
             return 0;
         }
     }

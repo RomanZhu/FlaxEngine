@@ -9,7 +9,7 @@
 #include "Engine/Scripting/ManagedCLR/MMethod.h"
 #include "Engine/Scripting/ManagedCLR/MUtils.h"
 
-TEST_CASE("Visible thumbnail demand expires without removing ordinary ownership")
+TEST_CASE("Visible thumbnail demand preserves exact replacement lifecycle")
 {
 #if USE_CSHARP && USE_NETCORE
     MClass* testClass = Scripting::FindClass("FlaxEngine.Tests.TestThumbnailDemand");

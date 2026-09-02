@@ -114,12 +114,17 @@ namespace FlaxEditor.Content.Thumbnails
             ForceRegenerate = forceRegenerate;
         }
 
+        internal static bool IsArtifactVersionSuperseded(Guid requestedVersion, Guid currentVersion)
+        {
+            return requestedVersion != Guid.Empty && currentVersion != Guid.Empty && currentVersion != requestedVersion;
+        }
+
         internal void Update()
         {
             if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
             {
                 var currentVersion = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(Item.ID);
-                if (CacheVersion != Guid.Empty && currentVersion != Guid.Empty && currentVersion != CacheVersion)
+                if (IsArtifactVersionSuperseded(CacheVersion, currentVersion))
                 {
                     FailureMessage = "The requested runtime artifact was superseded before its thumbnail could be loaded.";
                     State = States.Failed;
@@ -175,7 +180,7 @@ namespace FlaxEditor.Content.Thumbnails
             if (Item.IsCanonicalSource)
             {
                 var currentVersion = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(Item.ID);
-                if (CacheVersion != Guid.Empty && currentVersion != Guid.Empty && currentVersion != CacheVersion)
+                if (IsArtifactVersionSuperseded(CacheVersion, currentVersion))
                 {
                     FailureMessage = "The requested runtime artifact was superseded before thumbnail preparation.";
                     State = States.Failed;

@@ -214,6 +214,13 @@ namespace FlaxEditor.Content
         private bool _thumbnailForceRetry;
         private DateTime _thumbnailRetryUtc;
 
+#if FLAX_TESTS
+        internal bool IsThumbnailStaleForTesting => _thumbnailStale;
+        internal bool IsThumbnailRequestQueuedForTesting => _thumbnailRequestQueued;
+        internal bool IsThumbnailRequestFailedForTesting => _thumbnailRequestFailed;
+        internal bool IsThumbnailForceRetryForTesting => _thumbnailForceRetry;
+#endif
+
         /// <summary>
         /// Gets the type of the item.
         /// </summary>
