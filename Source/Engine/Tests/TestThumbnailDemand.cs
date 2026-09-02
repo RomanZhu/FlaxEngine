@@ -124,6 +124,20 @@ namespace FlaxEngine.Tests
         }
 
         [Test]
+        public void NewlyDuplicatedAssetRestartsWithItsPublishedExactVersion()
+        {
+            var sourceVersion = Guid.NewGuid();
+            var duplicateVersion = Guid.NewGuid();
+
+            Assert.IsFalse(ThumbnailRequest.ShouldRestartWithExactVersion(Guid.Empty, Guid.Empty));
+            Assert.IsTrue(ThumbnailRequest.ShouldRestartWithExactVersion(Guid.Empty, duplicateVersion));
+            Assert.IsFalse(ThumbnailRequest.ShouldRestartWithExactVersion(sourceVersion, sourceVersion));
+            Assert.IsFalse(ThumbnailRequest.ShouldRestartWithExactVersion(sourceVersion, duplicateVersion));
+            Assert.IsTrue(ThumbnailRequest.IsArtifactVersionSuperseded(sourceVersion, duplicateVersion),
+                "The duplicate must not reuse the source asset's cache identity.");
+        }
+
+        [Test]
         public void LoadedMaterialWaitsForRenderingShaderReadiness()
         {
             Assert.IsFalse(ThumbnailsModule.HasMaterialRenderingQuality(false, false));
@@ -150,6 +164,7 @@ namespace FlaxEngine.Tests
             tests.LastGoodThumbnailSurvivesForcedFailureUntilExactReplacement();
             tests.ForcedUndoReplacementCannotPublishLaterPixels();
             tests.ExactArtifactVersionIsImmutableAndRejectsSupersession();
+            tests.NewlyDuplicatedAssetRestartsWithItsPublishedExactVersion();
             tests.LoadedMaterialWaitsForRenderingShaderReadiness();
             tests.TreeRowsPreferGeneratedThumbnails();
             return 0;

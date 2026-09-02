@@ -818,7 +818,15 @@ namespace FlaxEditor.Content.Thumbnails
                     try
                     {
                         request.Update();
-                        if (request.State == ThumbnailRequest.States.Created)
+                        if (request.NeedsExactVersionRestart)
+                        {
+                            var item = request.Item;
+                            var forceRegenerate = request.ForceRegenerate;
+                            RemoveRequest(request);
+                            RequestPreview(item, forceRegenerate, true);
+                            removed = true;
+                        }
+                        else if (request.State == ThumbnailRequest.States.Created)
                         {
                             request.Prepare();
                         }

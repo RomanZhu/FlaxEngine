@@ -84,6 +84,11 @@ namespace FlaxEditor.Content.Thumbnails
         /// </summary>
         public readonly bool ForceRegenerate;
 
+        /// <summary>
+        /// True when an initially unpublished asset now has an exact runtime artifact and this request must be replaced.
+        /// </summary>
+        internal bool NeedsExactVersionRestart { get; private set; }
+
         private DateTime _nextThumbnailLoadAttemptUtc;
         private DateTime _publishedPreviewDeadlineUtc;
         private Guid _buildAssetId;
@@ -119,11 +124,21 @@ namespace FlaxEditor.Content.Thumbnails
             return requestedVersion != Guid.Empty && currentVersion != Guid.Empty && currentVersion != requestedVersion;
         }
 
+        internal static bool ShouldRestartWithExactVersion(Guid requestedVersion, Guid currentVersion)
+        {
+            return requestedVersion == Guid.Empty && currentVersion != Guid.Empty;
+        }
+
         internal void Update()
         {
             if (State == States.Waiting && DateTime.UtcNow >= _nextThumbnailLoadAttemptUtc)
             {
                 var currentVersion = AssetDatabaseQueryService.GetCurrentRuntimeArtifactCacheID(Item.ID);
+                if (ShouldRestartWithExactVersion(CacheVersion, currentVersion))
+                {
+                    NeedsExactVersionRestart = true;
+                    return;
+                }
                 if (IsArtifactVersionSuperseded(CacheVersion, currentVersion))
                 {
                     FailureMessage = "The requested runtime artifact was superseded before its thumbnail could be loaded.";
