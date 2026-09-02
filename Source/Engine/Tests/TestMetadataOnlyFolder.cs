@@ -21,13 +21,14 @@ namespace FlaxEngine.Tests
             var folderPath = Path.Combine(Globals.ProjectContentFolder, "__MetadataOnlyFolder_" + Guid.NewGuid().ToString("N"));
             var metadataPath = folderPath + ".meta";
             var folderId = Guid.NewGuid();
+            var folderIdText = Json.JsonSerializer.GetStringID(folderId);
             ContentItemFilesystemAction action = null;
             try
             {
                 File.WriteAllText(metadataPath,
                     "{\n" +
                     "  \"fileFormatVersion\": 2,\n" +
-                    "  \"guid\": \"" + folderId.ToString("N") + "\",\n" +
+                    "  \"guid\": \"" + folderIdText + "\",\n" +
                     "  \"folderAsset\": true,\n" +
                     "  \"importer\": { \"id\": \"Flax.Folder\", \"version\": 1, \"settings\": {} },\n" +
                     "  \"labels\": [],\n" +
@@ -43,7 +44,8 @@ namespace FlaxEngine.Tests
                 var scopedDiagnostics = AssetDatabaseQueryService.GetDiagnostics().Where(x =>
                     !string.IsNullOrEmpty(x.SourcePath) && ContentMutationPathUtils.Comparer.Equals(
                         ContentMutationPathUtils.Normalize(folderPath), ContentMutationPathUtils.Normalize(x.SourcePath))).ToArray();
-                var publicationDetails = "Records: " + string.Join("; ", published.Select(x =>
+                var publicationDetails = "Expected managed ID: " + folderId + "; metadata GUID: " + folderIdText + Environment.NewLine +
+                    "Records: " + string.Join("; ", published.Select(x =>
                     x.ID + " " + x.SourceKind + " " + x.Status + " " + x.SourcePath)) + Environment.NewLine +
                     "Diagnostics: " + string.Join("; ", scopedDiagnostics.Select(x => x.Code + ": " + x.Message));
                 Assert.IsTrue(AssetDatabaseQueryService.TryGetRecord(folderId, out var record),
